@@ -19,7 +19,7 @@ export const ELEMENTS: ElementDef[] = [
     icon: '💧',
     color: 0x3fa9ff,
     tier: 0,
-    status: 'slow',
+    status: 'soak',
     strongVs: ['fire', 'magma'],
     desc: 'Drenching force that slows foes.',
   },
