@@ -1,6 +1,15 @@
 import type { SkillDef } from '../../core/types';
 
+// Staff identity: orbs, novas, buffs, elemental spells.
+// Tree (SPEC-v2 §4.1 / §8): bolt → arcane_orb · arcane_nova · focus (T1)
+//   arcane_orb  → singularity, prism_orb (T2)       → starfall_lattice (T3, from singularity)
+//   arcane_nova → arcane_barrage, resonant_pulse (T2) → arcane_deluge (T3, from arcane_barrage)
+//   focus       → arcane_ward, quicken (T2)          → astral_form (T3, from arcane_ward)
+// Alternate morph: firebolt → meteor. Fusion-only staff spells follow the tree.
+// Buffs in the focus branch carry no weapon lock (like focus itself); the capstone is staff-only.
+
 export const STAFF_SKILLS: SkillDef[] = [
+  // ---------------------------------------------------------------- root
   {
     id: 'bolt',
     name: 'Arcane Bolt',
@@ -15,6 +24,8 @@ export const STAFF_SKILLS: SkillDef[] = [
     shape: { kind: 'projectile', speed: 460, range: 280, size: 10 },
     maxRank: 10,
   },
+
+  // ---------------------------------------------------------------- tier 1
   {
     id: 'arcane_orb',
     name: 'Arcane Orb',
@@ -56,6 +67,8 @@ export const STAFF_SKILLS: SkillDef[] = [
     shape: { kind: 'buff', stat: 'matk', amount: 30, duration: 12000 },
     maxRank: 10,
   },
+
+  // ---------------------------------------------------------------- tier 2 (arcane_orb branch)
   {
     id: 'singularity',
     name: 'Singularity',
@@ -72,6 +85,22 @@ export const STAFF_SKILLS: SkillDef[] = [
     status: 'pull',
   },
   {
+    id: 'prism_orb',
+    name: 'Prism Orb',
+    desc: 'A crystal orb that splits into three beams of light. Each beam pierces two foes.',
+    icon: '🔺',
+    tier: 2,
+    weapons: ['staff'],
+    tags: ['arcane', 'projectile'],
+    power: 0.9,
+    spCost: 16,
+    cooldown: 3600,
+    shape: { kind: 'projectile', speed: 360, range: 320, count: 3, spread: 36, pierce: 2, size: 14 },
+    maxRank: 8,
+  },
+
+  // ---------------------------------------------------------------- tier 2 (arcane_nova branch)
+  {
     id: 'arcane_barrage',
     name: 'Arcane Barrage',
     desc: 'Split your nova into a volley of seeking darts.',
@@ -85,6 +114,99 @@ export const STAFF_SKILLS: SkillDef[] = [
     shape: { kind: 'projectile', speed: 520, range: 300, count: 5, spread: 40, size: 9 },
     maxRank: 8,
   },
+  {
+    id: 'resonant_pulse',
+    name: 'Resonant Pulse',
+    desc: 'Strike the ground with your staff: three rings of force ripple out from you, slowing every foe.',
+    icon: '🔔',
+    tier: 2,
+    weapons: ['staff'],
+    tags: ['arcane', 'aoe'],
+    power: 0.85,
+    spCost: 16,
+    cooldown: 5000,
+    shape: { kind: 'spin', radius: 120, pulses: 3 },
+    maxRank: 8,
+    status: 'slow',
+  },
+
+  // ---------------------------------------------------------------- tier 2 (focus branch: buffs)
+  {
+    id: 'arcane_ward',
+    name: 'Arcane Ward',
+    desc: 'Wrap yourself in a shell of force. Greatly raises defense for a time.',
+    icon: '🧿',
+    tier: 2,
+    tags: ['arcane', 'buff'],
+    power: 0,
+    spCost: 14,
+    cooldown: 24000,
+    shape: { kind: 'buff', stat: 'def', amount: 10, duration: 12000 },
+    maxRank: 8,
+  },
+  {
+    id: 'quicken',
+    name: 'Quicken',
+    desc: 'Let magic run through your legs. Movement speed greatly up for a short time.',
+    icon: '⏩',
+    tier: 2,
+    tags: ['arcane', 'buff'],
+    power: 0,
+    spCost: 10,
+    cooldown: 18000,
+    shape: { kind: 'buff', stat: 'speed', amount: 25, duration: 10000 },
+    maxRank: 8,
+  },
+
+  // ---------------------------------------------------------------- tier 3 capstones
+  {
+    id: 'starfall_lattice',
+    name: 'Star Lattice',
+    desc: 'Weave a net of stars over a wide area, then let it fall. Huge damage; every foe beneath is slowed.',
+    icon: '🌌',
+    tier: 3,
+    weapons: ['staff'],
+    tags: ['arcane', 'aoe'],
+    power: 3.6,
+    spCost: 34,
+    cooldown: 12000,
+    shape: { kind: 'nova', radius: 170, range: 300, delay: 500 },
+    maxRank: 5,
+    status: 'slow',
+    castMs: 600,
+  },
+  {
+    id: 'arcane_deluge',
+    name: 'Arcane Deluge',
+    desc: 'After a short wind-up, unleash a torrent of ten arcane darts. Each one punches through a foe.',
+    icon: '🌧️',
+    tier: 3,
+    weapons: ['staff'],
+    tags: ['arcane', 'projectile', 'aoe'],
+    power: 1.0,
+    spCost: 30,
+    cooldown: 9000,
+    shape: { kind: 'projectile', speed: 560, range: 320, count: 10, spread: 60, pierce: 1, size: 10 },
+    maxRank: 5,
+    castMs: 500,
+  },
+  {
+    id: 'astral_form',
+    name: 'Astral Form',
+    desc: 'Shed your weight and become a figure of starlight. Magic attack hugely up for a long time.',
+    icon: '🪐',
+    tier: 3,
+    weapons: ['staff'],
+    tags: ['arcane', 'buff'],
+    power: 0,
+    spCost: 28,
+    cooldown: 40000,
+    shape: { kind: 'buff', stat: 'matk', amount: 50, duration: 15000 },
+    maxRank: 5,
+    castMs: 500,
+  },
+
+  // ---------------------------------------------------------------- alternate: firebolt → meteor
   {
     id: 'firebolt',
     name: 'Firebolt',
@@ -103,7 +225,7 @@ export const STAFF_SKILLS: SkillDef[] = [
   {
     id: 'meteor',
     name: 'Meteor',
-    desc: 'Call a burning stone down from the sky.',
+    desc: 'Call a burning stone down from the sky after a brief wind-up.',
     icon: '☄️',
     tier: 2,
     weapons: ['staff'],
@@ -112,9 +234,12 @@ export const STAFF_SKILLS: SkillDef[] = [
     power: 2.6,
     spCost: 24,
     cooldown: 7000,
-    shape: { kind: 'nova', radius: 110, range: 300, delay: 600 },
+    shape: { kind: 'nova', radius: 110, range: 300, delay: 500 },
     maxRank: 8,
+    castMs: 300,
   },
+
+  // ---------------------------------------------------------------- fusions (v1)
   {
     id: 'aqua_lance',
     name: 'Aqua Lance',
@@ -223,7 +348,7 @@ export const STAFF_SKILLS: SkillDef[] = [
   {
     id: 'thunderstorm',
     name: 'Thunderstorm',
-    desc: 'Summon a raging storm cell over a wide area.',
+    desc: 'Gather a raging storm cell, then loose it over a wide area.',
     icon: '⛈️',
     tier: 3,
     weapons: ['staff'],
@@ -234,6 +359,7 @@ export const STAFF_SKILLS: SkillDef[] = [
     cooldown: 7000,
     shape: { kind: 'nova', radius: 140, range: 280, delay: 300 },
     maxRank: 5,
+    castMs: 400,
   },
   {
     id: 'plasma_lance',
@@ -250,5 +376,133 @@ export const STAFF_SKILLS: SkillDef[] = [
     shape: { kind: 'projectile', speed: 700, range: 380, pierce: 99, size: 14 },
     maxRank: 5,
     status: 'shock',
+    castMs: 300,
+  },
+
+  // ---------------------------------------------------------------- fusions (v2: element + new T2 node)
+  {
+    id: 'tidal_ripple',
+    name: 'Tidal Ripple',
+    desc: 'Three rings of water ripple out from you, soaking every foe. Soaked foes conduct lightning.',
+    icon: '💦',
+    tier: 3,
+    weapons: ['staff'],
+    tags: ['arcane', 'aoe'],
+    element: 'water',
+    power: 1.0,
+    spCost: 20,
+    cooldown: 5500,
+    shape: { kind: 'spin', radius: 130, pulses: 3 },
+    maxRank: 5,
+  },
+  {
+    id: 'dawn_prism',
+    name: 'Dawn Prism',
+    desc: 'Your prism splits dawnlight into three piercing beams. Every hit smites and mends you a little.',
+    icon: '🌅',
+    tier: 3,
+    weapons: ['staff'],
+    tags: ['arcane', 'projectile'],
+    element: 'holy',
+    power: 1.05,
+    spCost: 20,
+    cooldown: 3800,
+    shape: { kind: 'projectile', speed: 380, range: 320, count: 3, spread: 36, pierce: 2, size: 14 },
+    maxRank: 5,
+  },
+
+  // ---------------------------------------------------------------- fusions (v2: echoes)
+  {
+    id: 'featherstorm',
+    name: 'Featherstorm',
+    desc: 'Loose a gust of seven razor feathers that knock foes back. Wind fans the flames on burning foes.',
+    icon: '🪶',
+    tier: 3,
+    weapons: ['staff'],
+    tags: ['arcane', 'projectile'],
+    element: 'wind',
+    power: 0.65,
+    spCost: 18,
+    cooldown: 3600,
+    shape: { kind: 'projectile', speed: 620, range: 300, count: 7, spread: 60, size: 10 },
+    maxRank: 5,
+  },
+  {
+    id: 'geode_maw',
+    name: 'Geode Maw',
+    desc: 'A crystal pit opens under your foes, drags them in, then bristles with spikes. Stuns; shatters ice.',
+    icon: '💎',
+    tier: 3,
+    weapons: ['staff'],
+    tags: ['arcane', 'aoe', 'gravity'],
+    element: 'earth',
+    power: 2.0,
+    spCost: 24,
+    cooldown: 7500,
+    shape: { kind: 'nova', radius: 130, range: 280, delay: 450 },
+    maxRank: 5,
+    status: 'pull',
+  },
+  {
+    id: 'thunder_peal',
+    name: 'Thunder Peal',
+    desc: 'Stamp your staff like the Thunderhoof: three thunderclaps roll out from you. Soaked foes conduct.',
+    icon: '🥁',
+    tier: 3,
+    weapons: ['staff'],
+    tags: ['arcane', 'aoe'],
+    element: 'lightning',
+    power: 1.2,
+    spCost: 24,
+    cooldown: 6500,
+    shape: { kind: 'spin', radius: 140, pulses: 3 },
+    maxRank: 5,
+    castMs: 400,
+  },
+
+  // ---------------------------------------------------------------- fusions (v2: techniques)
+  {
+    id: 'tangle_orb',
+    name: 'Tangle Orb',
+    desc: 'A drifting orb of arcane thread that passes through every foe and leaves each one tangled and slowed.',
+    icon: '🕸️',
+    tier: 2,
+    weapons: ['staff'],
+    tags: ['arcane', 'projectile'],
+    power: 1.5,
+    spCost: 12,
+    cooldown: 3000,
+    shape: { kind: 'projectile', speed: 220, range: 320, pierce: 99, size: 24 },
+    maxRank: 8,
+    status: 'slow',
+  },
+  {
+    id: 'cinder_blink',
+    name: 'Cinder Blink',
+    desc: 'Blink forward in a burst of embers, scorching every foe you pass through and leaving them burning.',
+    icon: '✨',
+    tier: 3,
+    weapons: ['staff'],
+    tags: ['arcane', 'dash'],
+    element: 'fire',
+    power: 1.7,
+    spCost: 14,
+    cooldown: 4000,
+    shape: { kind: 'dash', distance: 220, width: 48 },
+    maxRank: 5,
+  },
+  {
+    id: 'halo_ward',
+    name: 'Halo Ward',
+    desc: 'Fill your ward with sacred light. Defense hugely up, for longer than any plain ward.',
+    icon: '🕊️',
+    tier: 3,
+    tags: ['arcane', 'buff'],
+    element: 'holy',
+    power: 0,
+    spCost: 18,
+    cooldown: 28000,
+    shape: { kind: 'buff', stat: 'def', amount: 14, duration: 15000 },
+    maxRank: 5,
   },
 ];

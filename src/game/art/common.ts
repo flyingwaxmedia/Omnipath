@@ -145,13 +145,19 @@ export function eyes(c: Ctx, x: number, y: number, gap: number, r = 2, color = '
 
 /**
  * Draw `draw` with a 1px silhouette outline around everything it paints.
- * Draw ground shadows directly on `c` BEFORE calling this so they are not outlined.
+ * Only pixels with alpha >= `minAlpha` count as silhouette, so soft glows and haze drawn inside
+ * stay un-outlined. Draw ground shadows directly on `c` BEFORE calling this.
  */
-export function outlined(c: Ctx, w: number, h: number, color: string, draw: Draw): void {
+export function outlined(c: Ctx, w: number, h: number, color: string, draw: Draw, minAlpha = 110): void {
   const body = scratch(w, h);
   draw(body.c);
+  const mask = scratch(w, h);
+  const src = body.c.getImageData(0, 0, w, h).data;
+  const md = mask.c.createImageData(w, h);
+  for (let i = 3; i < src.length; i += 4) if (src[i] >= minAlpha) md.data[i] = 255;
+  mask.c.putImageData(md, 0, 0);
   const edge = scratch(w, h);
-  for (const [dx, dy] of [[-1, 0], [1, 0], [0, -1], [0, 1]]) edge.c.drawImage(body.el, dx, dy);
+  for (const [dx, dy] of [[-1, 0], [1, 0], [0, -1], [0, 1]]) edge.c.drawImage(mask.el, dx, dy);
   edge.c.globalCompositeOperation = 'source-in';
   edge.c.fillStyle = color;
   edge.c.fillRect(0, 0, w, h);

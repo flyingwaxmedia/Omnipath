@@ -1,6 +1,14 @@
 import type { SkillDef } from '../../core/types';
 
+// Sword identity: spins, throws, crushing blows.
+// Tree (SPEC-v2 §4.1 / §8): slash → whirlwind · sword_throw · heavy_cleave (T1)
+//   whirlwind    → spinning_assault, crescent_sweep (T2) → tempest_waltz (T3, from spinning_assault)
+//   sword_throw  → boomerang_blade, blade_volley (T2)    → hundredfold_edge (T3, from blade_volley)
+//   heavy_cleave → guillotine, sundering_blow (T2)       → worldbreaker (T3, from guillotine)
+// Fusion-only sword skills follow the tree.
+
 export const SWORD_SKILLS: SkillDef[] = [
+  // ---------------------------------------------------------------- root
   {
     id: 'slash',
     name: 'Slash',
@@ -15,6 +23,8 @@ export const SWORD_SKILLS: SkillDef[] = [
     shape: { kind: 'strike', range: 56, arc: 110 },
     maxRank: 10,
   },
+
+  // ---------------------------------------------------------------- tier 1
   {
     id: 'whirlwind',
     name: 'Whirlwind',
@@ -22,7 +32,7 @@ export const SWORD_SKILLS: SkillDef[] = [
     icon: '🌀',
     tier: 1,
     weapons: ['sword'],
-    tags: ['blade', 'spin', 'aoe'],
+    tags: ['blade', 'spin', 'aoe', 'melee'],
     power: 0.9,
     spCost: 8,
     cooldown: 3000,
@@ -46,7 +56,7 @@ export const SWORD_SKILLS: SkillDef[] = [
   {
     id: 'heavy_cleave',
     name: 'Heavy Cleave',
-    desc: 'A crushing, wide arc — the weight of stone learned through your arms.',
+    desc: 'A crushing, wide arc — the weight of stone learned through your arms. Stuns.',
     icon: '🪓',
     tier: 1,
     weapons: ['sword'],
@@ -57,7 +67,10 @@ export const SWORD_SKILLS: SkillDef[] = [
     shape: { kind: 'strike', range: 70, arc: 160 },
     maxRank: 10,
     status: 'stun',
+    castMs: 300,
   },
+
+  // ---------------------------------------------------------------- tier 2 (whirlwind branch)
   {
     id: 'spinning_assault',
     name: 'Spinning Assault',
@@ -72,6 +85,23 @@ export const SWORD_SKILLS: SkillDef[] = [
     shape: { kind: 'dash', distance: 180, width: 60, spin: true },
     maxRank: 8,
   },
+  {
+    id: 'crescent_sweep',
+    name: 'Crescent Sweep',
+    desc: 'A half-moon cut that sweeps the whole space in front of you and knocks every foe back.',
+    icon: '🌙',
+    tier: 2,
+    weapons: ['sword'],
+    tags: ['blade', 'spin', 'aoe', 'melee'],
+    power: 1.7,
+    spCost: 12,
+    cooldown: 3600,
+    shape: { kind: 'strike', range: 84, arc: 240 },
+    maxRank: 8,
+    status: 'knockback',
+  },
+
+  // ---------------------------------------------------------------- tier 2 (sword_throw branch)
   {
     id: 'boomerang_blade',
     name: 'Boomerang Blade',
@@ -100,6 +130,8 @@ export const SWORD_SKILLS: SkillDef[] = [
     shape: { kind: 'projectile', speed: 520, range: 300, count: 3, spread: 30, size: 14 },
     maxRank: 8,
   },
+
+  // ---------------------------------------------------------------- tier 2 (heavy_cleave branch)
   {
     id: 'guillotine',
     name: 'Guillotine',
@@ -107,14 +139,83 @@ export const SWORD_SKILLS: SkillDef[] = [
     icon: '⚖️',
     tier: 2,
     weapons: ['sword'],
-    tags: ['blade', 'heavy', 'execute'],
+    tags: ['blade', 'heavy', 'execute', 'melee'],
     power: 3.6,
     spCost: 18,
     cooldown: 8000,
     shape: { kind: 'strike', range: 64, arc: 60 },
     maxRank: 8,
     critBonus: 15,
+    castMs: 450,
   },
+  {
+    id: 'sundering_blow',
+    name: 'Sundering Blow',
+    desc: 'Bring the blade down twice in one crushing motion. Stuns, and hits large foes hardest.',
+    icon: '🔨',
+    tier: 2,
+    weapons: ['sword'],
+    tags: ['blade', 'heavy', 'melee'],
+    power: 1.4,
+    spCost: 14,
+    cooldown: 5500,
+    shape: { kind: 'strike', range: 66, arc: 100, hits: 2 },
+    maxRank: 8,
+    status: 'stun',
+    castMs: 350,
+  },
+
+  // ---------------------------------------------------------------- tier 3 capstones
+  {
+    id: 'tempest_waltz',
+    name: 'Tempest Waltz',
+    desc: 'Wind up, then waltz across the field in a long, wide spinning charge that carves every foe in your path.',
+    icon: '💃',
+    tier: 3,
+    weapons: ['sword'],
+    tags: ['blade', 'spin', 'dash', 'aoe'],
+    power: 3.4,
+    spCost: 30,
+    cooldown: 10000,
+    shape: { kind: 'dash', distance: 300, width: 96, spin: true },
+    maxRank: 5,
+    critBonus: 10,
+    castMs: 400,
+  },
+  {
+    id: 'hundredfold_edge',
+    name: 'Hundredfold Edge',
+    desc: 'Hurl nine phantom blades in a wide fan after a short wind-up. Each one cuts through three foes.',
+    icon: '🌠',
+    tier: 3,
+    weapons: ['sword'],
+    tags: ['blade', 'projectile', 'ranged', 'aoe'],
+    power: 1.3,
+    spCost: 32,
+    cooldown: 9000,
+    shape: { kind: 'projectile', speed: 560, range: 320, count: 9, spread: 120, pierce: 3, size: 14 },
+    maxRank: 5,
+    castMs: 500,
+  },
+  {
+    id: 'worldbreaker',
+    name: 'Worldbreaker',
+    desc: 'A long wind-up, then one blow that shatters the ground in a wide ring before you. Huge damage; stuns all it hits.',
+    icon: '🌍',
+    tier: 3,
+    weapons: ['sword'],
+    tags: ['blade', 'heavy', 'aoe', 'execute'],
+    power: 4.2,
+    spCost: 34,
+    cooldown: 12000,
+    shape: { kind: 'nova', radius: 130, range: 90, delay: 250 },
+    maxRank: 5,
+    status: 'stun',
+    critBonus: 10,
+    castMs: 650,
+  },
+
+  // ---------------------------------------------------------------- fusions (v1)
   {
     id: 'flame_spin',
     name: 'Flame Spin',
@@ -122,7 +223,7 @@ export const SWORD_SKILLS: SkillDef[] = [
     icon: '🔥',
     tier: 2,
     weapons: ['sword'],
-    tags: ['blade', 'spin', 'aoe'],
+    tags: ['blade', 'spin', 'aoe', 'melee'],
     element: 'fire',
     power: 1.25,
     spCost: 14,
@@ -174,6 +275,7 @@ export const SWORD_SKILLS: SkillDef[] = [
     cooldown: 6000,
     shape: { kind: 'nova', radius: 80, range: 140, delay: 150 },
     maxRank: 8,
+    castMs: 400,
   },
   {
     id: 'thunder_javelin',
@@ -205,5 +307,107 @@ export const SWORD_SKILLS: SkillDef[] = [
     shape: { kind: 'spin', radius: 150, pulses: 5 },
     maxRank: 5,
     status: 'pull',
+    castMs: 500,
+  },
+
+  // ---------------------------------------------------------------- fusions (v2: new nodes + elements)
+  {
+    id: 'molten_sunder',
+    name: 'Molten Sunder',
+    desc: 'Two forge-hot crushing blows in one motion that stun and leave foes burning.',
+    icon: '🌋',
+    tier: 3,
+    weapons: ['sword'],
+    tags: ['blade', 'heavy', 'melee'],
+    element: 'fire',
+    power: 1.75,
+    spCost: 20,
+    cooldown: 6000,
+    shape: { kind: 'strike', range: 70, arc: 100, hits: 2 },
+    maxRank: 5,
+    status: 'stun',
+    castMs: 400,
+  },
+  {
+    id: 'tidal_crescent',
+    name: 'Tidal Crescent',
+    desc: 'Your crescent breaks like a wave: a wider, longer sweep that soaks and shoves back every foe.',
+    icon: '🌊',
+    tier: 3,
+    weapons: ['sword'],
+    tags: ['blade', 'spin', 'aoe', 'melee'],
+    element: 'water',
+    power: 2.0,
+    spCost: 17,
+    cooldown: 3800,
+    shape: { kind: 'strike', range: 100, arc: 270 },
+    maxRank: 5,
+    status: 'knockback',
+  },
+
+  // ---------------------------------------------------------------- fusions (v2: echoes)
+  {
+    id: 'rockslide_charge',
+    name: 'Rockslide Charge',
+    desc: 'Learned from a rolling boulder: barrel forward like a landslide and crush all you hit. Stuns.',
+    icon: '🪨',
+    tier: 2,
+    weapons: ['sword'],
+    tags: ['blade', 'dash', 'heavy'],
+    element: 'earth',
+    power: 2.2,
+    spCost: 16,
+    cooldown: 6000,
+    shape: { kind: 'dash', distance: 200, width: 64 },
+    maxRank: 8,
+    status: 'stun',
+    castMs: 300,
+  },
+  {
+    id: 'rotspore_whirl',
+    name: 'Rotspore Whirl',
+    desc: 'A spin that flings grove spores from your blade. Every foe caught in it is poisoned.',
+    icon: '🦠',
+    tier: 2,
+    weapons: ['sword'],
+    tags: ['blade', 'spin', 'aoe', 'toxin', 'melee'],
+    power: 0.9,
+    spCost: 14,
+    cooldown: 4000,
+    shape: { kind: 'spin', radius: 96, pulses: 3 },
+    maxRank: 8,
+    status: 'poison',
+  },
+
+  // ---------------------------------------------------------------- fusions (v2: techniques)
+  {
+    id: 'cleaver_toss',
+    name: 'Cleaver Toss',
+    desc: 'Throw your sword like a smith throws a hammer: slow, heavy, stunning. Cuts through two foes.',
+    icon: '⚒️',
+    tier: 2,
+    weapons: ['sword'],
+    tags: ['blade', 'projectile', 'heavy', 'ranged'],
+    power: 2.2,
+    spCost: 14,
+    cooldown: 5000,
+    shape: { kind: 'projectile', speed: 380, range: 260, pierce: 2, size: 22 },
+    maxRank: 8,
+    status: 'stun',
+    castMs: 300,
+  },
+  {
+    id: 'spirit_crescent',
+    name: 'Spirit Crescent',
+    desc: 'Sweep without touching: release your crescent as a wave of spirit force that passes through all foes.',
+    icon: '🌛',
+    tier: 3,
+    weapons: ['sword'],
+    tags: ['blade', 'spirit', 'projectile', 'ranged'],
+    power: 1.8,
+    spCost: 16,
+    cooldown: 4000,
+    shape: { kind: 'projectile', speed: 440, range: 280, pierce: 99, size: 30 },
+    maxRank: 5,
   },
 ];
