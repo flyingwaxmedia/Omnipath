@@ -653,8 +653,19 @@ export class UI {
       <button class="btn danger newgame">Start a new character</button>
     `;
     this.sheet('📜 Journal', body);
-    $(this.modal, '.newgame').addEventListener('click', () => {
-      if (confirm('Erase this character and start over?')) this.ctrl.newGame();
+    // Two-tap confirmation: native confirm() is unavailable in embedded webviews.
+    const ng = $<HTMLButtonElement>(this.modal, '.newgame');
+    let armed = 0;
+    ng.addEventListener('click', () => {
+      if (Date.now() < armed) {
+        this.ctrl.newGame();
+        return;
+      }
+      armed = Date.now() + 4000;
+      ng.textContent = 'Tap again to erase this character';
+      setTimeout(() => {
+        if (ng.isConnected && Date.now() >= armed) ng.textContent = 'Start a new character';
+      }, 4100);
     });
   }
 

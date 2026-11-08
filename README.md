@@ -17,6 +17,11 @@ npm install
 npm run dev          # http://localhost:5173 (also exposed on your LAN, so you can open it on a phone)
 ```
 
+### On an iPad or phone
+
+- **Same Wi-Fi as your computer:** run `npm run dev`. Vite prints a `Network:` URL like `http://192.168.1.20:5173`; open that in Safari on the iPad. For fullscreen, use Share → **Add to Home Screen**.
+- **One-file build:** `npm run build:single` writes `dist-single/omnipath.html`. The game is inlined and Phaser loads from a CDN, so you can put the file on any static host (Netlify Drop, GitHub Pages, …) and open the URL on the device.
+
 - Add `?fast` to the URL (e.g. `http://localhost:5173/?fast`) to speed up mastery for testing.
 - Saves go to `localStorage`. To start over, use **Journal → Start a new character**.
 
@@ -52,6 +57,7 @@ npm run dev          # http://localhost:5173 (also exposed on your LAN, so you c
 npm test             # Vitest: rules, content integrity, world reachability
 npm run typecheck
 npm run build        # outputs dist/
+npm run build:single # one self-contained HTML file in dist-single/
 ```
 
 ```

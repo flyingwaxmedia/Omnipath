@@ -14,6 +14,7 @@ import { type Buff, Session, type Stats, computeStats, expToNext } from '../sess
 import { type Cast, type CombatHost, SkillSystem } from '../systems/SkillSystem';
 import { TILE, type InteractDef, type WorldMap, generateWorld, isWalkable, regionAt } from '../world/map';
 import { findPath, nearestWalkable } from '../world/pathfinding';
+import { TILE_MARGIN, TILE_SPACING } from '../textures';
 
 interface InteractView {
   def: InteractDef;
@@ -153,7 +154,7 @@ export class WorldScene extends Phaser.Scene implements GameController, CombatHo
   private buildWorld(): void {
     const m = this.map;
     const tm = this.make.tilemap({ data: m.tiles as number[][], tileWidth: TILE, tileHeight: TILE });
-    const ts = tm.addTilesetImage('tiles', 'tiles', TILE, TILE, 0, 0)!;
+    const ts = tm.addTilesetImage('tiles', 'tiles', TILE, TILE, TILE_MARGIN, TILE_SPACING)!;
     tm.createLayer(0, ts, 0, 0)!.setDepth(-100000);
 
     for (const b of m.buildings) {

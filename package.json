@@ -10,7 +10,8 @@
     "preview": "vite preview --host",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "build:single": "node scripts/build-single.mjs"
   },
   "dependencies": {
     "phaser": "3.90.0"

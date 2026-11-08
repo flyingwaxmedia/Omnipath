@@ -22,6 +22,7 @@ const game = new Phaser.Game({
   parent: 'game',
   backgroundColor: '#1b2a1b',
   pixelArt: true,
+  roundPixels: true,
   scale: { mode: Phaser.Scale.RESIZE, width: window.innerWidth, height: window.innerHeight },
   input: { activePointers: 3 },
   scene: [BootScene, WorldScene],

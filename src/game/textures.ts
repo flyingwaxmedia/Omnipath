@@ -1,6 +1,7 @@
 import Phaser from 'phaser';
 import { TILE, TILE_COUNT, T, mulberry32 } from './world/map';
 
+
 // All art is generated at boot so the prototype ships with zero binary assets.
 // Swap any key for a real sprite sheet later without touching game code.
 
@@ -50,8 +51,18 @@ function eyes(c: Ctx, x: number, y: number, gap: number, r = 2, color = '#1b1b2a
 
 // ---------------------------------------------------------------- tiles
 
+/** Tiles are drawn edge-to-edge, then copied into an atlas with 1px extruded borders
+ *  so fractional camera zoom never samples a neighbouring tile (no seams). */
+export const TILE_MARGIN = 1;
+export const TILE_SPACING = 2;
+
 function drawTiles(scene: Phaser.Scene) {
-  canvas(scene, 'tiles', TILE * TILE_COUNT, TILE, (c) => {
+  if (scene.textures.exists('tiles')) return;
+  const src = document.createElement('canvas');
+  src.width = TILE * TILE_COUNT;
+  src.height = TILE;
+  const c = src.getContext('2d')!;
+  {
     const rnd = mulberry32(42);
     const tile = (i: number, base: string, specks: string[], n: number, extra?: (x: number) => void) => {
       const x = i * TILE;
@@ -114,6 +125,24 @@ function drawTiles(scene: Phaser.Scene) {
       c.fillStyle = '#4f93d1';
       c.fillRect(x + 10, 12, 7, 1);
     });
+  }
+  const step = TILE + TILE_SPACING;
+  canvas(scene, 'tiles', TILE_COUNT * step, TILE + TILE_MARGIN * 2, (out) => {
+    for (let i = 0; i < TILE_COUNT; i++) {
+      const sx = i * TILE;
+      const dx = i * step + TILE_MARGIN;
+      const dy = TILE_MARGIN;
+      out.drawImage(src, sx, 0, TILE, TILE, dx, dy, TILE, TILE);
+      // Extrude each edge (and corners) by one pixel.
+      out.drawImage(src, sx, 0, 1, TILE, dx - 1, dy, 1, TILE);
+      out.drawImage(src, sx + TILE - 1, 0, 1, TILE, dx + TILE, dy, 1, TILE);
+      out.drawImage(src, sx, 0, TILE, 1, dx, dy - 1, TILE, 1);
+      out.drawImage(src, sx, TILE - 1, TILE, 1, dx, dy + TILE, TILE, 1);
+      out.drawImage(src, sx, 0, 1, 1, dx - 1, dy - 1, 1, 1);
+      out.drawImage(src, sx + TILE - 1, 0, 1, 1, dx + TILE, dy - 1, 1, 1);
+      out.drawImage(src, sx, TILE - 1, 1, 1, dx - 1, dy + TILE, 1, 1);
+      out.drawImage(src, sx + TILE - 1, TILE - 1, 1, 1, dx + TILE, dy + TILE, 1, 1);
+    }
   });
 }
 
