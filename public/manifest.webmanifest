@@ -1,0 +1,11 @@
+{
+  "name": "Omnipath",
+  "short_name": "Omnipath",
+  "description": "Master, morph, and fuse your way through an open world.",
+  "start_url": "./",
+  "display": "fullscreen",
+  "orientation": "any",
+  "background_color": "#0f1424",
+  "theme_color": "#16203a",
+  "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }]
+}
