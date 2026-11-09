@@ -475,3 +475,71 @@ export function classStatBonus(reg: Registry, state: Readonly<SkillBookState>): 
   }
   return out;
 }
+
+// ------------------------------------------------------------------ class slots (SPEC §5.1 v3.1)
+
+/** Class slots on the skill bar that a class fills automatically. */
+export const CLASS_SLOTS = 5;
+
+/** A skill that can sit on the skill bar (not a weapon basic attack, not a monster-only technique). */
+export function barEligible(skill: Pick<SkillDef, 'tier' | 'tags'>): boolean {
+  return !(skill.tier === 0 && skill.tags.includes('basic')) && !skill.tags.includes('monster');
+}
+
+/**
+ * The skills a class equips into its class slots, picked from KNOWN skills (pure and deterministic):
+ * first enough skills to satisfy each clause's count (in clause order), then the best remaining
+ * matching skills. "Best" = higher tier, then higher rank, then the class's own signature skills,
+ * then most recently learned, then id. Prefers one skill per authored base (a variant and its base
+ * do not both take class slots unless nothing else matches). Returns at most `n` skill ids.
+ */
+export function classSkills(reg: Registry, state: Readonly<SkillBookState>, cls: ClassDef, n = CLASS_SLOTS): string[] {
+  const grants = new Set(cls.grants ?? []);
+  const known = Object.values(state.skills)
+    .map((p) => ({ p, s: reg.skill(p.id) }))
+    .filter((x): x is { p: SkillProgress; s: SkillDef } => !!x.s && barEligible(x.s) && classMatchesSkill(cls, x.s));
+  const score = (x: { p: SkillProgress; s: SkillDef }) =>
+    x.s.tier * 1e6 + x.p.rank * 1e4 + (grants.has(x.s.id) ? 5e3 : 0) + Math.min(4999, x.p.learnedAt / 1e9);
+  known.sort((a, b) => score(b) - score(a) || (a.s.id < b.s.id ? -1 : a.s.id > b.s.id ? 1 : 0));
+
+  const picked: string[] = [];
+  const bases = new Set<string>();
+  const baseOf = (id: string) => reg.baseOf(id) ?? id;
+  const take = (x: { s: SkillDef }) => {
+    picked.push(x.s.id);
+    bases.add(baseOf(x.s.id));
+  };
+  const free = (x: { s: SkillDef }, distinct: boolean) =>
+    !picked.includes(x.s.id) && (!distinct || !bases.has(baseOf(x.s.id)));
+
+  // 1) satisfy each clause's own count.
+  for (const clause of cls.clauses) {
+    let have = picked.filter((id) => clause.tags.every((t) => reg.skill(id)!.tags.includes(t))).length;
+    for (const distinct of [true, false]) {
+      for (const x of known) {
+        if (picked.length >= n || have >= clause.count) break;
+        if (!free(x, distinct) || !clause.tags.every((t) => x.s.tags.includes(t))) continue;
+        take(x);
+        have++;
+      }
+    }
+  }
+  // 2) elemental classes: one skill per distinct element first.
+  if (cls.distinctElements) {
+    const els = new Set(picked.map((id) => reg.skill(id)!.element).filter(Boolean));
+    for (const x of known) {
+      if (picked.length >= n) break;
+      if (!x.s.element || els.has(x.s.element) || !free(x, true)) continue;
+      take(x);
+      els.add(x.s.element);
+    }
+  }
+  // 3) fill with the best remaining matches (distinct bases first).
+  for (const distinct of [true, false]) {
+    for (const x of known) {
+      if (picked.length >= n) break;
+      if (free(x, distinct)) take(x);
+    }
+  }
+  return picked;
+}

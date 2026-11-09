@@ -6,6 +6,7 @@
 import {
   buyNode as buyTreeNode,
   classProgress as classView,
+  classSkills as classSkillsPick,
   classStatBonus,
   CLASS,
   discoverableNow,
@@ -1235,6 +1236,12 @@ export class SkillBook {
   // ---------------------------------------------------------------- classes
 
   /** Discovery view and codex state of a class. */
+  /** Skills the class would equip into its class slots (SPEC §5.1 v3.1). */
+  classSkills(id: string, n?: number): string[] {
+    const cls = this.reg.classDef(id);
+    return cls ? classSkillsPick(this.reg, this.state, cls, n) : [];
+  }
+
   classProgress(cls: ClassDef): ClassView {
     return classView(this.reg, this.state, cls, this.ctx);
   }
