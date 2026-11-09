@@ -52,6 +52,13 @@ export interface Stage {
   fit(at?: { x: number; y: number }): void;
   /** Per frame (after the player moved): camera follow, darkness, culling. */
   update(dt: number, focus: { x: number; y: number }): void;
+  /**
+   * Camera rig (docs/VFX.md §8.6 item 6): adds trauma 0..1 (summed, capped at 1). The view shakes by
+   * round(6 · τ² · noise(t · 25)) whole art pixels per axis while τ decays 2 / s — never a fractional offset.
+   */
+  addTrauma(amount: number): void;
+  /** Current trauma (QA). */
+  readonly trauma: number;
   destroy(): void;
 }
 
@@ -66,6 +73,22 @@ const DARK_RIM = 0.8;
 const DARK_REACH = 4096;
 /** Camera smoothing time constant (s): v2's lerp 0.12 per 60 fps frame. */
 const FOLLOW_TAU = 0.13;
+/** Camera rig: max shake (art px) at trauma 1, trauma decay per second, noise frequency (Hz). */
+const SHAKE_PX = 6;
+const TRAUMA_DECAY = 2;
+const SHAKE_HZ = 25;
+
+/** Smooth 1-D value noise in [-1, 1] (deterministic: shake never reads Math.random). */
+function noise1(t: number, seed: number): number {
+  const i = Math.floor(t);
+  const f = t - i;
+  const h = (n: number) => {
+    const x = Math.sin((n + seed * 101.3) * 127.1) * 43758.5453;
+    return (x - Math.floor(x)) * 2 - 1;
+  };
+  const u = f * f * (3 - 2 * f);
+  return h(i) * (1 - u) + h(i + 1) * u;
+}
 
 /** Dressing plans are pure per map: plan each map once per run. */
 const dressingPlans = new Map<string, readonly DressingItem[]>();
@@ -159,6 +182,10 @@ class PixelStage implements Stage {
   /** The part of the camera actually on screen (art px): the canvas overflows the viewport by < artStep art px at
    *  its right / bottom edge, and that strip is cropped, so bounds and centring use this size. */
   private view = { w: 0, h: 0 };
+  /** Camera rig: trauma 0..1, its clock (s) and the integer offset it adds to the scroll this frame. */
+  private tau = 0;
+  private shakeT = 0;
+  private shake = { x: 0, y: 0 };
   private readonly onResize = () => this.fit();
 
   constructor(
@@ -187,6 +214,14 @@ class PixelStage implements Stage {
 
   get visibleProps(): number {
     return this.props.visible;
+  }
+
+  get trauma(): number {
+    return this.tau;
+  }
+
+  addTrauma(amount: number): void {
+    if (amount > 0) this.tau = Math.min(1, this.tau + amount);
   }
 
   follow(target: FollowTarget, x: number, y: number): void {
@@ -244,6 +279,13 @@ class PixelStage implements Stage {
       this.cx += dx * a;
       this.cy += dy * a;
     }
+    // Camera rig: trauma² shake in whole art pixels, decaying 2 / s.
+    if (this.tau > 0) {
+      this.shakeT += Math.max(0, dt);
+      const k = SHAKE_PX * this.tau * this.tau;
+      this.shake = { x: Math.round(k * noise1(this.shakeT * SHAKE_HZ, 1)), y: Math.round(k * noise1(this.shakeT * SHAKE_HZ, 2)) };
+      this.tau = Math.max(0, this.tau - TRAUMA_DECAY * Math.max(0, dt));
+    } else if (this.shake.x || this.shake.y) this.shake = { x: 0, y: 0 };
     this.place();
     this.dark?.setPosition(Math.round(t.x), Math.round(t.y - 16));
   }
@@ -274,8 +316,8 @@ class PixelStage implements Stage {
     const ax = t ? Math.round(t.x) + Math.round(this.cx - t.x) : Math.round(this.cx);
     const ay = t ? Math.round(t.y) + Math.round(this.cy - t.y) : Math.round(this.cy);
     const r = this.range;
-    const sx = clampScroll(ax, this.view.w || cam.width, r.minX, r.maxX);
-    const sy = clampScroll(ay, this.view.h || cam.height, r.minY, r.maxY);
+    const sx = clampScroll(ax, this.view.w || cam.width, r.minX, r.maxX) + this.shake.x;
+    const sy = clampScroll(ay, this.view.h || cam.height, r.minY, r.maxY) + this.shake.y;
     if (cam.scrollX !== sx || cam.scrollY !== sy) cam.setScroll(sx, sy);
     this.props.cull(sx, sy, cam.width, cam.height);
     this.decor.cull(sx, sy, cam.width, cam.height);

@@ -249,3 +249,78 @@ describe('card model', () => {
     expect(m.forms.length).toBe(reg.morphsFrom('whirlwind').length);
   });
 });
+
+describe('card: picking a transform, the next step, Details', () => {
+  const fake = (b: SkillBook, view?: (id: string) => Partial<SkillCardView>): GameController =>
+    ({
+      reg,
+      book: b,
+      iconUrl: () => 'data:x',
+      unlocks: () => ({ fusion: false, essences: false, passives: false, classes: false, keepsakes: false, quests: false }),
+      skillCard: (id: string): SkillCardView => ({
+        id,
+        kind: 'skill',
+        name: reg.skill(id)?.name ?? '?',
+        line: 'One line.',
+        known: b.has(id),
+        rank: b.rank(id),
+        maxRank: reg.skill(id)?.maxRank ?? 0,
+        progress: 0,
+        cooldown: 1,
+        sp: 0,
+        transformReady: false,
+        action: b.has(id) ? { kind: 'equip' } : { kind: 'step', text: 'Transform Slash to learn it.' },
+        details: [],
+        ...view?.(id),
+      }),
+    }) as unknown as GameController;
+
+  /** Slash at max rank with a charge: it can become Whirlwind or Sword Throw right now. */
+  const ready = () => {
+    const b = new SkillBook(reg);
+    b.learn('slash', 'start');
+    b.state.skills.slash.rank = reg.skill('slash')!.maxRank;
+    b.state.skills.slash.charges = 1;
+    return b;
+  };
+
+  it('lets the player pick any form the parent can take now: the form\'s own card transforms its parent', () => {
+    const b = ready();
+    const forms = b.morphOptions('slash').filter((o) => o.available && !o.owned && o.skill).map((o) => o.morph.to);
+    expect(forms.length).toBeGreaterThan(1);
+    const m = cardModel(fake(b), forms[1]);
+    expect(m.primary).toMatchObject({ kind: 'transform', from: 'slash', to: forms[1] });
+    const h = cardHtml(m);
+    expect(h).toContain(`data-from="slash" data-to="${forms[1]}"`);
+    expect(h).toContain('Slash into');
+    expect(h.match(/sc-primary/g)?.length).toBe(1);
+    // A form that is not ready keeps its one next step.
+    const later = cardModel(fake(new SkillBook(reg)), forms[1]);
+    expect(later.primary.kind).toBe('step');
+  });
+
+  it('shows the other ready forms as small "or …" chips under Transform', () => {
+    const b = ready();
+    const first = b.morphOptions('slash').find((o) => o.available && !o.owned && o.skill)!;
+    const m = cardModel(fake(b, (id) => (id === 'slash' ? { transformReady: true, action: { kind: 'transform', to: first.morph.to, toName: first.skill!.name } } : {})), 'slash');
+    expect(m.alts?.length).toBeGreaterThan(0);
+    expect(m.alts!.some((a) => a.id === first.morph.to)).toBe(false);
+    const h = cardHtml(m);
+    expect(h).toContain('class="sc-alt"');
+    expect(h).toContain(`data-star="${m.alts![0].id}"`);
+    expect(h.match(/sc-primary/g)?.length).toBe(1);
+  });
+
+  it('keeps the small transform step under a step action, never the same line twice', () => {
+    const b = ready();
+    const m = cardModel(fake(b, () => ({ action: { kind: 'step', text: 'Your weapon swings this by itself.' }, next: 'Reach rank 10 to transform.' })), 'slash');
+    expect(m.next).toBe('Reach rank 10 to transform.');
+    const same = cardModel(fake(b, () => ({ action: { kind: 'step', text: 'Reach rank 10 to transform.' }, next: 'Reach rank 10 to transform.' })), 'slash');
+    expect(same.next).toBeUndefined();
+  });
+
+  it('opens Details only when asked (it stays open across re-renders once opened)', () => {
+    expect(cardHtml(base)).toContain('<details class="sc-details">');
+    expect(cardHtml(base, { details: true })).toContain('<details class="sc-details" open>');
+  });
+});

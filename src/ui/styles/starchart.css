@@ -728,6 +728,18 @@
   text-align: center;
 }
 
+/* Transform ready with more than one form: "or <other form>" — small, under the big button. */
+.sc-card .sc-alt {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin: 8px 0 0;
+  color: var(--sc-mute);
+  font-size: 14px;
+}
+
 .sc-card .sc-details {
   margin-top: 10px;
   border-top: 1px solid rgba(122, 84, 48, 0.55);

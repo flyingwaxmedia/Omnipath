@@ -47,6 +47,9 @@ export function castRef(cast: Cast): SkillRef {
   return { skillId: sk.id, skill: sk, element: sk.element, castId: cast.id, ...(cast.reprise ? { reprise: true } : {}) };
 }
 
+/** The player's body radius (px) for separation and every monster hit test (Combat and MonsterSkills share it). */
+export const PLAYER_R = 12;
+
 /** Unique projectile ids for projectileSpawn / projectileEnd (player and monster projectiles share the counter). */
 let projectileSeq = 1;
 export function nextProjectileId(): number {
@@ -94,8 +97,6 @@ interface Projectile {
   hitSet: Set<Monster>;
   spin: number;
   rotOffset: number;
-  color: number;
-  trailT: number;
   returning: boolean;
 }
 
@@ -356,7 +357,6 @@ export class SkillSystem {
   private projectiles: Projectile[] = [];
   private pool: Phaser.GameObjects.Image[] = [];
   private live = 0;
-  private tether: Phaser.GameObjects.Graphics | null = null;
 
   constructor(private host: CombatHost) {
     ensureFxTextures(host.world);
@@ -414,7 +414,7 @@ export class SkillSystem {
         const t = target && target.alive ? target : null;
         const a = t ? { x: t.x, y: t.y } : { x: p.x + (aim.x - cast.origin.x), y: p.y + (aim.y - cast.origin.y) };
         if (t) p.face(t.x, t.y);
-        this.fxGhost(color);
+        // The caster's mirror ghost is the VFX runtime's (riders.reprise on the reprised copy's first event).
         this.host.float(p.x, p.y - 66, 'Reprise', hex(color), 10);
         this.run({ ...cast, origin: { x: p.x, y: p.y }, mult: cast.mult * rep.mult, reprise: true }, a, t);
       });
@@ -426,17 +426,16 @@ export class SkillSystem {
     const s = skill.shape;
     const o = cast.origin;
     const ang = Math.atan2(aim.y - o.y, aim.x - o.x);
-    const color = this.host.colorFor(skill);
     const scene = this.host.world;
+    // Visuals: the VFX runtime draws every phase from these bus events (src/game/vfx/bridge.ts); this file only
+    // times and hit-tests the shapes.
     switch (s.kind) {
       case 'strike': {
         const hits = s.hits ?? 1;
-        const style = this.strikeStyle(skill, false);
         for (let h = 0; h < hits; h++) {
           scene.time.delayedCall(h * 130, () => {
             const p = this.host.player;
             gameBus.emit('skillPulse', { ...castRef(cast), owner: 'player', index: h, count: hits, ang, aim, x: p.x, y: p.y });
-            this.fxStrike(p.x, p.y - 12, ang, s.arc * DEG, s.range, color, h % 2 === 1, style, skill.element);
             for (const m of this.host.liveMonsters()) {
               const d = Math.hypot(m.x - p.x, m.y - p.y);
               if (d > s.range + m.radius) continue;
@@ -446,7 +445,6 @@ export class SkillSystem {
             }
           });
         }
-        if (skill.power >= 2) scene.cameras.main.shake(90, 0.004);
         break;
       }
       case 'spin': {
@@ -455,7 +453,6 @@ export class SkillSystem {
           scene.time.delayedCall(i * 170, () => {
             const p = this.host.player;
             gameBus.emit('skillPulse', { ...castRef(cast), owner: 'player', index: i, count: pulses, ang, aim, x: p.x, y: p.y });
-            this.fxSpin(p.x, p.y - 6, s.radius, color, skill.element);
             for (const m of this.host.liveMonsters()) {
               if (Math.hypot(m.x - p.x, m.y - p.y) <= s.radius + m.radius)
                 this.host.hit(m, { ...cast, origin: { x: p.x, y: p.y } }, i === 0 ? 1 : 0.85);
@@ -474,55 +471,43 @@ export class SkillSystem {
           let a = ang;
           if (s.radial) a = ang + (i / count) * Math.PI * 2;
           else if (count > 1) a = ang - spread / 2 + (spread * i) / (count - 1);
-          this.spawnProjectile(cast, a, s.speed, s.range, s.pierce ?? 0, s.size ?? 12, color, i, count);
+          this.spawnProjectile(cast, a, s.speed, s.range, s.pierce ?? 0, s.size ?? 12, i, count);
         }
         break;
       }
       case 'dash':
-        this.dash(cast, ang, s.distance, s.width, !!s.spin, color);
+        this.dash(cast, ang, s.distance, s.width, !!s.spin);
         break;
       case 'nova': {
         const d = Math.min(s.range, Math.hypot(aim.x - o.x, aim.y - o.y));
         const cx = o.x + Math.cos(ang) * d;
         const cy = o.y + Math.sin(ang) * d;
         const delay = s.delay ?? 200;
-        this.fxTelegraph(cx, cy, s.radius, color, delay);
         // The nova's release toward its landing point.
         gameBus.emit('skillPulse', { ...castRef(cast), owner: 'player', index: 0, count: 1, ang, aim: { x: cx, y: cy }, x: o.x, y: o.y });
         gameBus.emit('novaTelegraph', { ...castRef(cast), owner: 'player', x: cx, y: cy, radius: s.radius, delayMs: delay, timing: { start: scene.time.now, at: scene.time.now + delay } });
         scene.time.delayedCall(delay, () => {
           gameBus.emit('novaBlast', { ...castRef(cast), owner: 'player', x: cx, y: cy, radius: s.radius, heavy: skill.power >= 2 || skill.tags.includes('heavy') });
-          this.fxNova(cx, cy, s.radius, color, skill.element, skill.power >= 2 || skill.tags.includes('heavy'));
           for (const m of this.host.liveMonsters()) {
             if (Math.hypot(m.x - cx, m.y - cy) <= s.radius + m.radius) this.host.hit(m, { ...cast, origin: { x: cx, y: cy } });
           }
-          if (skill.power >= 2) scene.cameras.main.shake(120, 0.006);
         });
         break;
       }
       case 'chain':
-        this.chain(cast, s.range, s.jumps, ang, target, color);
+        this.chain(cast, s.range, s.jumps, ang, target);
         break;
-      case 'buff': {
+      case 'buff':
         this.host.applyBuff(skill, cast.rank);
-        const p = this.host.player;
-        this.fxRing(p.x, p.y, 40, color, false);
-        for (let i = 0; i < 12; i++) {
-          const a = (i / 12) * Math.PI * 2;
-          this.particle(p.x + Math.cos(a) * 18, p.y + Math.sin(a) * 8, color, 0, -40 - Math.random() * 30, 600);
-        }
         break;
-      }
     }
   }
 
-  private chain(cast: Cast, range: number, jumps: number, ang: number, target: Monster | null, color: number): void {
+  private chain(cast: Cast, range: number, jumps: number, ang: number, target: Monster | null): void {
     const o = cast.origin;
     const scene = this.host.world;
     const skill = cast.skill;
     const knives = isKnifeChain(skill);
-    const blade = knives && skill.tags.includes('blade');
-    const charged = skill.element === 'lightning' || skill.element === 'storm';
     let first: Monster | null = target && target.alive && Math.hypot(target.x - o.x, target.y - o.y) <= range + target.radius ? target : null;
     if (!first) {
       let best = Infinity;
@@ -536,9 +521,9 @@ export class SkillSystem {
     }
     const start = { x: o.x, y: o.y - 16 };
     if (!first) {
+      // No target in reach: the link fizzles 60 % of the way out (drawn by the VFX runtime).
       const end = { x: o.x + Math.cos(ang) * range * 0.6, y: o.y + Math.sin(ang) * range * 0.6 - 16 };
-      if (knives) this.fxKnifeHop(start, end, color, 0, blade, false);
-      else this.fxLightning([start, end], color);
+      gameBus.emit('chainLaunch', { ...castRef(cast), owner: 'player', from: start, to: end, index: 0, target: null, knives, flightMs: knives ? 90 : 0 });
       return;
     }
     const chain: Monster[] = [first];
@@ -565,8 +550,7 @@ export class SkillSystem {
     let extended = false;
     const strike = (m: Monster, i: number, from: { x: number; y: number }, delay: number) => {
       const to = { x: m.x, y: m.y - 10 };
-      if (knives) this.fxKnifeHop(from, to, color, delay, blade, charged && i > 0);
-      else scene.time.delayedCall(delay, () => this.fxLightning([from, { x: m.x, y: m.y - 10 }], color));
+      scene.time.delayedCall(delay, () => gameBus.emit('chainLaunch', { ...castRef(cast), owner: 'player', from, to, index: i, target: m, knives, flightMs: knives ? step : 0 }));
       scene.time.delayedCall(delay + (knives ? step : 0), () => {
         if (!m.alive) return;
         gameBus.emit('chainHop', { ...castRef(cast), owner: 'player', from, to, index: i, target: m, knives });
@@ -597,7 +581,6 @@ export class SkillSystem {
     const map = this.host.cm;
     const live = this.host.liveMonsters();
     const p = this.host.player;
-    this.tether?.clear();
     for (let i = this.projectiles.length - 1; i >= 0; i--) {
       const pr = this.projectiles[i];
       if (pr.returning) {
@@ -617,12 +600,6 @@ export class SkillSystem {
       if (pr.spin) pr.img.rotation += pr.spin * dt * (pr.returning ? 1.6 : 1);
       else pr.img.rotation = Math.atan2(pr.vy, pr.vx) + pr.rotOffset;
       pr.img.setDepth(ySort(pr.y, Y_BIAS.PROJECTILE));
-      pr.trailT -= dt;
-      if (pr.trailT <= 0) {
-        pr.trailT = pr.returning ? 0.022 : 0.03;
-        this.trail(pr.x, pr.y - 14, pr.cast.skill, pr.color, pr.size);
-      }
-      if (pr.returning) this.drawTether(pr);
       let dead = false;
       if (pr.returning) {
         dead = Math.hypot(p.x - pr.x, p.y - pr.y) < 18 || pr.traveled > pr.range * 3;
@@ -646,8 +623,6 @@ export class SkillSystem {
       if (dead) {
         const sk = pr.cast.skill;
         gameBus.emit('projectileEnd', { ...castRef(pr.cast), skillId: sk.id, owner: 'player', obj: pr.img, mover: pr, id: pr.id, x: pr.x, y: pr.y, reason: pr.returning ? 'caught' : pr.traveled >= pr.range ? 'expire' : isBlockedPx(map, pr.x, pr.y) ? 'wall' : 'hit' });
-        if (pr.returning) this.fxFlash(p.x, p.y - 20, 12, pr.color);
-        else this.fxImpactAt(pr.x, pr.y - 14, pr.cast.skill, pr.color, 4);
         pr.img.destroy();
         this.projectiles.splice(i, 1);
       }
@@ -661,41 +636,9 @@ export class SkillSystem {
     pr.hitSet.clear();
     pr.pierce = pr.pierceMax;
     pr.traveled = 0;
-    // Turn glint: the throw "catches" and heads home.
-    this.fxFlash(pr.x, pr.y - 14, 14, pr.color);
-    this.fxRing(pr.x, pr.y - 14, 16, pr.color, false);
+    // The turn glint and the tether home are the VFX runtime's (riders.returns, watching `returning`).
     if (!pr.spin) pr.spin = 0;
     return true;
-  }
-
-  /** Line from the caster to a returning projectile: crackling for lightning/storm, a faint tether otherwise. */
-  private drawTether(pr: Projectile): void {
-    if (!this.tether || !this.tether.active) this.tether = this.host.world.add.graphics().setDepth(DEPTH.FX_FRONT).setBlendMode(ADD);
-    const g = this.tether;
-    const p = this.host.player;
-    const ax = p.x;
-    const ay = p.y - 22;
-    const el = pr.cast.skill.element;
-    if (el === 'lightning' || el === 'storm') {
-      for (const [w, c, a] of [
-        [4, pr.color, 0.35],
-        [1.5, 0xffffff, 0.8],
-      ] as const) {
-        g.lineStyle(w, c, a);
-        g.beginPath();
-        g.moveTo(ax, ay);
-        const segs = 6;
-        for (let k = 1; k <= segs; k++) {
-          const t = k / segs;
-          const j = k === segs ? 0 : (Math.random() - 0.5) * 12;
-          g.lineTo(ax + (pr.x - ax) * t + j, ay + (pr.y - 14 - ay) * t + j);
-        }
-        g.strokePath();
-      }
-    } else {
-      g.lineStyle(1.5, pr.color, 0.3);
-      g.lineBetween(ax, ay, pr.x, pr.y - 14);
-    }
   }
 
   // ------------------------------------------------------------ helpers
@@ -749,15 +692,13 @@ export class SkillSystem {
     }
   }
 
-  private spawnProjectile(cast: Cast, a: number, speed: number, range: number, pierce: number, size: number, color: number, index = 0, count = 1) {
-    const look = this.lookFor(cast.skill, size);
-    const plain = look.key === CFX.knife && !cast.skill.element;
+  private spawnProjectile(cast: Cast, a: number, speed: number, range: number, pierce: number, size: number, index = 0, count = 1) {
+    // The projectile's Image is its identity on the bus (projectileSpawn.obj); the VFX runtime draws the body and
+    // trails, so the Image itself stays invisible.
     const img = this.host.world.add
-      .image(cast.origin.x, cast.origin.y - 14, look.key)
-      .setScale(look.scale)
+      .image(cast.origin.x, cast.origin.y - 14, '__DEFAULT')
+      .setVisible(false)
       .setDepth(ySort(cast.origin.y, Y_BIAS.PROJECTILE));
-    if (!plain) img.setTint(color);
-    img.setBlendMode(look.add ? ADD : NORMAL);
     img.rotation = a;
     const pr: Projectile = {
       id: nextProjectileId(),
@@ -774,17 +715,15 @@ export class SkillSystem {
       pierceMax: pierce,
       size,
       hitSet: new Set(),
-      spin: look.spin,
+      spin: 0,
       rotOffset: 0,
-      color,
-      trailT: 0,
       returning: false,
     };
     this.projectiles.push(pr);
     gameBus.emit('projectileSpawn', { ...castRef(cast), owner: 'player', obj: img, mover: pr, id: pr.id, index, count, x: cast.origin.x, y: cast.origin.y, angle: a, speed, range, size });
   }
 
-  private dash(cast: Cast, ang: number, distance: number, width: number, spin: boolean, color: number) {
+  private dash(cast: Cast, ang: number, distance: number, width: number, spin: boolean) {
     const p = this.host.player;
     const sx = p.x;
     const sy = p.y;
@@ -802,27 +741,7 @@ export class SkillSystem {
     gameBus.emit('dash', { ...castRef(cast), owner: 'player', from: { x: sx, y: sy }, to: { x: ex, y: ey }, durationMs: dur, width, spin });
     p.path = [];
     p.lockedUntil = scene.time.now + dur + 30;
-    for (let i = 0; i < 5; i++) {
-      const t = i / 5;
-      const ghost = scene.add
-        .image(sx + (ex - sx) * t, sy + (ey - sy) * t, p.sprite.texture.key)
-        .setOrigin(0.45, 0.95)
-        .setFlipX(p.facing < 0)
-        .setTint(color)
-        .setAlpha(0.5)
-        .setDepth(ySort(sy + (ey - sy) * t));
-      scene.tweens.add({ targets: ghost, alpha: 0, duration: 350, delay: i * 25, onComplete: () => ghost.destroy() });
-    }
-    // Element trail along the dash line.
-    const len = Math.hypot(ex - sx, ey - sy);
-    const st = fxStyle(cast.skill.element);
-    for (let d = 0; d < len; d += 18) {
-      const t = d / Math.max(1, len);
-      const x = sx + (ex - sx) * t + (Math.random() - 0.5) * width * 0.4;
-      const y = sy + (ey - sy) * t + (Math.random() - 0.5) * width * 0.2;
-      if (cast.skill.element) this.mote(x, y - 8, color, st, 0.8, (t * dur) | 0);
-      else this.particle(x, y - 10, 0xffffff, 0, -10, 260, 0.4, { delay: (t * dur) | 0 });
-    }
+    // Afterimages, dust and the element trail along the lane are the VFX runtime's (dash event).
     scene.tweens.addCounter({
       from: 0,
       to: 1,
@@ -839,7 +758,6 @@ export class SkillSystem {
       for (const m of this.host.liveMonsters()) {
         if (distToSegment(m.x, m.y, sx, sy, ex, ey) <= width / 2 + m.radius) this.host.hit(m, { ...cast, origin: { x: sx, y: sy } });
       }
-      if (spin) this.fxRing(ex, ey - 6, width, color, true);
     });
   }
 
@@ -976,12 +894,6 @@ export class SkillSystem {
     scene.tweens.add({ targets: img, scale: (r * 3.2) / 32, alpha: 0, duration: 180, onComplete: () => img.destroy() });
   }
 
-  /** Per-hit impact: element motes, a glint for blades/knives, dust for heavy blows, a flash on crits. */
-  fxImpact(m: Monster, skill: SkillDef, color: number, crit: boolean): void {
-    this.fxImpactAt(m.x, m.y - Math.min(24, m.sprite.displayHeight * 0.45), skill, color, crit ? 8 : 5);
-    if (crit) this.fxFlash(m.x, m.y - 14, 18, 0xffffff);
-  }
-
   fxImpactAt(x: number, y: number, skill: SkillDef, color: number, n: number): void {
     const st = fxStyle(skill.element);
     for (let i = 0; i < n; i++) this.mote(x, y, color, st, 1);
@@ -1001,11 +913,6 @@ export class SkillSystem {
   }
 
   // ------------------------------------------------------------ shapes
-
-  /** Back-compat sword arc. */
-  fxArc(x: number, y: number, ang: number, arc: number, range: number, color: number, flip: boolean) {
-    this.fxStrike(x, y, ang, arc, range, color, flip, 'sword');
-  }
 
   fxStrike(x: number, y: number, ang: number, arc: number, range: number, color: number, flip: boolean, style: StrikeStyle, el?: ElementId) {
     const scene = this.host.world;
@@ -1147,17 +1054,6 @@ export class SkillSystem {
     }
   }
 
-  /** The player's own nova landing marker (subtle; monster telegraphs are red and live in MonsterSkills). */
-  fxTelegraph(x: number, y: number, radius: number, color: number, delay: number) {
-    const scene = this.host.world;
-    const g = scene.add.graphics({ x, y }).setDepth(DEPTH.FX_GROUND);
-    g.lineStyle(2, color, 0.8);
-    g.strokeEllipse(0, 0, radius * 2, radius * 1.3);
-    g.fillStyle(color, 0.12);
-    g.fillEllipse(0, 0, radius * 2, radius * 1.3);
-    scene.tweens.add({ targets: g, alpha: 0.3, duration: delay, onComplete: () => g.destroy() });
-  }
-
   /** Nova landing: ring + burst, plus an element signature (sky bolt, flame column, splash, rubble, shards...). */
   fxNova(cx: number, cy: number, r: number, color: number, el: ElementId | undefined, heavy: boolean) {
     this.fxRing(cx, cy, r, color, false);
@@ -1222,53 +1118,6 @@ export class SkillSystem {
     this.fxFlash(x, y - 6, 26, 0xffffff);
   }
 
-  /** A knife (or blade) hopping from a to b on a shallow arc, spinning, with a glint on arrival. */
-  fxKnifeHop(a: { x: number; y: number }, b: { x: number; y: number }, color: number, delay: number, blade: boolean, crackle: boolean) {
-    const scene = this.host.world;
-    const key = blade ? 'fx_blade' : CFX.knife;
-    const scale = blade ? 1.1 : 1.35;
-    const img = scene.add.image(a.x, a.y, key).setScale(scale).setDepth(DEPTH.FX_GLOW).setVisible(false);
-    if (color !== 0xffffff) img.setTint(color);
-    const dx = b.x - a.x;
-    const dy = b.y - a.y;
-    const len = Math.hypot(dx, dy) || 1;
-    const bow = Math.min(26, len * 0.2) * (Math.random() < 0.5 ? -1 : 1);
-    const cx = (a.x + b.x) / 2 + (-dy / len) * bow;
-    const cy = (a.y + b.y) / 2 + (dx / len) * bow - len * 0.08;
-    const spins = blade ? 2 : 1.5;
-    const base = Math.atan2(dy, dx);
-    let trailN = 0;
-    scene.tweens.addCounter({
-      from: 0,
-      to: 1,
-      delay,
-      duration: 90,
-      onStart: () => img.setVisible(true),
-      onUpdate: (tw) => {
-        const t = tw.getValue() ?? 0;
-        const u = 1 - t;
-        const x = u * u * a.x + 2 * u * t * cx + t * t * b.x;
-        const y = u * u * a.y + 2 * u * t * cy + t * t * b.y;
-        img.setPosition(x, y);
-        img.rotation = blade ? base + t * spins * Math.PI * 2 : base + Math.sin(t * Math.PI) * 0.6 * Math.sign(bow) + t * spins * Math.PI * 2 * 0.15;
-        // Afterimages of the knife itself read as motion blur; a glow mote every other frame.
-        this.particle(x, y, color === 0xffffff ? 0xd8e4ff : color, 0, 0, 110, scale, { tex: key, add: false, rot: img.rotation, endScale: 1 });
-        if (trailN++ % 2 === 0) this.particle(x, y, color, 0, 0, 160, 0.45);
-      },
-      onComplete: () => {
-        img.destroy();
-        this.particle(b.x, b.y, 0xffffff, 0, 0, 170, 1.2, { tex: CFX.spark, rot: Math.random(), endScale: 0.2 });
-        this.fxBurst(b.x, b.y, color, 3);
-        if (crackle) this.fxLightning([a, b], color, 0.6);
-      },
-    });
-  }
-
-  /** Back-compat straight knife. */
-  fxKnife(a: { x: number; y: number }, b: { x: number; y: number }, color: number, delay: number) {
-    this.fxKnifeHop(a, b, color, delay, false, false);
-  }
-
   /** Jagged lightning through `pts`, with a few short forks. `weight` scales the stroke. */
   fxLightning(pts: { x: number; y: number }[], color: number, weight = 1) {
     const scene = this.host.world;
@@ -1305,78 +1154,6 @@ export class SkillSystem {
     for (const p of pts.slice(1)) this.fxBurst(p.x, p.y, color, weight < 1 ? 2 : 4);
   }
 
-  /** Arc rider zap: a thin, bright side-bolt to a nearby foe (distinct from chain lightning). */
-  fxArcZap(a: { x: number; y: number }, b: { x: number; y: number }, color: number) {
-    const scene = this.host.world;
-    const g = scene.add.graphics().setDepth(DEPTH.FX_GLOW).setBlendMode(ADD);
-    const len = Math.hypot(b.x - a.x, b.y - a.y) || 1;
-    const nx = -(b.y - a.y) / len;
-    const ny = (b.x - a.x) / len;
-    const bow = (Math.random() < 0.5 ? -1 : 1) * Math.min(22, len * 0.25);
-    const draw = () => {
-      g.clear();
-      for (const [w, c, al] of [
-        [4, color, 0.55],
-        [1.5, 0xffffff, 1],
-      ] as const) {
-        g.lineStyle(w, c, al);
-        g.beginPath();
-        g.moveTo(a.x, a.y);
-        for (let k = 1; k <= 6; k++) {
-          const t = k / 6;
-          const arcOff = Math.sin(t * Math.PI) * bow;
-          const j = k === 6 ? 0 : (Math.random() - 0.5) * 8;
-          g.lineTo(a.x + (b.x - a.x) * t + nx * arcOff + j, a.y + (b.y - a.y) * t + ny * arcOff + j);
-        }
-        g.strokePath();
-      }
-    };
-    draw();
-    scene.time.delayedCall(60, () => g.active && draw());
-    scene.tweens.add({ targets: g, alpha: 0, delay: 80, duration: 180, onComplete: () => g.destroy() });
-    this.particle(b.x, b.y, 0xffffff, 0, 0, 160, 1, { tex: CFX.spark, rot: Math.random(), endScale: 0.3 });
-    this.fxBurst(b.x, b.y, color, 3);
-  }
-
-  /** Reprise: a ghost of the caster in the skill's colour, swelling and fading as the cast repeats. */
-  fxGhost(color: number) {
-    const p = this.host.player;
-    const scene = this.host.world;
-    const ghost = scene.add
-      .image(p.x, p.y, p.sprite.texture.key)
-      .setOrigin(0.45, 0.95)
-      .setFlipX(p.facing < 0)
-      .setTint(color)
-      .setBlendMode(ADD)
-      .setAlpha(0.75)
-      .setDepth(ySort(p.y, Y_BIAS.GHOST));
-    scene.tweens.add({ targets: ghost, alpha: 0, scaleX: 1.35, scaleY: 1.25, y: p.y - 6, duration: 420, onComplete: () => ghost.destroy() });
-    this.fxRing(p.x, p.y - 6, 28, color, false);
-  }
-
-  /** Motes streaming from a to b (leech, burn spreading). */
-  fxStream(a: { x: number; y: number }, b: { x: number; y: number }, color: number, n: number, tex = 'fx_dot') {
-    const scene = this.host.world;
-    for (let i = 0; i < n; i++) {
-      if (this.live >= MAX_PARTICLES) return;
-      const img = scene.add.image(a.x + (Math.random() - 0.5) * 10, a.y + (Math.random() - 0.5) * 10, tex).setTint(color).setBlendMode(ADD).setScale(0.7).setDepth(DEPTH.FX_GLOW);
-      this.live++;
-      scene.tweens.add({
-        targets: img,
-        x: b.x,
-        y: b.y,
-        scale: 0.3,
-        delay: i * 45,
-        duration: 260,
-        ease: 'Sine.in',
-        onComplete: () => {
-          this.live--;
-          img.destroy();
-        },
-      });
-    }
-  }
-
   /** Shatter combo: ice bursts into shards. */
   fxShatter(x: number, y: number, r: number) {
     for (let i = 0; i < 12; i++) {
@@ -1391,42 +1168,10 @@ export class SkillSystem {
     this.fxFlash(x, y, r, 0xdff6ff);
   }
 
-  /**
-   * Spark moment (radial flash): light rays and the cracked-star rune burst from the struck foe. Created at full
-   * brightness so the 250 ms hit-stop freezes on the flash, then they swell and fade.
-   */
-  fxSpark(x: number, y: number) {
-    const scene = this.host.world;
-    const rays: Phaser.GameObjects.Image[] = [];
-    for (let i = 0; i < 14; i++) {
-      const a = (i / 14) * Math.PI * 2 + Math.random() * 0.2;
-      const len = 0.9 + Math.random() * 0.8;
-      rays.push(
-        scene.add
-          .image(x, y, CFX.ray)
-          .setOrigin(0, 0.5)
-          .setRotation(a)
-          .setTint(i % 2 ? 0xffe9a0 : 0xffffff)
-          .setBlendMode(ADD)
-          .setScale(len * 1.6, 1.4)
-          .setDepth(DEPTH.LIGHT),
-      );
-    }
-    scene.tweens.add({ targets: rays, scaleX: '*=1.6', alpha: 0, duration: 420, ease: 'Quad.out', onComplete: () => rays.forEach((r) => r.destroy()) });
-    const star = scene.add.image(x, y, CFX.star).setTint(0xffd76a).setBlendMode(ADD).setDepth(DEPTH.LIGHT_TOP).setScale(1.1);
-    scene.tweens.add({ targets: star, scale: 2.2, rotation: 0.6, alpha: 0, duration: 520, ease: 'Cubic.out', onComplete: () => star.destroy() });
-    this.fxFlash(x, y, 40, 0xfff3c0);
-    for (let i = 0; i < 16; i++) {
-      const a = (i / 16) * Math.PI * 2;
-      this.particle(x, y, 0xffe9a0, Math.cos(a) * 160, Math.sin(a) * 160, 480, 0.9, { tex: CFX.spark, rot: a, endScale: 0.2 });
-    }
-  }
-
   clear(): void {
     for (const p of this.projectiles) p.img.destroy();
     this.projectiles = [];
     this.pool = [];
     this.live = 0;
-    this.tether = null;
   }
 }

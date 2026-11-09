@@ -503,9 +503,11 @@ export class SkyView {
       this.drawNebulae(layout, vb);
       this.drawDust();
       const rects: number[][] = [];
-      this.drawSkyLabels(layout, vb, rects);
+      this.drawSkyLabels(layout, vb, rects, 'constellation');
       this.drawLines(vb);
       animated = this.drawStars(vb, now, rects);
+      // Trainer / region names last: written only where no star name is (star names matter more).
+      this.drawSkyLabels(layout, vb, rects, 'group');
     } else this.drawDust();
     // Vignette.
     ctx.fillStyle = this.bg!.vignette;
@@ -626,25 +628,29 @@ export class SkyView {
     }
   }
 
-  private drawSkyLabels(layout: StarLayout, vb: Box, rects: number[][]): void {
+  /**
+   * Constellation names (a faint backdrop drawn first; while zoomed out they are readable and keep star names off
+   * them) or group names (trainers, regions; drawn after the star names and skipped where one would overlap a name).
+   */
+  private drawSkyLabels(layout: StarLayout, vb: Box, rects: number[][], kind: 'constellation' | 'group'): void {
     const { ctx, view, cam } = this;
     const z = cam.z;
+    if (kind === 'group' && z < 0.8) return;
     const big = Math.max(0.16, Math.min(0.5, 0.5 - (z - 0.7) * 0.42));
+    const size = kind === 'constellation' ? (z < 0.8 ? 17 : 15) : 11;
+    ctx.font = `${size}px ${this.font}`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     for (const l of layout.labels) {
-      if (l.kind === 'group' && z < 0.8) continue;
-      if (!inBox(vb, l.x, l.y, 200)) continue;
+      if (l.kind !== kind || !inBox(vb, l.x, l.y, 200)) continue;
       const p = toScreen(cam, view, l.x, l.y);
-      const size = l.kind === 'constellation' ? (z < 0.8 ? 17 : 15) : 11;
-      ctx.font = `${size}px ${this.font}`;
-      const text = l.kind === 'constellation' ? l.text.toUpperCase() : l.text;
-      const spaced = l.kind === 'constellation' ? text.split('').join(' ') : text;
+      const spaced = kind === 'constellation' ? l.text.toUpperCase().split('').join(' ') : l.text;
       const w = ctx.measureText(spaced).width;
-      ctx.fillStyle = rgba(TINT[l.constellation], l.kind === 'constellation' ? big : 0.42);
+      const box = [p.x - w / 2 - 3, p.y - size / 2 - 2, p.x + w / 2 + 3, p.y + size / 2 + 2];
+      if (kind === 'group' && rects.some((o) => box[0] < o[2] && box[2] > o[0] && box[1] < o[3] && box[3] > o[1])) continue;
+      ctx.fillStyle = rgba(TINT[l.constellation], kind === 'constellation' ? big : 0.42);
       ctx.fillText(spaced, p.x, p.y);
-      // Group names (trainers, regions) keep star names off them; constellation names are faint backdrops.
-      if (l.kind === 'group') rects.push([p.x - w / 2 - 3, p.y - size / 2 - 2, p.x + w / 2 + 3, p.y + size / 2 + 2]);
+      if (kind === 'group' || big >= 0.3) rects.push(box);
     }
   }
 

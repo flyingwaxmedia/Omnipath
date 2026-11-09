@@ -81,13 +81,33 @@ export const GROUND_TRUTH = {
   statusMs: { burn: 1600, poison: 4000, bleed: 2000, slow: 2200, soak: 2200, freeze: 2200, stun: 650, shock: 1200, smite: 1000, knockback: 300, pull: 400 },
   /** Monster dashes are at least this wide (MonsterSkills). */
   monsterLaneMinPx: 24,
+  /** One player body radius for every hit test (SkillSystem.PLAYER_R). */
+  playerR: 12,
+  /** Fair zone tells: max(tell, min(capMs, baseMs + perPx · r)) (docs/VFX.md §13). */
+  fairTell: { baseMs: 350, perPx: 2.5, capMs: 900 },
 } as const;
 
-/** Monster telegraph length (ms) for a technique, wind-up included (MonsterSkills.begin). */
-export function monsterTellMs(skill: SkillDef): number {
+/**
+ * Fair telegraph length for a danger zone of radius `zoneR` px (docs/VFX.md §13 item 3): at least 350 + 2.5 r ms, so
+ * a big zone gives time to walk out of it, never stretched past 900 ms by this rule (a longer authored tell stays).
+ * MonsterSkills times its zone, ring and cone tells with it.
+ */
+export function fairTellMs(baseMs: number, zoneR: number): number {
+  return Math.max(baseMs, Math.min(GROUND_TRUTH.fairTell.capMs, Math.round(GROUND_TRUTH.fairTell.baseMs + GROUND_TRUTH.fairTell.perPx * zoneR)));
+}
+
+/**
+ * Monster telegraph length (ms) for a technique, wind-up included (MonsterSkills.start). Zone (nova / spin) and cone
+ * (strike) tells get the fair minimum for their radius; `casterRadius` is the monster's (spins and cones reach
+ * radius + m.radius).
+ */
+export function monsterTellMs(skill: SkillDef, casterRadius = 0): number {
   const sh = skill.shape;
-  const base = sh.kind === 'nova' ? Math.max(GROUND_TRUTH.monsterNovaMinMs, sh.delay ?? 0) : GROUND_TRUTH.tellMs[sh.kind];
-  return base + (skill.castMs ?? 0);
+  const base = (sh.kind === 'nova' ? Math.max(GROUND_TRUTH.monsterNovaMinMs, sh.delay ?? 0) : GROUND_TRUTH.tellMs[sh.kind]) + (skill.castMs ?? 0);
+  if (sh.kind === 'nova') return fairTellMs(base, sh.radius);
+  if (sh.kind === 'spin') return fairTellMs(base, sh.radius + casterRadius);
+  if (sh.kind === 'strike') return fairTellMs(base, sh.range + casterRadius);
+  return base;
 }
 
 /** Exact hit-test geometry of a skill for an owner (docs/VFX.md §8.1). */

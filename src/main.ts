@@ -3,6 +3,7 @@ import type { ElementId } from './core/types';
 import { createRegistry } from './data';
 import { mapById } from './data/world';
 import { gameBus } from './game/events';
+import { initAudio } from './game/audio';
 import { createGame } from './game/render/config';
 import { BootScene } from './game/scenes/BootScene';
 import { MapScene } from './game/scenes/MapScene';
@@ -38,6 +39,7 @@ interface OmnipathHandle {
 }
 const handle: OmnipathHandle = { game, reg };
 (window as unknown as { omnipath: OmnipathHandle }).omnipath = handle;
+initAudio(handle); // sound: unlock on the first tap, suspend when hidden / muted / idle; omnipath.debug.audio hooks
 
 game.events.once('omnipath:ready', async () => {
   const uiRoot = document.getElementById('ui')!;

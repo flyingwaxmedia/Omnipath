@@ -55,6 +55,8 @@ export const TREE_CLEAR = 300;
 /** Variant satellites: orbit distance beyond their base's radius, and their own radius. */
 export const ORBIT = 16;
 export const VARIANT_R = 3.5;
+/** Group names (trainers, regions) sit this far above their topmost star (star names go below the stars). */
+export const GROUP_LABEL = 34;
 
 const DEG = Math.PI / 180;
 
@@ -282,14 +284,15 @@ export function layoutSky(plan: SkyPlan): StarLayout {
     gs.forEach((g, gi) => {
       const list = byGroup.get(g.id)!;
       const a = out + ((gi + 0.5) / gs.length) * Math.PI * 2;
-      let last = { x: centre.x, y: centre.y };
-      list.forEach((s, j) => {
+      const spoke = list.map((s, j) => {
         const p = polar(centre, 100 + 80 * j, a + j * 9 * DEG);
-        last = settle(s, p.x, p.y);
+        return settle(s, p.x, p.y);
       });
-      if (g.name) {
-        const lp = polar(last, 34, a + list.length * 9 * DEG);
-        labels.push({ text: g.name, x: round(lp.x), y: round(lp.y), kind: 'group', constellation: 'craft' });
+      // The trainer's name above the spoke's topmost star: star names are written below the stars, so the label
+      // never hides one of them.
+      if (g.name && spoke.length) {
+        const top = spoke.reduce((t, p) => (p.y < t.y ? p : t));
+        labels.push({ text: g.name, x: top.x, y: round(top.y - GROUP_LABEL), kind: 'group', constellation: 'craft' });
       }
     });
     labels.push({ text: 'The Craft', x: centre.x, y: centre.y, kind: 'constellation', constellation: 'craft' });
@@ -318,18 +321,15 @@ export function layoutSky(plan: SkyPlan): StarLayout {
     gs.forEach((g, gi) => {
       const list = byGroup.get(g.id)!;
       const gc = polar(centre, (gi - (gs.length - 1) / 2) * 440, tangent);
-      let far = 0;
+      let topY = Infinity;
       list.forEach((s, j) => {
         const r = j === 0 ? 0 : 64 * Math.sqrt(j + 0.4);
         const jit = ((hash(s.id) % 21) - 10) * DEG;
         const p = polar(gc, r, out + j * 137.508 * DEG + jit);
-        const q = settle(s, p.x, p.y);
-        far = Math.max(far, Math.hypot(q.x - gc.x, q.y - gc.y));
+        topY = Math.min(topY, settle(s, p.x, p.y).y);
       });
-      if (g.name) {
-        const lp = polar(gc, far + 40, out);
-        labels.push({ text: g.name, x: round(lp.x), y: round(lp.y), kind: 'group', constellation: 'wild' });
-      }
+      // The region's name above its cluster (never under a star, where that star's own name goes).
+      if (g.name && Number.isFinite(topY)) labels.push({ text: g.name, x: round(gc.x), y: round(topY - GROUP_LABEL - 6), kind: 'group', constellation: 'wild' });
     });
     const lp = polar(centre, -300, out);
     labels.push({ text: 'The Wild', x: round(lp.x), y: round(lp.y), kind: 'constellation', constellation: 'wild' });

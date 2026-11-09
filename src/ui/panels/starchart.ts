@@ -22,6 +22,8 @@ import { essencesTab, listTab, passivesTab, sheet } from './skills';
 const TAB = 'skills.tab';
 const SEL = 'starchart.sel';
 const MORE = 'starchart.more';
+/** The star whose card has "Details" open (kept across re-renders: equips, the change feed, Back from a picker). */
+const DETAILS = 'starchart.details';
 type Tab = 'chart' | 'skills' | 'passives' | 'essences';
 const TREE: Record<WeaponType, ConstellationId> = { sword: 'edge', dagger: 'fang', staff: 'lantern' };
 
@@ -53,6 +55,7 @@ function unlocks(ctrl: GameController): UnlocksView {
 function openWith(host: PanelHost, arg?: string): void {
   delete host.state[SEL];
   delete host.state[MORE];
+  delete host.state[DETAILS];
   focus = null;
   if (!arg) return;
   if (arg === 'chart' || arg === 'skills' || arg === 'list' || arg === 'passives' || arg === 'essences') {
@@ -153,6 +156,10 @@ function wireSelectedCard(host: PanelHost, wrap: HTMLElement, m: CardModel, afte
       if (open) host.state[MORE] = m.id;
       else delete host.state[MORE];
     },
+    details: (open) => {
+      if (open) host.state[DETAILS] = m.id;
+      else if (host.state[DETAILS] === m.id) delete host.state[DETAILS];
+    },
     transformed: (to) => {
       host.state[SEL] = to;
       delete host.state[MORE];
@@ -170,7 +177,7 @@ function renderChart(host: PanelHost, data: StarChartData, tabs: [Tab, string][]
   const layout = layoutStarChart(data);
   const m = selectedCard(host, data);
   const more = host.state[MORE] === m?.id;
-  const card = m ? cardHtml(m, { back: true, more }) : '';
+  const card = m ? cardHtml(m, { back: true, more, details: host.state[DETAILS] === m.id }) : '';
   let root: HTMLElement;
   if (existing && existing.dataset.tab === 'chart') {
     // In place: the canvas, the camera and the chips' scroll position stay.
@@ -300,7 +307,7 @@ function renderPage(host: PanelHost, data: StarChartData, tabs: [Tab, string][],
     `<div class="sc-tabs-row">${tabsHtml(TAB, tabs, tab)}</div>
     <div class="sc-page ${m ? 'has-card' : ''}">
       <div class="sc-scroll"><div class="sc-inner ${tab}">${inner}</div></div>
-      ${m ? `<div class="sc-scrim" aria-hidden="true"></div><div class="sc-card-wrap">${cardHtml(m, { back: true, more: host.state[MORE] === m.id })}</div>` : ''}
+      ${m ? `<div class="sc-scrim" aria-hidden="true"></div><div class="sc-card-wrap">${cardHtml(m, { back: true, more: host.state[MORE] === m.id, details: host.state[DETAILS] === m.id })}</div>` : ''}
     </div>`,
     'starchart',
   );

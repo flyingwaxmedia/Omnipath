@@ -187,6 +187,17 @@ describe('layout', () => {
     expect(sky.stars.has('whirlwind@a')).toBe(false);
   });
 
+  it('writes trainer and region names above their stars, never where a star name goes (just below a star)', () => {
+    const groups = sky.labels.filter((l) => l.kind === 'group');
+    expect(groups.map((l) => l.text)).toContain('Hearth Vale');
+    for (const l of groups) {
+      for (const p of sky.stars.values()) {
+        const under = l.y > p.y && l.y - p.y < 30 && Math.abs(p.x - l.x) < l.text.length * 3.5 + 6;
+        expect(under, `${l.text} under ${p.id}`).toBe(false);
+      }
+    }
+  });
+
   it('labels the seven constellations and frames everything in its bounds', () => {
     const names = sky.labels.filter((l) => l.kind === 'constellation').map((l) => l.text);
     for (const n of ['The Edge', 'The Fang', 'The Lantern', 'The Heart', 'The Craft', 'The Wild', 'The Crown']) expect(names).toContain(n);

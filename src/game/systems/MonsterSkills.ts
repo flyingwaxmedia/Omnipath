@@ -9,7 +9,10 @@
 // Every technique is telegraphed in red with the element's colour filling toward impact (a white rim flashes just
 // before it lands): nova = ellipse at the player's position for `delay` ms; projectile = 300 ms wind-up then a real,
 // dodgeable projectile; dash = 400 ms lane, then the dash; strike = 300 ms cone; spin = 400 ms ring; chain = 300 ms
-// charge then a zap (the range ring shows where it reaches). A technique's own `castMs` adds wind-up on top.
+// charge then a zap (the range ring shows where it reaches). A technique's own `castMs` adds wind-up on top. Zone,
+// ring and cone tells last at least the fair minimum for their size (vfx/recipe fairTellMs: max(tell, min(900,
+// 350 + 2.5 r)) ms, docs/VFX.md §13), so a wide zone can still be walked out of. Hit tests use the one player body
+// radius (SkillSystem.PLAYER_R).
 // Fills are ground decals; rims, aim lines and arrow heads are repeated on an overlay layer so trees and bodies never
 // hide a zone. Multi-hit techniques (strike `hits`, spin `pulses`, projectile `count`) land each hit separately, with
 // a gap between swings / pulses so the player can still step out.
@@ -27,12 +30,15 @@ import type { MapScene } from '../scenes/MapScene';
 import { gameBus, type TellShape } from '../events';
 import { DEPTH, Y_BIAS, ySort } from '../render/depths';
 import { TILE } from '../world/runtime';
-import { clearShot, distToSegment, fxStyle, nextProjectileId } from './SkillSystem';
+import { fairTellMs } from '../vfx/recipe';
+import { PLAYER_R, clearShot, distToSegment, fxStyle, nextProjectileId } from './SkillSystem';
 
 const WITNESS_RANGE = 6 * TILE;
 const DANGER = 0xff3b3b;
-const PLAYER_R = 14;
-/** Telegraph length (ms) per shape; novas use their own `delay` (at least NOVA_MIN). */
+/**
+ * Telegraph length (ms) per shape; novas use their own `delay` (at least NOVA_MIN). Zone, ring and cone tells get
+ * the fair minimum for their size (fairTellMs: max(tell, min(900, 350 + 2.5 r))), so a big zone can be walked out of.
+ */
 const TELL = { projectile: 300, dash: 400, strike: 300, spin: 400, chain: 300, buff: 400 } as const;
 const NOVA_MIN = 500;
 /** Gap between a technique's pulses / swings so a later one can still be escaped. */
@@ -237,7 +243,7 @@ export class MonsterSkills {
         const cx = p.x;
         const cy = p.y;
         const r = sh.radius;
-        total = Math.max(NOVA_MIN, sh.delay ?? 0) + wind;
+        total = fairTellMs(Math.max(NOVA_MIN, sh.delay ?? 0) + wind, r);
         tellShape = { kind: 'zone', x: cx, y: cy, rx: r, ry: r * 0.65 };
         main = this.tell(m, skill, now, total, true, (g, t, top) => this.zone(g, top, cx, cy, r, r * 0.65, t, color), () => {
           gameBus.emit('novaBlast', { owner: m, skillId: skill.id, skill, element: skill.element, x: cx, y: cy, radius: r, heavy: skill.power >= 2 || skill.tags.includes('heavy') });
@@ -343,7 +349,7 @@ export class MonsterSkills {
           while (diff < -Math.PI) diff += Math.PI * 2;
           if (d <= range + PLAYER_R && (Math.abs(diff) <= arc / 2 + Math.atan2(PLAYER_R, Math.max(1, d)) || d < m.radius + PLAYER_R)) this.hitPlayer(hit, { x: m.x, y: m.y });
         };
-        total = TELL.strike + wind;
+        total = fairTellMs(TELL.strike + wind, range);
         tellShape = { kind: 'cone', x: m.x, y: m.y, r: range, ang: a, arc };
         main = this.tell(m, skill, now, total, true, (g, t, top) => this.cone(g, top, m.x, m.y, range, a, arc, t, color), swing);
         for (let h = 1; h < hits; h++) {
@@ -361,7 +367,7 @@ export class MonsterSkills {
           s.skills.fxSpin(m.x, m.y - 6, r, color, skill.element);
           if (Math.hypot((p.x - m.x) / r, (p.y - m.y) / (r * 0.65)) <= 1) this.hitPlayer(hit, { x: m.x, y: m.y });
         };
-        total = TELL.spin + wind;
+        total = fairTellMs(TELL.spin + wind, r);
         tellShape = { kind: 'zone', x: m.x, y: m.y, rx: r, ry: r * 0.65 };
         main = this.tell(m, skill, now, total, true, (g, t, top) => this.zone(g, top, m.x, m.y, r, r * 0.65, t, color), pulse);
         for (let i = 1; i < pulses; i++) {
@@ -430,7 +436,8 @@ export class MonsterSkills {
     }
     const aimed = sh.kind !== 'spin' && sh.kind !== 'buff';
     const radius = sh.kind === 'nova' ? sh.radius : sh.kind === 'spin' ? sh.radius + m.radius : sh.kind === 'chain' ? sh.range : undefined;
-    const windMs = (sh.kind === 'nova' ? Math.max(NOVA_MIN, sh.delay ?? 0) : TELL[sh.kind]) + wind;
+    // The wind-up tell's real length (the fair minimum included).
+    const windMs = main ? main.at - main.start : total;
     gameBus.emit('monsterTelegraph', {
       ...ref,
       monster: m,

@@ -1,0 +1,368 @@
+// Game events → sounds, per map (docs/INTEGRATION-v3.md §4 bus contract). MapScene.create() attaches one bridge
+// (one seam line) and its disposer runs on SHUTDOWN, so warping never grows the listener count. Positions are
+// spatialised against the camera view (pan + distance); the player's own actions play centred. Phaser-free (types
+// only), so tests drive it with a fake scene and a recording sink.
+//
+// Restraint rules: the first hit of a cast plays full, later hits of the same cast (multi-target spins, novas,
+// volleys) get quieter; simultaneous hits collapse through the voice groups (src/game/audio/voices.ts); status
+// ticks and footsteps sit at the bottom of the priority list.
+import type { Biome, MapKind } from '../../core/world/types';
+import type { Family, MonsterRank, Size, WeaponType } from '../../core/types';
+import { type EventBus, type GameEvents, gameBus, Scope } from '../events';
+import { objectKey } from '../world/runtime';
+import {
+  castSound,
+  chargeSound,
+  comboSound,
+  deathSound,
+  discoverySound,
+  gatherSound,
+  hitSound,
+  novaSound,
+  statusSound,
+  stepSound,
+  swingSound,
+  tickSound,
+} from './bank';
+import type { MapInfo } from './ambience';
+import type { PlayOptions } from './engine';
+import { MIN_SPATIAL_GAIN, spatialize, type View } from './spatial';
+import { type GroundGrid, surfaceAt } from './surfaces';
+
+/** Where the bridge sends sounds (the engine; tests record). */
+export interface AudioSink {
+  play(name: string, opts?: PlayOptions): unknown;
+  setMap(info: MapInfo): void;
+}
+
+interface MonsterLike {
+  x: number;
+  y: number;
+  def: { family: Family; size: Size; rank: MonsterRank };
+}
+
+/** The slice of MapScene the bridge reads (structural: no Phaser import). */
+export interface AudioScene {
+  events: {
+    on(event: string, fn: (...args: never[]) => void): unknown;
+    off(event: string, fn: (...args: never[]) => void): unknown;
+  };
+  cameras: { main: { worldView: { centerX: number; centerY: number; width: number; height: number } } };
+  player?: {
+    x: number;
+    y: number;
+    moving: boolean;
+    sprite?: { anims?: { currentAnim?: { key: string } | null; currentFrame?: { index: number } | null } };
+  };
+  cm?: GroundGrid;
+  def?: { id: string; biome: Biome; kind: MapKind; flags?: readonly string[]; objects?: readonly { id: string; kind: string }[] };
+  session?: { player: { weapon: WeaponType }; world?: { chests: readonly string[] } };
+}
+
+/** Footstep fallback stride (px) when the walk animation is not playing. */
+const STRIDE = 18;
+/** Walk animation frames whose feet are planted (1-based Phaser frame index of `_walk_0` / `_walk_2`). */
+const CONTACT_FRAMES: ReadonlySet<number> = new Set([1, 3]);
+
+const SIZE_RATE: Readonly<Record<Size, number>> = { S: 1.18, M: 1, L: 0.84 };
+const RANK_RATE: Readonly<Record<MonsterRank, number>> = { common: 1, elite: 0.94, warden: 0.8 };
+const monsterRate = (m: MonsterLike): number => (SIZE_RATE[m.def.size] ?? 1) * (RANK_RATE[m.def.rank] ?? 1);
+const isMonster = (a: unknown): a is MonsterLike => typeof a === 'object' && a !== null && 'def' in a;
+const clock = (): number => (typeof performance !== 'undefined' ? performance.now() : Date.now());
+
+/** Quieter for every later hit of the same cast. */
+export function hitRestraint(hitIndex: number): number {
+  return hitIndex <= 0 ? 1 : Math.max(0.35, 0.72 ** hitIndex);
+}
+
+/** Subscribes the scene's sounds; returns the disposer (MapScene pushes it on its SHUTDOWN list). */
+export function createAudioBridge(scene: AudioScene, sink: AudioSink, bus: EventBus<GameEvents> = gameBus): () => void {
+  const scope = new Scope(bus);
+  const roared = new WeakSet<object>();
+  let lastQuestComplete = -1e9;
+  let lastLowHp = -1e9;
+  let lastFrame = -1;
+  let stepDist = 0;
+  let lastX = NaN;
+  let lastY = NaN;
+  let foot = 0;
+
+  const view = (): View => {
+    const wv = scene.cameras.main.worldView;
+    return { cx: wv.centerX, cy: wv.centerY, halfW: wv.width / 2, halfH: wv.height / 2 };
+  };
+  /** A sound at a world position. */
+  const at = (name: string, x: number, y: number, o: PlayOptions = {}): void => {
+    const sp = spatialize(x, y, view());
+    if (sp.gain < MIN_SPATIAL_GAIN) return;
+    sink.play(name, { ...o, pan: sp.pan, gain: (o.gain ?? 1) * sp.gain });
+  };
+  /** A centred sound (the player's own body, UI, fanfares). */
+  const here = (name: string, o: PlayOptions = {}): void => {
+    sink.play(name, o);
+  };
+  const weapon = (): WeaponType => scene.session?.player.weapon ?? 'sword';
+
+  // ---------------------------------------------------------------- the player's casts
+  scope.on('castStart', (e) => {
+    if (e.durationMs >= 150) here(chargeSound(e.element ?? e.skill.element));
+  });
+  scope.on('castFire', (e) => {
+    // Strikes / spins / volleys / novas speak through skillPulse, dashes through dash, buffs through buffApplied.
+    if (e.shape === 'chain') here(castSound('chain', e.element ?? e.skill.element));
+  });
+  scope.on('skillPulse', (e) => {
+    const el = e.element ?? e.skill.element;
+    const kind = e.skill.shape.kind;
+    if (isMonster(e.owner)) {
+      if (kind === 'strike' || kind === 'spin') at('mon_swing', e.x, e.y, { rate: monsterRate(e.owner), gain: e.index === 0 ? 1 : 0.7 });
+      return;
+    }
+    const later = e.index > 0 ? 0.8 : 1;
+    switch (kind) {
+      case 'strike': {
+        const heavy = e.skill.tier >= 2 || e.skill.power >= 1.8 || e.skill.tags.includes('heavy');
+        here(swingSound(weapon(), heavy), { gain: later });
+        if (el && e.index === 0) here(castSound('strike', el));
+        break;
+      }
+      case 'spin':
+        if (e.index === 0) here(castSound('spin', el));
+        else here('swing_spin', { gain: 0.7 });
+        break;
+      case 'projectile':
+        here(castSound('projectile', el));
+        break;
+      case 'nova':
+        here(castSound('nova', el));
+        break;
+      default:
+        break;
+    }
+  });
+  scope.on('projectileSpawn', (e) => {
+    const i = e.index ?? 0;
+    if (i >= 3) return;
+    if (isMonster(e.owner)) {
+      if (i === 0) at('mon_shot', e.x, e.y, { rate: monsterRate(e.owner) });
+      return;
+    }
+    at('proj_whoosh', e.x, e.y, { gain: i === 0 ? 1 : 0.5 });
+  });
+  scope.on('projectileEnd', (e) => {
+    const g = isMonster(e.owner) ? 0.6 : 1;
+    if (e.reason === 'wall') at('proj_wall', e.x, e.y, { gain: g });
+    else if (e.reason === 'expire' && !isMonster(e.owner)) at('proj_fizzle', e.x, e.y);
+    else if (e.reason === 'caught') here('proj_catch');
+  });
+  scope.on('chainLaunch', (e) => {
+    if (e.knives) at('proj_whoosh', e.from.x, e.from.y, { rate: 1.45, gain: 0.6 });
+    if (!e.target) at('proj_fizzle', e.to.x, e.to.y);
+  });
+  scope.on('chainHop', (e) => {
+    const rate = 1 + Math.min(6, e.index) * (e.knives ? 0.05 : 0.07);
+    at(e.knives ? 'knife_ricochet' : 'zap_chain', e.to.x, e.to.y, { rate });
+  });
+  scope.on('novaBlast', (e) => {
+    at(novaSound(e.radius), e.x, e.y, { gain: isMonster(e.owner) ? 0.85 : 1, rate: e.heavy ? 0.92 : 1 });
+  });
+  scope.on('dash', (e) => {
+    if (isMonster(e.owner)) at('mon_dash', e.from.x, e.from.y, { rate: monsterRate(e.owner) });
+    else {
+      here(castSound('dash', e.element ?? e.skill.element));
+      if (e.spin) here('swing_spin', { gain: 0.6 });
+    }
+  });
+  scope.on('buffApplied', (e) => {
+    if (isMonster(e.target)) at('mon_buff', e.x, e.y, { rate: monsterRate(e.target) });
+    else here(castSound(e.stat === 'def' ? 'ward' : 'buff', e.element ?? e.skill.element));
+  });
+
+  // ---------------------------------------------------------------- hits, statuses, combos
+  scope.on('hit', (e) => {
+    const el = e.element ?? e.skill.element;
+    const g = hitRestraint(e.hitIndex);
+    if (e.resisted) {
+      at('hit_resist', e.x, e.y, { gain: g });
+      return;
+    }
+    const strong = e.multiplier > 1.25;
+    const weak = e.multiplier < 0.8;
+    at(hitSound(el), e.x, e.y, { gain: g * (weak ? 0.85 : 1), rate: strong ? 1.06 : weak ? 0.94 : 1 });
+    if (e.crit) at('crit', e.x, e.y, { gain: g });
+    if (e.via === 'arc') at('zap_chain', e.x, e.y, { gain: 0.45, rate: 1.2 });
+  });
+  scope.on('dotTick', (e) => at(tickSound(e.kind), e.x, e.y, { gain: 0.8 }));
+  scope.on('statusApplied', (e) => {
+    if (e.target === 'player') {
+      if (e.blocked) here('status_blocked');
+      else {
+        const s = statusSound(e.kind);
+        if (s) here(s);
+      }
+      return;
+    }
+    const s = statusSound(e.kind);
+    if (s) at(s, e.x, e.y, { gain: 0.7 });
+  });
+  scope.on('combo', (e) => at(comboSound(e.name), e.x, e.y));
+  scope.on('heal', () => here('heal'));
+  scope.on('spark', (e) => {
+    if (e.x !== undefined && e.y !== undefined) at('spark_crack', e.x, e.y);
+    else here('spark_crack');
+  });
+
+  // ---------------------------------------------------------------- the player getting hurt
+  scope.on('playerHurt', (e) => {
+    const name = e.dot ? 'hurt_dot' : e.heavy ? 'hurt_heavy' : 'hurt';
+    // Lean a little toward where the blow came from.
+    const pan = e.origin ? spatialize(e.origin.x, e.origin.y, view()).pan * 0.5 : 0;
+    here(name, { pan });
+    const now = clock();
+    if (e.maxHp > 0 && e.hp > 0 && e.hp / e.maxHp < 0.25 && now - lastLowHp > 5000) {
+      lastLowHp = now;
+      here('hurt_low', { delay: 0.25 });
+    }
+  });
+
+  // ---------------------------------------------------------------- monsters
+  scope.on('monsterTelegraph', (e) => {
+    const m = e.monster as unknown as MonsterLike;
+    const rank = e.rank ?? m.def.rank;
+    if (rank === 'warden' && !roared.has(e.monster)) {
+      roared.add(e.monster);
+      at('boss_roar', e.x, e.y, { rate: monsterRate(m) / 0.8 });
+    }
+    at(rank === 'common' ? 'tell' : 'tell_big', e.x, e.y);
+    if (e.echo) at('tell_echo', e.x, e.y);
+  });
+  scope.on('monsterTelegraphEnd', (e) => {
+    if (e.reason === 'cancel') at('tell_cancel', e.monster.x, e.monster.y);
+  });
+  scope.on('enrage', (e) => {
+    roared.add(e.monster);
+    at('boss_enrage', e.x, e.y);
+  });
+  scope.on('kill', (e) => {
+    if (e.coins > 0) at('coin', e.x, e.y, { delay: 0.14 });
+    if (e.elite || e.warden) here('kill_elite', { delay: 0.22 });
+  });
+  scope.on('death', (e) => {
+    if (e.target === 'player') {
+      here('player_death');
+      return;
+    }
+    const m = e.target as unknown as MonsterLike;
+    if (m.def.rank === 'warden') here('death_warden');
+    else at(deathSound(m.def.family), e.x, e.y, { rate: monsterRate(m) });
+  });
+
+  // ---------------------------------------------------------------- progress, world, UI
+  scope.on('levelUp', () => here('level_up'));
+  scope.on('gather', (e) => at(gatherSound(e.node), e.x, e.y));
+  scope.on('interact', (e) => {
+    if (e.kind === 'node') at('gather_start', e.x, e.y);
+    else if (e.kind === 'object') {
+      const kind = scene.def?.objects?.find((o) => o.id === e.id)?.kind;
+      if (kind === 'chest') {
+        const opened = scene.session?.world?.chests.includes(objectKey(e.map, e.id));
+        here(opened ? 'ui_nope' : 'chest_open');
+      } else if (kind === 'waystone') here('waystone');
+      else if (kind === 'altar' || kind === 'wind_shrine' || kind === 'obelisk') here('altar');
+      else if (kind === 'campfire') here('campfire');
+      else here('ui_tap');
+    }
+  });
+  scope.on('talk', () => here('ui_talk'));
+  scope.on('mapEnter', (e) => {
+    const d = scene.def;
+    if (d && d.id === e.map) sink.setMap({ id: d.id, biome: d.biome, kind: d.kind, flags: d.flags });
+    if (e.first) here('map_new', { delay: 0.7 });
+  });
+  scope.on('warp', () => {
+    here('warp_out');
+    // The arrival plays through the map restart (the engine outlives the scene).
+    here('warp_in', { delay: 0.34 });
+  });
+  scope.on('questChanged', (e) => {
+    switch (e.reason) {
+      case 'accepted':
+        return here('quest_accept');
+      case 'progress':
+        return here('quest_tick');
+      case 'ready':
+        return here('quest_ready');
+      case 'completed':
+        lastQuestComplete = clock();
+        return here('quest_complete');
+      case 'abandoned':
+        return here('quest_abandon');
+      case 'tracked':
+        return here('ui_tap');
+    }
+  });
+  scope.on('uiOpen', (e) => {
+    if (e.panel !== 'discovery') here('ui_open', { gain: e.panel === 'dialog' ? 0.8 : 1 });
+  });
+  scope.on('uiClose', (e) => {
+    if (e.panel !== 'discovery') here('ui_close');
+  });
+  scope.on('discovery', (e) => {
+    const s = discoverySound(e.kind);
+    if (s) here(s);
+    else if (clock() - lastQuestComplete > 2000) here('quest_complete');
+  });
+  scope.on('classChanged', (e) => {
+    if (e.reason === 'wear') here(e.classId ? 'class_wear' : 'ui_close');
+  });
+  scope.on('barChanged', (e) => {
+    const r = e.reason ?? 'assign';
+    if (r === 'assign') here('slot_set');
+    else if (r === 'clear') here('ui_tap');
+    else if (r === 'learned' || r === 'classLearned') here('slot_set', { delay: 0.1 });
+  });
+
+  // ---------------------------------------------------------------- footsteps (synced to the walk frames)
+  const step = (x: number, y: number): void => {
+    foot ^= 1;
+    here(stepSound(surfaceAt(scene.cm, x, y)), { pan: foot ? 0.06 : -0.06, rate: foot ? 1 : 0.96 });
+  };
+  const onUpdate = (): void => {
+    const p = scene.player;
+    if (!p) return;
+    if (!p.moving) {
+      lastFrame = -1;
+      stepDist = 0;
+      lastX = p.x;
+      lastY = p.y;
+      return;
+    }
+    const anims = p.sprite?.anims;
+    const key = anims?.currentAnim?.key ?? '';
+    if (key.endsWith('_walk')) {
+      const idx = anims?.currentFrame?.index ?? -1;
+      if (idx !== lastFrame) {
+        if (CONTACT_FRAMES.has(idx)) step(p.x, p.y);
+        lastFrame = idx;
+      }
+    } else {
+      const d = Math.hypot(p.x - lastX, p.y - lastY);
+      if (Number.isFinite(d)) stepDist += d;
+      if (stepDist >= STRIDE) {
+        stepDist = 0;
+        step(p.x, p.y);
+      }
+    }
+    lastX = p.x;
+    lastY = p.y;
+  };
+  scene.events.on('update', onUpdate);
+
+  let disposed = false;
+  return () => {
+    if (disposed) return;
+    disposed = true;
+    scope.clear();
+    scene.events.off('update', onUpdate);
+  };
+}

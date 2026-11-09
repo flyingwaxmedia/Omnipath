@@ -48,6 +48,7 @@
 //                       SkillSystem; monster: MonsterSkills swing / pulse / volley) — the VFX never re-times swings
 //   monsterTelegraphEnd a telegraphed monster technique resolved (its hits ran) or was cancelled (death, stun)
 //   enrage              a warden became enraged below half HP (MonsterSkills.enrage)
+//   chainLaunch         a chain link leaves (player chains): lightning shows at once, knives fly flightMs to chainHop
 // Fields marked "(VFX request)" are filled where the emitter knows them (castId on castStart, projectile id / index /
 // count, telegraph id / timing / tell / rank, untilMs, source, via / from, spreadTo, heal.from, spark x / y,
 // death.killer, playerHurt attacker / skill); they stay optional, so listeners must cope with them missing.
@@ -424,6 +425,22 @@ export interface EnrageEvent extends Pt {
   monster: Monster;
 }
 
+/**
+ * A chain link leaves (VFX addition): lightning appears at once, a knife / blade flies `flightMs` before its
+ * chainHop. Emitted for the player's chains (SkillSystem.chain), including a chain that found no target (`target`
+ * null: the link fizzles at `to`).
+ */
+export interface ChainLaunchEvent extends SkillRef {
+  owner: Actor;
+  from: Pt;
+  to: Pt;
+  index: number;
+  target: Actor | null;
+  knives: boolean;
+  /** Flight time to `to` (ms): 0 for lightning, 90 for knives. */
+  flightMs: number;
+}
+
 /** Every game event and its payload. */
 export interface GameEvents {
   hit: HitEvent;
@@ -462,6 +479,8 @@ export interface GameEvents {
   skillPulse: SkillPulseEvent;
   monsterTelegraphEnd: MonsterTelegraphEndEvent;
   enrage: EnrageEvent;
+  // VFX runtime additions (docs/VFX.md §8.2): append-only.
+  chainLaunch: ChainLaunchEvent;
 }
 
 export type GameEventName = keyof GameEvents;

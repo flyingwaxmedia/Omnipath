@@ -22,7 +22,7 @@ import { type Buff, type Stats, expToNext } from '../session';
 import { gameBus } from '../events';
 import { DEPTH } from '../render/depths';
 import { TILE } from '../world/runtime';
-import { CFX, type Cast, type CombatHost, SkillSystem, castRef, clearShot, fxStyle, hex } from './SkillSystem';
+import { CFX, type Cast, type CombatHost, PLAYER_R, SkillSystem, castRef, clearShot, fxStyle, hex } from './SkillSystem';
 
 const GLOOMCAPS_FOR_SHADOW = 5;
 /** Dealt or took damage within this window = in combat (buff use XP). */
@@ -38,8 +38,6 @@ const AUTO_UNREACHABLE_MS = 15000;
 const LEECH_CAP = 0.08;
 /** Arc rider: zaps the N nearest other monsters within this radius. */
 const ARC_RADIUS = 120;
-/** Player body radius for separation and monster hit tests. */
-const PLAYER_R = 12;
 /** Pack animals: hitting one pulls same-species neighbours within ASSIST_RADIUS. */
 const PACK_FAMILIES: ReadonlySet<Family> = new Set<Family>(['beast', 'swarm', 'fiend']);
 const ASSIST_RADIUS = 110;
@@ -699,7 +697,6 @@ export class Combat implements CombatHost {
       book.recordUse(skill.id, monsterThreat(m.def));
     }
     const top = m.y - m.sprite.displayHeight;
-    const color = this.colorFor(skill);
     if (roll.resisted) {
       gameBus.emit('hit', { ...castRef(cast), ...this.via(cast), source: 'player', target: m, x: m.x, y: m.y, damage: 0, crit: false, resisted: true, multiplier: 0, killed: false, hitIndex: cast.tally.hits, ang: Math.atan2(m.y - cast.origin.y, m.x - cast.origin.x) });
       s.floatText(m.x, top, 'Resist', '#9aa0aa', 12);
@@ -710,7 +707,8 @@ export class Combat implements CombatHost {
     const tc = roll.crit ? '#ffe14a' : roll.multiplier > 1 ? '#ff9a3a' : roll.multiplier < 1 ? '#a8b0c0' : '#ffffff';
     s.floatText(m.x + Phaser.Math.Between(-8, 8), top, `${roll.amount}${roll.crit ? '!' : ''}`, tc, roll.crit ? 18 : 14);
     m.hp -= roll.amount;
-    s.skills.fxImpact(m, skill, color, roll.crit);
+    // Impact sparks, statuses, combos, arc zaps, leech streams and the spark star are drawn by the VFX runtime from
+    // the bus (hit / statusApplied / combo / heal / spark); the sprite flash above confirms the hit on this frame.
 
     if (roll.combo) this.applyCombo(m, roll, cast, top, now);
 
@@ -733,7 +731,6 @@ export class Combat implements CombatHost {
         pl.hp = Math.min(st.maxHp, pl.hp + heal);
         gameBus.emit('heal', { amount: heal, source: 'leech', x: this.player.x, y: this.player.y, from: { x: m.x, y: m.y } });
         s.floatText(this.player.x, this.player.y - 40, `+${Math.round(heal)}`, '#7fff9f', 11);
-        s.skills.fxStream({ x: m.x, y: m.y - 14 }, { x: this.player.x, y: this.player.y - 20 }, 0x7fff9f, 3);
       }
     }
 
@@ -747,9 +744,8 @@ export class Combat implements CombatHost {
       // Spark moment: the 'spark' event (MapScene) runs the 250 ms hit-stop, banner and vibration; the radial
       // flash bursts from the struck foe.
       s.session.sparkAt = { x: m.x, y: m.y };
-      const learned = book.trySpark(skill.id, m.def, book.now());
+      book.trySpark(skill.id, m.def, book.now());
       s.session.sparkAt = null;
-      if (learned) s.skills.fxSpark(m.x, m.y - Math.min(30, m.sprite.displayHeight * 0.5));
     }
 
     const arc = skill.riders?.arc;
@@ -763,7 +759,6 @@ export class Combat implements CombatHost {
       others.forEach((o, i) =>
         s.time.delayedCall(50 + i * 40, () => {
           if (!o.alive || this.dead) return;
-          s.skills.fxArcZap(from, { x: o.x, y: o.y - 10 }, color);
           this.hit(o, zap, falloff);
         }),
       );
@@ -790,25 +785,11 @@ export class Combat implements CombatHost {
       : [];
     gameBus.emit('combo', { ...castRef(cast), target: m, name: c.name, consumes: c.consumes, x: m.x, y: m.y, ...(c.spreadBurn ? { spreadTo: spread.map((o) => ({ x: o.x, y: o.y })) } : {}) });
     delete m.status.marks[c.consumes];
-    const y = m.y - Math.min(24, m.sprite.displayHeight * 0.45);
-    if (c.consumes === 'freeze') {
-      m.status.stunUntil = Math.min(m.status.stunUntil, now);
-      s.skills.fxShatter(m.x, y, m.radius + 12);
-    }
-    if (c.consumes === 'soak') {
-      m.status.slowUntil = Math.min(m.status.slowUntil, now);
-      s.skills.fxRing(m.x, m.y - 8, m.radius + 16, 0xffe14a, false);
-      s.skills.fxArcZap({ x: m.x - m.radius, y }, { x: m.x + m.radius, y: y - 6 }, 0x9fd8ff);
-    }
-    if (c.consumes === 'burn') {
-      m.status.dots = m.status.dots.filter((d) => d.kind !== 'burn');
-      s.skills.fxSpin(m.x, m.y - 8, m.radius + 12, 0xff8a3a, 'fire');
-    }
+    if (c.consumes === 'freeze') m.status.stunUntil = Math.min(m.status.stunUntil, now);
+    if (c.consumes === 'soak') m.status.slowUntil = Math.min(m.status.slowUntil, now);
+    if (c.consumes === 'burn') m.status.dots = m.status.dots.filter((d) => d.kind !== 'burn');
     s.floatText(m.x, top - 18, `${c.name}!`, '#ffd76a', 15);
-    for (const o of spread) {
-      this.applyStatus(o, 'burn', roll.amount, cast.origin, cast.skill);
-      s.skills.fxStream({ x: m.x, y }, { x: o.x, y: o.y - 12 }, 0xff6a2b, 4, CFX.flame);
-    }
+    for (const o of spread) this.applyStatus(o, 'burn', roll.amount, cast.origin, cast.skill);
   }
 
   applyStatus(m: Monster, kind: StatusKind, dmg: number, origin: { x: number; y: number }, source?: SkillDef): void {
@@ -863,7 +844,6 @@ export class Combat implements CombatHost {
         break;
       case 'knockback':
         push(1, 320);
-        if (!boss) this.scene.skills.fxDust(m.x, m.y);
         break;
       case 'pull':
         if (Math.hypot(m.x - origin.x, m.y - origin.y) > 24) push(-1, 240);
@@ -973,7 +953,6 @@ export class Combat implements CombatHost {
       pl.hp = st.maxHp;
       pl.sp = st.maxSp;
       s.floatText(this.player.x, this.player.y - 60, `LEVEL ${pl.level}!`, '#ffe14a', 18);
-      s.skills.fxRing(this.player.x, this.player.y, 60, 0xffe14a, false);
       s.ui.toast(`🎉 Level <b>${pl.level}</b>!`);
       s.ui.log(`🎉 Level <b>${pl.level}</b>! HP and SP restored.`, 'good');
       s.markHotbarDirty();
@@ -1231,10 +1210,7 @@ export class Combat implements CombatHost {
       }
       m.status.dots = m.status.dots.filter((d) => d.until > now);
     }
-    if (now >= m.fxAt) {
-      m.fxAt = now + STATUS_FX_MS;
-      this.statusMotes(m.x, m.y - Math.min(30, m.sprite.displayHeight * 0.55), m.status.marks, now);
-    }
+    // Status units on monsters are the VFX runtime's (statusApplied).
     if (m.buffs.length) {
       const regen = m.regenPct(now);
       if (regen > 0) m.hp = Math.min(m.maxHp, m.hp + (m.maxHp * regen * dt) / 100);

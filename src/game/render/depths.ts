@@ -98,3 +98,9 @@ export const Y_BIAS = {
   ARC: 40,
   PILLAR: 50,
 } as const;
+
+// VFX additions (docs/VFX.md §8.3; append-only): shared mote emitters cannot y-sort, so their blitters sit over the
+// whole y-sorted world band and under canopies and telegraph rims.
+export const VFX_DEPTH = {
+  FX_MOTES: 89000,
+} as const;

@@ -77,6 +77,7 @@ import {
 } from '../world/runtime';
 import { statPct } from '../../core/passives';
 import { gameBus } from '../events';
+import { attachAudio } from '../audio';
 import { DEPTH, Y_BIAS, ySort } from '../render/depths';
 
 export type Arrival = string | { waystone: string };
@@ -221,6 +222,7 @@ export class MapScene extends Phaser.Scene implements GameController {
     }
 
     this.wireEvents();
+    this.disposers.push(attachAudio(this)); // sounds for this map (src/game/audio); disposed on SHUTDOWN
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => this.shutdown());
 
     this.enterMap();

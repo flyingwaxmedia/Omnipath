@@ -7,6 +7,7 @@
 // cardModel() gathers the data (fog / whisper stars are masked here: a '?' never leaks a name); cardHtml() is a pure
 // HTML-string builder (unit-tested in node); wireCard() hooks the buttons up.
 import { fusionMinRank } from '../../core/mastery';
+import { gameBus } from '../../game/events';
 import { reqStep } from '../../game/steps';
 import type { GameController } from '../controller';
 import type { PanelHost } from '../panels/common';
@@ -19,7 +20,8 @@ export type CardPrimary =
   | { kind: 'equip' }
   | { kind: 'equipped'; slot: number }
   | { kind: 'class'; className: string }
-  | { kind: 'transform'; to: string; toName: string }
+  /** `from` set: this card is the form, and its known parent (`from`) can become it right now. */
+  | { kind: 'transform'; to: string; toName: string; from?: string; fromName?: string }
   | { kind: 'step'; text: string }
   | { kind: 'none' };
 
@@ -49,6 +51,8 @@ export interface CardModel {
   details: { label: string; value: string }[];
   /** What it transforms into (Details; tap → that star). '?' names stay hidden. */
   forms: { id: string; name: string; known: boolean }[];
+  /** Transform ready with more than one form: the other forms it can take now (small "or …" chips → that form's card). */
+  alts?: { id: string; name: string }[];
 }
 
 export interface CardOptions {
@@ -58,6 +62,8 @@ export interface CardOptions {
   more?: boolean;
   /** A small "Show in Star Chart" link (cards opened outside the chart). */
   chartLink?: boolean;
+  /** "Details" is open (kept across re-renders once the player opened it; closed by default). */
+  details?: boolean;
 }
 
 const sentence = (s: string) => (/[.!?)]$/.test(s.trim()) ? s.trim() : `${s.trim()}.`);
@@ -106,7 +112,7 @@ export function cardModel(ctrl: GameController, id: string, star?: StarView): Ca
     };
   }
   const a = v.action;
-  const primary: CardPrimary =
+  let primary: CardPrimary =
     a.kind === 'equip'
       ? { kind: 'equip' }
       : a.kind === 'equipped'
@@ -120,6 +126,22 @@ export function cardModel(ctrl: GameController, id: string, star?: StarView): Ca
             : { kind: 'none' };
   const sk = reg.skill(id);
   const prog = book.progress(id);
+  // A form a known skill can take right now: this card transforms too (the parent's card offers only its first form,
+  // so this is how the player picks another one).
+  if (!v.known && sk) {
+    const via = reg
+      .morphsTo(id)
+      .find((x) => book.has(x.from) && book.canMorph(x.from) && book.morphOptions(x.from).some((o) => o.morph.to === id && o.available && !o.owned && !!o.skill));
+    if (via) primary = { kind: 'transform', to: id, toName: sk.name, from: via.from, fromName: reg.skill(via.from)?.name ?? '' };
+  }
+  // Transform ready with several forms: the others, as small "or …" chips under the button.
+  const alts =
+    v.known && primary.kind === 'transform' && !primary.from
+      ? book
+          .morphOptions(id)
+          .filter((o) => o.available && !o.owned && o.skill && o.morph.to !== (primary as { to: string }).to)
+          .map((o) => ({ id: o.morph.to, name: o.skill!.name }))
+      : [];
   // The rest of what an unknown transform needs (the first step is the action itself).
   const rest: string[] = [];
   if (!v.known) {
@@ -150,7 +172,8 @@ export function cardModel(ctrl: GameController, id: string, star?: StarView): Ca
     const from = originText(prog.source, (kind, x) =>
       kind === 'skill' ? reg.skill(x)?.name : kind === 'monster' ? reg.monster(x)?.name : kind === 'class' ? reg.classDef(x)?.name : reg.item(x)?.name,
     );
-    if (from) details.push({ label: 'Learned', value: from });
+    // 'Learned' alone (debug / unknown sources) would read "Learned · Learned": say nothing then.
+    if (from && from !== 'Learned') details.push({ label: 'Learned', value: from });
     details.push({ label: 'Used', value: `${prog.uses} ${prog.uses === 1 ? 'time' : 'times'}` });
   }
   const forms = v.known
@@ -171,10 +194,13 @@ export function cardModel(ctrl: GameController, id: string, star?: StarView): Ca
     cooldown: v.cooldown,
     sp: v.sp,
     primary,
-    ...(v.next && primary.kind !== 'step' ? { next: v.next } : {}),
+    // The small transform step under the action — also under a step (the basic attack: "Your weapon swings this by
+    // itself." then "Reach rank 10 to transform."), never the same line twice.
+    ...(v.next && !(primary.kind === 'step' && primary.text === v.next) && !(primary.kind === 'transform' && primary.from) ? { next: v.next } : {}),
     rest,
     details,
     forms,
+    ...(alts.length ? { alts } : {}),
   };
 }
 
@@ -215,7 +241,13 @@ export function cardHtml(m: CardModel, o: CardOptions = {}): string {
         : p.kind === 'class'
           ? `<div class="sc-done cls" role="status">Class skill ✓<small>Your ${esc(p.className)} uses it.</small></div>`
           : p.kind === 'transform'
-            ? `<button class="sc-primary gold" data-act="transform" data-to="${esc(p.to)}">✨ Transform<small>into ${esc(p.toName)}</small></button>`
+            ? p.from
+              ? `<button class="sc-primary gold" data-act="transform" data-from="${esc(p.from)}" data-to="${esc(p.to)}">✨ Transform<small>${esc(p.fromName ?? '')} into ${esc(p.toName)}</small></button>`
+              : `<button class="sc-primary gold" data-act="transform" data-to="${esc(p.to)}">✨ Transform<small>into ${esc(p.toName)}</small></button>${
+                  m.alts?.length
+                    ? `<p class="sc-alt">or ${m.alts.map((f) => `<button class="sc-form known" data-star="${esc(f.id)}">${esc(f.name)}</button>`).join('')}</p>`
+                    : ''
+                }`
             : p.kind === 'step'
               ? `<div class="sc-step"><span class="sc-arrow" aria-hidden="true">➜</span><span>${esc(p.text)}</span>${m.rest.length ? `<button class="sc-more ${o.more ? 'open' : ''}" data-act="more" aria-expanded="${o.more ? 'true' : 'false'}" aria-label="What else?">?</button>` : ''}</div>
                  ${m.rest.length ? `<ul class="sc-rest ${o.more ? '' : 'hidden'}">${m.rest.map((r) => `<li>${esc(r)}</li>`).join('')}</ul>` : ''}`
@@ -226,7 +258,7 @@ export function cardHtml(m: CardModel, o: CardOptions = {}): string {
         .map((f) => `<button class="sc-form ${f.known ? 'known' : ''}" data-star="${esc(f.id)}">${esc(f.name)}</button>`)
         .join('')}</div>`
     : '';
-  const details = rows || forms ? `<details class="sc-details"><summary>Details</summary>${rows ? `<dl>${rows}</dl>` : ''}${forms}</details>` : '';
+  const details = rows || forms ? `<details class="sc-details"${o.details ? ' open' : ''}><summary>Details</summary>${rows ? `<dl>${rows}</dl>` : ''}${forms}</details>` : '';
   return `<div class="sc-card ${m.kind} ${m.transformReady ? 'ready' : ''}" data-card="${esc(m.id)}">
     ${o.back ? '<button class="back sc-back" data-act="back">‹ Back</button>' : ''}
     ${head}
@@ -247,6 +279,8 @@ export interface CardHandlers {
   select?: (id: string) => void;
   /** The "?" was toggled. */
   more?: (open: boolean) => void;
+  /** "Details" was opened or closed. */
+  details?: (open: boolean) => void;
 }
 
 /** Wires a rendered card (root = an element containing `.sc-card`). */
@@ -270,11 +304,13 @@ export function wireCard(host: PanelHost, root: ParentNode, m: CardModel, h: Car
   act('transform').forEach((b) =>
     b.addEventListener('click', () => {
       const to = b.dataset.to!;
-      ctrl.morph(m.id, to);
+      // A form's own card transforms its parent (data-from); a ready star's card transforms itself.
+      ctrl.morph(b.dataset.from || m.id, to);
       if (ctrl.book.has(to)) h.transformed?.(to);
       else host.refresh();
     }),
   );
+  $$<HTMLDetailsElement>(root, '.sc-card .sc-details').forEach((d) => d.addEventListener('toggle', () => h.details?.(d.open)));
   act('more').forEach((b) =>
     b.addEventListener('click', () => {
       const list = (b.closest('.sc-act') ?? root).querySelector('.sc-rest');
@@ -288,19 +324,45 @@ export function wireCard(host: PanelHost, root: ParentNode, m: CardModel, h: Car
   $$<HTMLButtonElement>(root, '.sc-card [data-star]').forEach((b) => b.addEventListener('click', () => h.select?.(b.dataset.star!)));
 }
 
+/** A real open of the 'skill' panel (ui.open emits uiOpen before rendering): "?" and Details start closed again. */
+let cardOpened = false;
+gameBus.on('uiOpen', (e) => {
+  if (e.panel === 'skill') cardOpened = true;
+});
+
 /** Panel 'skill' (arg: skill id or 'el:<id>'): the card on its own sheet (HUD class slots, Codex, altar, Pursuits). */
 export function renderSkillCard(host: PanelHost, id?: string): void {
   const ctrl = host.ctrl;
   const sid = id ?? '';
-  const m = cardModel(ctrl, sid);
+  if (cardOpened) {
+    cardOpened = false;
+    delete host.state['skill.more'];
+    delete host.state['skill.details'];
+  }
+  // The star as the chart shows it: a '?' star (hidden by a world secret, or a whispered fusion) stays a '?' here too —
+  // e.g. a "?" form tapped in Details must not reveal its name.
+  let star: StarView | undefined;
+  try {
+    star = ctrl.starChartData().stars.find((s) => s.id === sid);
+  } catch {
+    star = undefined;
+  }
+  const m = cardModel(ctrl, sid, star);
   const open = host.state['skill.more'] === sid;
-  const body = host.sheet(m.kind === 'element' ? 'Element' : 'Skill', cardHtml(m, { more: open, chartLink: m.kind !== 'element' || m.known }), 'skcard-sheet');
+  const det = host.state['skill.details'] === sid;
+  // "See it in the Star Chart" only for a star the chart actually draws (and not for an unknown element).
+  const link = !!star && (m.kind !== 'element' || m.known);
+  const body = host.sheet(m.kind === 'element' ? 'Element' : 'Skill', cardHtml(m, { more: open, chartLink: link, details: det }), 'skcard-sheet');
   wireCard(host, body, m, {
     transformed: (to) => host.open('skill', to),
     select: (to) => host.open('skill', to),
     more: (o) => {
       if (o) host.state['skill.more'] = sid;
       else delete host.state['skill.more'];
+    },
+    details: (o) => {
+      if (o) host.state['skill.details'] = sid;
+      else if (host.state['skill.details'] === sid) delete host.state['skill.details'];
     },
   });
 }
