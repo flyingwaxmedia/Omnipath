@@ -209,8 +209,8 @@ const FLOWERS: Record<'crimson' | 'rose' | 'cream' | 'violet', FlowerSpec> = {
 /** Size presets: canvas, number of blooms, number of leaves, leaf length. */
 const FLOWER_SIZES = {
   s: { w: 14, h: 14, blooms: 3, leaves: 3, leaf: 6 },
-  m: { w: 20, h: 19, blooms: 5, leaves: 5, leaf: 8 },
-  l: { w: 26, h: 25, blooms: 7, leaves: 7, leaf: 11 },
+  m: { w: 22, h: 20, blooms: 5, leaves: 5, leaf: 9 },
+  l: { w: 30, h: 28, blooms: 9, leaves: 8, leaf: 13 },
 } as const;
 
 function flowerClump(scene: Phaser.Scene, color: keyof typeof FLOWERS, size: keyof typeof FLOWER_SIZES): void {
@@ -224,7 +224,7 @@ function flowerClump(scene: Phaser.Scene, color: keyof typeof FLOWERS, size: key
     sprite(c, S.w, S.h, (b) => {
       // leaves fan out from the base, lily-like arcs
       for (let i = 0; i < S.leaves; i++) {
-        const t = S.leaves === 1 ? 0.5 : i / (S.leaves - 1);
+        const t = i / (S.leaves - 1);
         const ang = -Math.PI / 2 + (t - 0.5) * 2.3 + (rnd() - 0.5) * 0.25;
         const len = S.leaf * (0.7 + rnd() * 0.4) * (1 - Math.abs(t - 0.5) * 0.5);
         const x1 = cx + Math.cos(ang) * len;
@@ -234,7 +234,7 @@ function flowerClump(scene: Phaser.Scene, color: keyof typeof FLOWERS, size: key
       // stems + blooms, highest blooms at the back
       const pts: [number, number][] = [];
       for (let i = 0; i < S.blooms; i++) {
-        const t = S.blooms === 1 ? 0.5 : i / (S.blooms - 1);
+        const t = i / (S.blooms - 1);
         const x = Math.round(3 + t * (S.w - 6) + (rnd() - 0.5) * 2);
         const y = Math.round(3 + rnd() * (S.h * 0.42) + Math.abs(t - 0.5) * S.h * 0.25);
         pts.push([x, Math.min(base - 4, y + (F.kind === 'spike' ? 3 : 0))]);
@@ -313,11 +313,17 @@ function rockLump(b: Ctx, x: number, y: number, w: number, h: number, ramp: Ramp
 
 function drawGroundBits(scene: Phaser.Scene): void {
   tex(scene, 'dr_pebbles', 16, 9, (c) =>
-    sprite(c, 16, 9, (b) => {
-      rockLump(b, 1, 7, 5, 4, R.stone);
-      rockLump(b, 7, 8, 4, 3, R.warm);
-      rockLump(b, 11, 6, 4, 3, R.stone);
-    }),
+    sprite(
+      c,
+      16,
+      9,
+      (b) => {
+        rockLump(b, 1, 7, 5, 4, R.warm);
+        rockLump(b, 7, 8, 4, 3, R.stone);
+        rockLump(b, 11, 6, 4, 3, R.warm);
+      },
+      'rgba(36,24,15,0.55)',
+    ),
   );
   tex(scene, 'dr_stone', 16, 12, (c) => {
     shadow(c, 8, 10.5, 7, 1.5);
@@ -625,20 +631,22 @@ function drawFences(scene: Phaser.Scene): void {
     });
   });
   // Vertical segment (a run going north-south seen from the 3/4 view): stacked posts joined by the rails seen edge-on.
+  // Vertical segment: a run going north-south in the 3/4 view. One post per tile at the foot; the two rails seen
+  // edge-on become a strip that climbs to where the next segment's post stands (a run is capped by dr_fence_post).
   tex(scene, 'dr_fence_v', 10, 52, (c) => {
     const vf = 51;
-    for (const yy of [vf, vf - 16]) disc(c, 5, yy, 4, 1.2, SHADOW);
+    disc(c, 5, vf, 4, 1.2, SHADOW);
+    box(c, 6, 20, 2, vf - 20, 'rgba(36,24,15,0.14)');
     sprite(c, 10, 52, (b) => {
       const B = R.bark;
-      box(b, 3, 0, 3, vf - 9, B[3]);
-      box(b, 3, 0, 1, vf - 9, B[4]);
-      box(b, 5, 0, 1, vf - 9, B[1]);
-      for (let y = 4; y < vf - 9; y += 8) px(b, 4, y, B[2]);
-      for (const yy of [vf - 16, vf]) {
-        post(b, 2, yy, 18);
-        rope(b, 2, yy - 14);
-        rope(b, 2, yy - 7);
-      }
+      box(b, 3, 5, 4, vf - 12, B[3]);
+      box(b, 3, 5, 1, vf - 12, B[4]);
+      box(b, 6, 5, 1, vf - 12, B[1]);
+      for (let y = 10; y < vf - 8; y += 9) box(b, 4, y, 2, 1, B[2]);
+      box(b, 4, 12, 2, 1, B[5]);
+      post(b, 3, vf, 18);
+      rope(b, 3, vf - 14);
+      rope(b, 3, vf - 7);
     });
   });
   tex(scene, 'dr_fence_post', 8, H, (c) => {

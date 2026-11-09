@@ -809,7 +809,18 @@ const HEX_CENTRES: readonly [number, number][] = [
   [16, 24],
 ];
 const BASALT = { gap: hx('#1c1a20'), top: hx('#45414b'), hi: hx('#5d5866'), lo: hx('#36333b'), ember: hx('#d0561e') };
-function hexCellAt(x: number, y: number): { id: number; edge: number; dx: number; dy: number } {
+interface HexCell {
+  id: number;
+  edge: number;
+  dx: number;
+  dy: number;
+}
+let hexMap: HexCell[] | null = null;
+function hexCellAt(x: number, y: number): HexCell {
+  hexMap ??= Array.from({ length: S * S }, (_, i) => computeHexCell(i % S, Math.floor(i / S)));
+  return hexMap[y * S + x];
+}
+function computeHexCell(x: number, y: number): HexCell {
   let best = 1e9;
   let second = 1e9;
   let id = 0;
@@ -1124,20 +1135,35 @@ function periodicNoise(seed: number, hiFreq = false): Float32Array {
   return out;
 }
 
-/** Family noise for a variant: shared near the cell border, variant-specific inside. */
+/** Family noise for a variant: shared near the cell border, variant-specific inside. Cached. */
+const noiseCache = new Map<string, Float32Array>();
 function familyNoise(family: string, variant: number, hiFreq = false): Float32Array {
+  const key = `${family}:${variant}:${hiFreq ? 1 : 0}`;
+  const hit = noiseCache.get(key);
+  if (hit) return hit;
   const n0 = periodicNoise(keySeed(`edge-${family}`), hiFreq);
-  if (variant === 0) return n0;
-  const nv = periodicNoise(keySeed(`edge-${family}-${variant}`), hiFreq);
-  const out = new Float32Array(P * P);
-  for (let i = 0; i < out.length; i++) out[i] = n0[i] + (nv[i] - n0[i]) * INTERIOR[i];
+  let out = n0;
+  if (variant !== 0) {
+    const nv = periodicNoise(keySeed(`edge-${family}-${variant}`), hiFreq);
+    out = new Float32Array(P * P);
+    for (let i = 0; i < out.length; i++) out[i] = n0[i] + (nv[i] - n0[i]) * INTERIOR[i];
+  }
+  noiseCache.set(key, out);
   return out;
 }
 
+/** Corner distance: mostly a chamfer (L1) blended with Euclid, so stair-stepped diagonals turn into ~45 degree edges. */
+const CHAMFER = 0.7;
+const cdist = (dx: number, dy: number) => {
+  const ax = dx < 0 ? -dx : dx;
+  const ay = dy < 0 ? -dy : dy;
+  return CHAMFER * (ax + ay) + (1 - CHAMFER) * Math.sqrt(ax * ax + ay * ay);
+};
+
 /**
- * Signed distance-like shape of the overlay for a corner mask (negative = covered). Quarter discs of radius D around
- * set corners, bands of depth D along fully-set edges, and for three set corners the complement of a disc around the
- * missing corner (a rounded inner fillet). Every profile crosses a cell edge at depth D, perpendicular to the edge.
+ * Signed distance-like shape of the overlay for a corner mask (negative = covered). Chamfered quarter discs of radius D
+ * around set corners, bands of depth D along fully-set edges, and for three set corners the complement of a disc around
+ * the missing corner (a deep inner fillet). Every profile crosses a cell edge at depth D from the set corner.
  */
 function shapeG(mask: number, D: number, x: number, y: number): number {
   if (mask === 0) return 1e6;
@@ -1150,39 +1176,45 @@ function shapeG(mask: number, D: number, x: number, y: number): number {
   if (bits === 3) {
     const cx = !ne || !se ? S : 0;
     const cy = !sw || !se ? S : 0;
-    return S - D - Math.hypot(x - cx, y - cy);
+    return S - D - cdist(x - cx, y - cy);
   }
   let g = 1e6;
   if (nw && ne) g = Math.min(g, y - D);
   if (sw && se) g = Math.min(g, S - y - D);
   if (nw && sw) g = Math.min(g, x - D);
   if (ne && se) g = Math.min(g, S - x - D);
-  if (nw) g = Math.min(g, Math.hypot(x, y) - D);
-  if (ne) g = Math.min(g, Math.hypot(x - S, y) - D);
-  if (sw) g = Math.min(g, Math.hypot(x, y - S) - D);
-  if (se) g = Math.min(g, Math.hypot(x - S, y - S) - D);
+  if (nw) g = Math.min(g, cdist(x, y) - D);
+  if (ne) g = Math.min(g, cdist(x - S, y) - D);
+  if (sw) g = Math.min(g, cdist(x, y - S) - D);
+  if (se) g = Math.min(g, cdist(x - S, y - S) - D);
   return g;
+}
+
+/** shapeG sampled on the padded grid (pixel centres). Cached per (mask, D). */
+const shapeCache = new Map<number, Float32Array>();
+function shapeField(mask: number, D: number): Float32Array {
+  const key = mask * 1000 + D;
+  const hit = shapeCache.get(key);
+  if (hit) return hit;
+  const f = new Float32Array(P * P);
+  for (let y = -1; y <= S; y++) for (let x = -1; x <= S; x++) f[pi(x, y)] = shapeG(mask, D, x + 0.5, y + 0.5);
+  shapeCache.set(key, f);
+  return f;
 }
 
 /** Covered pixels on the padded grid for a mask (1 = overlay). */
 function coverage(mask: number, D: number, amp: number, noise: Float32Array): Uint8Array {
+  const g = shapeField(mask, D);
   const c = new Uint8Array(P * P);
-  for (let y = -1; y <= S; y++)
-    for (let x = -1; x <= S; x++) {
-      const i = pi(x, y);
-      c[i] = shapeG(mask, D, x + 0.5, y + 0.5) + amp * noise[i] < 0 ? 1 : 0;
-    }
+  for (let i = 0; i < c.length; i++) c[i] = g[i] + amp * noise[i] < 0 ? 1 : 0;
   return c;
 }
 
 /** Signed field (shape + noise) on the padded grid. */
 function field(mask: number, D: number, amp: number, noise: Float32Array): Float32Array {
+  const g = shapeField(mask, D);
   const f = new Float32Array(P * P);
-  for (let y = -1; y <= S; y++)
-    for (let x = -1; x <= S; x++) {
-      const i = pi(x, y);
-      f[i] = shapeG(mask, D, x + 0.5, y + 0.5) + amp * noise[i];
-    }
+  for (let i = 0; i < f.length; i++) f[i] = g[i] + amp * noise[i];
   return f;
 }
 
@@ -1368,9 +1400,13 @@ function cobblePiece(b: Buf, mask: number, v: number, noise: Float32Array): void
 }
 
 /** Basalt spill: whole hex column tops whose centre is inside the shape. */
+let basaltFull: Buf | null = null;
 function basaltPiece(b: Buf, mask: number): void {
-  const full = new Buf();
-  paintBasalt(full, 0);
+  if (!basaltFull) {
+    basaltFull = new Buf();
+    paintBasalt(basaltFull, 0);
+  }
+  const full = basaltFull;
   for (let y = 0; y < S; y++)
     for (let x = 0; x < S; x++) {
       const h = hexCellAt(x, y);
@@ -1433,10 +1469,10 @@ const ABYSS = { lip: hx('#6a6070'), face: [hx('#544b5a'), hx('#453d4b'), hx('#37
 /** Abyss face on a void cell: the rock wall dropping away under land to the north, dark rims elsewhere. */
 function abyssPiece(b: Buf, mask: number, v: number): void {
   const f = field(mask, 8, 2, familyNoise('abyss', v));
-  const land = (x: number, y: number) => {
-    if (y < -1) y = -1;
-    return f[pi(clamp(x, -1, S), clamp(y, -1, S))] < -1.5;
-  };
+  const landGrid = new Uint8Array(P * P);
+  for (let i = 0; i < landGrid.length; i++) landGrid[i] = f[i] < -1.5 ? 1 : 0;
+  // beyond the top edge the top-edge profile continues upward
+  const land = (x: number, y: number) => landGrid[pi(clamp(x, -1, S), clamp(y, -1, S))] === 1;
   const FH = 14;
   for (let y = 0; y < S; y++)
     for (let x = 0; x < S; x++) {
@@ -1444,16 +1480,12 @@ function abyssPiece(b: Buf, mask: number, v: number): void {
         b.set(x, y, ABYSS.face[0]);
         continue;
       }
-      // distance up to land in this column (beyond the top edge: the top-edge profile continues upward)
       let up = 0;
-      for (let k = 1; k <= FH; k++) {
-        const yy = y - k;
-        const isLand = yy >= -1 ? land(x, yy) : land(x, -1);
-        if (isLand) {
+      for (let k = 1; k <= FH; k++)
+        if (land(x, y - k)) {
           up = k;
           break;
         }
-      }
       if (up) {
         const band = Math.min(ABYSS.face.length - 1, Math.floor(((up - 1) / FH) * ABYSS.face.length));
         let col = ABYSS.face[band];
@@ -1630,7 +1662,7 @@ export function paintTile(tileId: number, variant: number): ImageData {
 /** One edge piece (32x32 RGBA, transparent where the base shows through). */
 export function paintEdgePiece(family: EdgeFamily, mask: number, variant: number): ImageData {
   const b = new Buf();
-  drawPiece(b, family, mask, variant, new Map());
+  drawPiece(b, family, mask, variant);
   return new ImageData(b.d, S, S);
 }
 
@@ -1643,7 +1675,7 @@ const WALL_OF: Partial<Record<EdgeFamily, number>> = {
   crypt_rim: T.CRYPT_WALL,
 };
 
-function drawPiece(b: Buf, fam: EdgeFamily, mask: number, v: number, noiseCache: Map<string, Float32Array>): void {
+function drawPiece(b: Buf, fam: EdgeFamily, mask: number, v: number): void {
   if (mask === 0) return;
   const wall = WALL_OF[fam];
   if (wall !== undefined) {
@@ -1665,13 +1697,7 @@ function drawPiece(b: Buf, fam: EdgeFamily, mask: number, v: number, noiseCache:
   }
   const st = SOFT[fam];
   if (!st) return;
-  const key = `${fam}:${v}`;
-  let noise = noiseCache.get(key);
-  if (!noise) {
-    noise = familyNoise(fam, v, st.hiFreq);
-    noiseCache.set(key, noise);
-  }
-  softPiece(b, fam, st, mask, v, noise);
+  softPiece(b, fam, st, mask, v, familyNoise(fam, v, st.hiFreq));
 }
 
 /**
@@ -1697,12 +1723,11 @@ export function drawTiles(scene: Phaser.Scene): void {
     const [w, h] = sheetSize(EDGE_COLS, EDGE_ROWS);
     pixelTex(scene, 'tiles_edge', w, h, (c) => {
       const img = c.createImageData(w, h);
-      const cache = new Map<string, Float32Array>();
       EDGE_FAMILIES.forEach((fam, row) => {
         for (let v = 0; v < EDGE_VARIANTS; v++)
           for (let mask = 1; mask < 16; mask++) {
             const b = new Buf();
-            drawPiece(b, fam, mask, v, cache);
+            drawPiece(b, fam, mask, v);
             blitToAtlas(img, b, v * 16 + mask, row);
           }
       });

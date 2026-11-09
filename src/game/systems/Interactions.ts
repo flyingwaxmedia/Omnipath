@@ -93,6 +93,8 @@ export class Interactions {
   channel: Channel | null = null;
   /** Loremasters whisper one riddle per visit (map entry). */
   private readonly whisperedThisVisit = new Set<string>();
+  /** Scene time of the last update (pause-gap detection for channels). */
+  private clockAt = -1;
 
   constructor(private s: MapScene) {}
 
@@ -114,6 +116,17 @@ export class Interactions {
   }
 
   update(now: number): void {
+    // Scene time is the game-loop clock, so it jumps across pauses (open panels, hit-stops). Slide a running channel
+    // by the gap so mining / meditating never completes while the world was paused (the playtest saw a 4 s meditation
+    // finish the instant a panel closed).
+    if (this.clockAt >= 0 && this.channel) {
+      const gap = now - this.clockAt - Math.min(this.s.game.loop.delta, 50);
+      if (gap > 120) {
+        this.channel.start += gap;
+        this.channel.until += gap;
+      }
+    }
+    this.clockAt = now;
     const c = this.channel;
     if (c) {
       this.s.ui.setChannel(c.label, (now - c.start) / (c.until - c.start));

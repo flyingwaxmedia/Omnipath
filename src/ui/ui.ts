@@ -147,6 +147,30 @@ export class UI implements PanelHost {
     this.hud.pulseSlot(skillId);
   }
 
+  /**
+   * CSS px the persistent HUD covers along each screen edge (vitals / minimap / menu row on top, a menu column on the
+   * side, the hotbar at the bottom). The scene widens its camera bounds by these so nothing near a map edge hides
+   * under the HUD.
+   */
+  safeInsets(): { top: number; right: number; bottom: number; left: number } {
+    const W = window.innerWidth;
+    const H = window.innerHeight;
+    const out = { top: 0, right: 0, bottom: 0, left: 0 };
+    for (const sel of ['.vitals', '.minimap', '.menu', '.hotbar']) {
+      const el = this.root.querySelector<HTMLElement>(sel);
+      if (!el) continue;
+      const r = el.getBoundingClientRect();
+      if (r.width < 1 || r.height < 1 || getComputedStyle(el).visibility === 'hidden') continue;
+      const column = r.height > r.width && r.height > H * 0.3;
+      if (column) {
+        if (r.right > W * 0.8) out.right = Math.max(out.right, W - r.left);
+        else if (r.left < W * 0.2) out.left = Math.max(out.left, r.right);
+      } else if (r.top < H * 0.2) out.top = Math.max(out.top, r.bottom);
+      else if (r.bottom > H * 0.8) out.bottom = Math.max(out.bottom, H - r.top);
+    }
+    return out;
+  }
+
   // ================================================================ modal plumbing
 
   get isOpen(): boolean {

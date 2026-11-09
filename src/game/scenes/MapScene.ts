@@ -209,6 +209,9 @@ export class MapScene extends Phaser.Scene implements GameController {
 
     this.enterMap();
     this.ui.mapChanged();
+    // The hotbar is rendered by mapChanged(): re-fit so the HUD-safe camera bounds see the final HUD layout.
+    this.fitCamera();
+    cam.centerOn(this.player.x, this.player.y);
     cam.fadeIn(220);
 
     if (!this.book.flag('intro')) {
@@ -262,12 +265,18 @@ export class MapScene extends Phaser.Scene implements GameController {
     const mh = this.cm.h * TILE;
     if (this.def.kind === 'arena') zoom = Math.max(0.8, Math.min(zoom, height / mh));
     cam.setZoom(zoom);
-    // Maps smaller than the view are centred instead of pinned to the top-left.
+    // Maps smaller than the view are centred instead of pinned to the top-left. HUD-safe bounds: the camera may also
+    // scroll past each map edge by the HUD strip on that side (vitals/minimap on top, menu column, hotbar), so exits,
+    // chests and hidden-portal shimmers near an edge never stay stuck under the HUD (playtest: mirror_lake#islet and
+    // greystone_quarry#shaft were untappable on portrait phones).
     const vw = width / zoom;
     const vh = height / zoom;
-    const bx = mw < vw ? (mw - vw) / 2 : 0;
-    const by = mh < vh ? (mh - vh) / 2 : 0;
-    cam.setBounds(bx, by, Math.max(mw, vw), Math.max(mh, vh));
+    const ins = this.ui?.safeInsets?.() ?? { top: 0, right: 0, bottom: 0, left: 0 };
+    const minX = Math.min(0, (mw - vw) / 2) - ins.left / zoom;
+    const maxX = Math.max(mw - vw, (mw - vw) / 2) + ins.right / zoom;
+    const minY = Math.min(0, (mh - vh) / 2) - ins.top / zoom;
+    const maxY = Math.max(mh - vh, (mh - vh) / 2) + ins.bottom / zoom;
+    cam.setBounds(minX, minY, maxX - minX + vw, maxY - minY + vh);
     this.chunkWin = '';
   }
 
@@ -1501,6 +1510,9 @@ export class MapScene extends Phaser.Scene implements GameController {
   setPaused(paused: boolean): void {
     // Ignore while the scene is between maps (restart in progress).
     if (!this.sys.isActive() && !this.sys.isPaused()) return;
+    // Mid-warp: let the 220 ms fade finish (a paused camera never completes it, which left the game stuck
+    // half-faded when a dialog opened during a warp). create() re-pauses if a panel is still open.
+    if (paused && this.warping) return;
     if (paused && this.scene.isActive()) this.scene.pause();
     else if (!paused && this.scene.isPaused()) this.scene.resume();
   }

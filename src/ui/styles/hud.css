@@ -1126,9 +1126,12 @@
   gap: 6px;
 }
 
+/* The button is a full 44 px touch target; the visible 32 px pill is drawn by ::before (playtest: >= 44 px). */
 .autobtn {
+  position: relative;
+  isolation: isolate;
   min-width: 64px;
-  height: 32px;
+  height: 44px;
   padding: 0 8px;
   border-radius: 999px;
   display: flex;
@@ -1137,10 +1140,22 @@
   gap: 4px;
   font-size: 14px;
   line-height: 1;
+  background: none;
+  border: 0;
+  color: var(--mute);
+  box-shadow: none;
+}
+
+.autobtn::before {
+  content: '';
+  position: absolute;
+  inset: 6px 0;
+  z-index: -1;
+  border-radius: 999px;
   background: rgba(14, 20, 40, 0.85);
   border: 1.5px solid rgba(160, 180, 230, 0.35);
-  color: var(--mute);
   box-shadow: 0 3px 10px rgba(0, 0, 0, 0.4);
+  pointer-events: none;
 }
 
 .autobtn small {
@@ -1156,6 +1171,9 @@
 
 .autobtn.on {
   color: #8fe9ff;
+}
+
+.autobtn.on::before {
   border-color: rgba(143, 233, 255, 0.75);
   box-shadow:
     0 3px 10px rgba(0, 0, 0, 0.4),

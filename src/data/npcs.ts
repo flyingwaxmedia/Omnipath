@@ -1,6 +1,7 @@
 // NPCs (SPEC-v2 §8). Placement lives in the map files (SPEC §7.4); trainer NPCs point at their TrainerDef
-// (src/data/trainers.ts). Lines hint at discoveries without spelling them out — loremasters (Tamsin, Ione) are
-// the exception: they explain the class tiers, read in order.
+// (src/data/trainers.ts), whose lessons are taught as quest rewards. Every NPC gives quests (src/data/quests.ts).
+// Lines hint at discoveries and quests without spelling them out — loremasters (Tamsin, Ione) are the exception:
+// they explain the class tiers, read in order.
 export type NpcRole = 'smith' | 'priestess' | 'hermit' | 'fisher' | 'trainer' | 'waykeeper' | 'loremaster' | 'villager';
 
 export interface NpcDef {
@@ -63,7 +64,7 @@ export const NPCS: NpcDef[] = [
     lines: [
       'Touch a waystone once and it remembers you. After that I can send you to any stone you have woken.',
       'Fall in the field and you wake beside the last stone you rested by. Choose it well.',
-      'I buy what you gather: ore, herbs, fish, the odd glittering thing. Coin is coin.',
+      'I buy what you gather: ore, herbs, fish, the odd glittering thing. And I can tell you where the sleeping stones are.',
       'Watch the creatures closely when they do something new. Live through it often enough and you might find you can do it too.',
       'Fusion only takes at an altar, where the old stones still hum. There is one here, and more along the road.',
     ],
@@ -112,7 +113,7 @@ export const NPCS: NpcDef[] = [
     lines: [
       'There is a sparkly bit of air out on Mirror Lake! When I ran at it really fast it went all wobbly. Then I fell in.',
       'Pipsprouts hide in the flowers. If you are quiet you can hear them giggle.',
-      'Drillmaster Hale says I kick like a goat. That is good, right?',
+      'Drillmaster Hale says I kick like a goat. That is good, right? Can you go really fast? Show me!',
       'Gran says when there are enough Jellops they get a king. A big wobbly king with a big wobbly crown!',
     ],
   },
@@ -163,7 +164,7 @@ export const NPCS: NpcDef[] = [
     texture: 'npc_miner',
     role: 'villager',
     lines: [
-      'Ten good hauls of ore and the stone starts talking back to you. Funny how that works.',
+      'Ten good hauls of ore and the stone starts talking back to you. Funny how that works. I could use the help, too.',
       'There is a crack in the old rock face that has been widening for years. Wants a proper heavy blow, it does. Or one almighty bang.',
       'The deep tunnels go down further than anyone has mapped. Something big and rooty lives at the bottom. We stopped mining there.',
       'That Boulderback rolls down the slope every morning like it owns the place. Stand in its way enough times and you will learn the trick of it.',
@@ -198,7 +199,7 @@ export const NPCS: NpcDef[] = [
     trainer: 'vey',
     lines: [
       'I train soldiers, not sightseers. Come back wearing a calling and I will show you how we move on the line.',
-      'Ember shards, recruit. Bring me those and I will trade you something that makes your hands faster.',
+      'Ember shards, recruit. Fill my supply orders and the quartermaster\'s stock is yours to draw on.',
       'The best lessons come in hard fights. Find a foe a step above you and hold your ground. You will feel it when it happens.',
       'Thunderhoof has thrown back three of my patrols. Whatever it keeps in its heart, it has earned it. Unless you take it.',
     ],
@@ -229,7 +230,7 @@ export const NPCS: NpcDef[] = [
     trainer: 'korrin',
     lines: [
       'Every creature carries a little essence of what it does. Hunt one kind long enough and it will give some up.',
-      'Stormwood and frost crystal, or coin if you have none. I trade essences for any of it.',
+      'Stormwood, frost crystal, a hard day on the road: I pay essences for all of it, never for coin.',
       'Two essences in one skill? Only once you have used it far past mastery, again and again.',
       'The rift roads shift faster than any map. Walk them with me a while and your feet will learn where the ground will be.',
       'Riftmarch is just ahead: altar, waystone, and an archivist who will talk your ear off about callings.',

@@ -105,7 +105,7 @@ export const QUESTS: QuestDef[] = [
       offer:
         'Fight something that frightens you a little, and a technique can crack open mid-swing into its next shape: a Spark. Get your basic attack to rank five, then take it to the Puddlewisps on Mirror Lake. Watch the star on its hotbar slot.',
       progress:
-        'A dim star means the fight is too easy for that skill; a gold pulse means you are right where it learns. Sparks are rare, so keep at it.',
+        'A dim star means the odds are poor; a gold pulse means you are right where the skill learns. Sparks are rare, so keep at it.',
       complete:
         'You felt it, did you not? Spark or no spark today, now you know where to look. Tougher foes teach deeper forms, so keep finding fights a step above you.',
     },
@@ -573,7 +573,7 @@ export const QUESTS: QuestDef[] = [
       offer:
         'Frost crystal ground to a needle point goes through anything. Chip four from the Frost Shelf, north of Riftmarch, and drive off six Frostlings while you are there. They guard the good shelves.',
       progress: 'Frostlings throw shards of ice, and fire cuts through them best. The crystals sit in the shelf walls and never quite melt.',
-      complete: 'Needle-fine. Essence of Piercing: your projectiles pass through one foe and keep going. Bring more ice when you have it.',
+      complete: 'Needle-fine. Essence of Piercing: your projectiles pass through foes and keep going. Bring more ice when you have it.',
     },
     requires: [ARRIVED_RIFT_ROAD],
     objectives: [
@@ -1015,7 +1015,7 @@ export const QUESTS: QuestDef[] = [
     summary: 'Travel back to Hearthvale and speak with Mirelle for Dask.',
     dialog: {
       offer:
-        'Mirelle? Never met her, but she leaves notes on my stones, in lovely handwriting too. Wake the stone here, travel back to Hearthvale and ask her who she is. Crossing between regions costs a few coins at the stones.',
+        'I have never met this Mirelle, but she leaves notes on my stones in lovely handwriting. Wake the stone here, travel back to Hearthvale and ask her who she is. Crossing between regions costs a few coins at the stones.',
       progress: 'Touch the waystone in the square, then pick Hearthvale from the travel list. She keeps the stone by the town square.',
       complete: 'She says waykeepers do not walk? Well, I suppose we do not. Take these shards for the trouble.',
     },
@@ -1031,7 +1031,7 @@ export const QUESTS: QuestDef[] = [
     summary: 'Walk the Dusk Orchard and defeat 8 Duskhounds.',
     dialog: {
       offer:
-        'The orchard to the south only blooms at dusk, and whatever lives there is neither light nor shadow. Walk it, and put down eight Duskhounds; they have started following travellers to my stone. Rest by the stone first, it is the closest one to that trouble.',
+        'The orchard to the south only blooms at dusk, and whatever lives there is neither light nor shadow. Walk it, and put down eight Duskhounds; they have started following travellers to my stone. Rest by my stone first; it is the closest one to that trouble.',
       progress: 'Duskhounds hunt at the edge of the orchard. Holy light cuts through twilight, if you carry it.',
       complete: 'Eight fewer at my stone tonight. The orchard keeps stranger things deeper in, but that is a tale for when you are stronger. Here, for the road.',
     },
