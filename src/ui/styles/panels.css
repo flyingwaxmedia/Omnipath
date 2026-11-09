@@ -3162,3 +3162,34 @@ em.up {
     letter-spacing: -0.2px;
   }
 }
+
+@media (max-width: 480px) {
+  /* Root, T1 and capstones have room on both sides; only the paired T2 nodes are tight. */
+  .mnode.t0,
+  .mnode.t1,
+  .mnode.t3 {
+    width: 96px;
+  }
+
+  .mnode.t0 .mn-name,
+  .mnode.t1 .mn-name,
+  .mnode.t3 .mn-name {
+    max-width: 96px;
+    font-size: 10px;
+    letter-spacing: 0;
+  }
+}
+
+.mown {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  background: rgba(255, 215, 106, 0.06);
+  border: 1px solid rgba(255, 215, 106, 0.3);
+}
+
+.mown .btn.wide {
+  margin-top: 2px;
+}

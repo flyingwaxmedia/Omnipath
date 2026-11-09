@@ -309,12 +309,12 @@ function renderPath(host: PanelHost, w: WeaponType): void {
     const max = cur.def.maxRank;
     const pct = (100 * p.xp) / book.barSize(cur.id);
     const kids = views.filter((v) => v.parent === cur.id);
-    detail = `<div class="node-head"><span class="ico">${cur.def.icon}</span><div><b>${esc(cur.def.name)}</b>
+    detail = `<div class="mown"><div class="node-head"><span class="ico">${cur.def.icon}</span><div><b>${esc(cur.def.name)}</b>
         <small>${TIER_NAME[cur.tier]} · ${book.isMaxed(cur.id) ? `★ Mastered${p.charges ? ` · ${pips(p.charges, MASTERY.maxCharges, 'gold')} charge${p.charges > 1 ? 's' : ''}` : ''}` : `Rank ${p.rank}/${max}`}</small>
         <span class="bar mini ${book.isMaxed(cur.id) ? 'over' : ''}"><i style="width:${pct}%"></i></span></div></div>
       <p class="sub">${esc(cur.def.desc)}</p>
       ${kids.length ? `<p class="sub">${book.isMaxed(cur.id) ? (p.charges ? `Spend a charge on one of its ${kids.length} forms below.` : 'Keep using it: each overmastery bar banks another morph charge.') : `Master it (rank ${max}) to morph it into ${kids.length === 1 ? 'its next form' : `one of ${kids.length} forms`}. You keep ${esc(cur.def.name)}.`}</p>` : '<p class="sub">A capstone: the end of this branch.</p>'}
-      <button class="btn wide" data-goto="${esc(cur.id)}">Open ${esc(cur.def.name)} ›</button>
+      <button class="btn wide" data-goto="${esc(cur.id)}">Open ${esc(cur.def.name)} ›</button></div>
       ${kids.map((k) => (k.opt ? morphCard(host, cur.id, k.opt, k.state) : '')).join('')}`;
   } else if (!cur.parent) {
     detail = `<div class="node-head"><span class="ico">${cur.def?.icon ?? '?'}</span><div><b>${esc(cur.def?.name ?? '?')}</b><small>Root · basic attack</small></div></div>
