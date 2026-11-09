@@ -7,8 +7,10 @@ v3 is the presentation pass driven by the owner's feedback:
 4. **Every NPC has quests; trainers teach only as quest rewards** (docs/QUESTS.md).
 5. **The player's sprite changes to match the worn class.**
 
-6. **Sandbox loadouts** (docs/SPEC-v2.md §5.1): learned skills work with any weapon; the 8-slot skill bar IS the
-   build — 4–5 similar skills make you a class, 2–3 slots are personal picks.
+6. **Classes equip their own skills** (docs/SPEC-v2.md §5.1): learned skills work with any weapon; the 8-slot bar is
+   5 class slots (auto-filled by your class) + 3 slots of your own.
+7. **Simple and intuitive UI** (docs/UX-SIMPLE.md): plain words, icons, stars and one clear action per screen — no
+   data dumps.
 
 Everything in docs/CLIENT-v2.md still applies unless replaced here.
 
@@ -90,14 +92,12 @@ v2 skills panel views).
 - The player switches look on wear, on equip-weapon and on load; the class discovery card and the Class panel show an
   outfit preview.
 
-## 6. Sandbox loadouts (docs/SPEC-v2.md §5.1)
-- `HOTBAR_SIZE = 8`; saves pad old 6-slot bars; keys 1–8 cast, A toggles AUTO battle (docs/CLIENT-v2.md §6.1).
-- `usable()` no longer checks the equipped weapon (only tier-0 basics are weapon-bound and never sit on the bar).
-- Every skill-bar change (assign, clear, learn auto-slot, load) calls `book.setLoadout(hotbar ids)`; on
-  `classActive` the player's outfit (§5) and the HUD class line update instantly, with a short "You fight as a
-  <Class>" banner (or "Wanderer" when no class qualifies).
-- Class panel: header = active class (or "No class — equip 4 similar skills"), the qualifying classes with a
-  "Prefer" toggle, and for each discovered class a loadout line ("Equipped 3 / 4 blade skills") with a one-tap
-  "Show matching skills" filter into the star chart / list. Wearing is replaced by preferring.
-- Star chart + skill list: equipped skills are marked; a skill's info card lists the classes it counts toward.
-- Pursuits tracker adds a loadout goal when a discovered or near class is 1–2 equipped skills away.
+## 6. Class slots + your slots (docs/SPEC-v2.md §5.1)
+- `HOTBAR_SIZE = 8`: slots 1–5 class slots, 6–8 your slots; saves pad old bars. Keys 1–8 cast, A toggles AUTO.
+- Class slots are framed in the active class's colour with its emblem; empty class slots show a faint class icon.
+  Your slots are plain. With no class all 8 are your slots.
+- "Become <Class>" (Class screen) → `book.wear(id)` → refill class slots with `classSkills(…, 5)` + a short banner
+  "You are now a Pyroblade" + outfit change. Learning a matching skill auto-updates class slots (toast).
+- Tapping one of YOUR slots (or "Equip" on a skill) opens a simple picker: a grid of skill icons with names, sorted
+  newest first, tap to equip; tapping a class slot shows that skill's card (class slots are managed by the class).
+- `usable()` never checks the weapon (only tier-0 basics are weapon-bound and never on the bar).

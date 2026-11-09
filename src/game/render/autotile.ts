@@ -88,6 +88,68 @@ export function edgeFrameInfo(frame: number): { family: EdgeFamily; mask: number
 export const EDGE_COLS = 16 * EDGE_VARIANTS;
 export const EDGE_ROWS = EDGE_FAMILIES.length;
 
+// ------------------------------------------------------------------ decals
+
+/** Ground decals: small detail sprites ('tiles_decal', DECAL_PX cells) scattered at hashed pixel offsets. */
+export const DECAL_PX = 16;
+export const DECALS_PER_SET = 8;
+export const DECAL_SETS = [
+  'grass',
+  'flowers',
+  'hill',
+  'storm',
+  'dusk',
+  'glade',
+  'dark',
+  'moss',
+  'path',
+  'sand',
+  'stone',
+  'cave',
+  'crypt',
+  'snow',
+  'ice',
+  'ember',
+  'basalt',
+  'water',
+  'lava',
+  'rock',
+] as const;
+export type DecalSet = (typeof DECAL_SETS)[number];
+const DECAL_SET_INDEX: Readonly<Record<DecalSet, number>> = Object.fromEntries(DECAL_SETS.map((d, i) => [d, i])) as Record<DecalSet, number>;
+
+/** Frame index inside 'tiles_decal'. */
+export function decalFrame(set: DecalSet | number, k: number): number {
+  return (typeof set === 'number' ? set : DECAL_SET_INDEX[set]) * DECALS_PER_SET + (k % DECALS_PER_SET);
+}
+
+/** Decal set and expected decals per (uniform) cell, by tile id. */
+const DECAL_RULES: Readonly<Partial<Record<number, [DecalSet, number]>>> = {
+  [T.GRASS]: ['grass', 0.75],
+  [T.GRASS2]: ['grass', 1.1],
+  [T.FLOWERS]: ['flowers', 1.1],
+  [T.HILL]: ['hill', 0.8],
+  [T.STORMGRASS]: ['storm', 0.8],
+  [T.DUSK]: ['dusk', 0.8],
+  [T.GLADE]: ['glade', 0.8],
+  [T.DARK]: ['dark', 0.9],
+  [T.MOSS]: ['moss', 0.6],
+  [T.PATH]: ['path', 0.7],
+  [T.SAND]: ['sand', 0.5],
+  [T.STONE]: ['stone', 0.8],
+  [T.CAVE]: ['cave', 0.7],
+  [T.CRYPT]: ['crypt', 0.35],
+  [T.SNOW]: ['snow', 0.55],
+  [T.ICE]: ['ice', 0.5],
+  [T.EMBER]: ['ember', 0.6],
+  [T.BASALT]: ['basalt', 0.3],
+  [T.WATER]: ['water', 0.3],
+  [T.DEEP]: ['water', 0.12],
+  [T.LAVA]: ['lava', 0.45],
+  [T.CLIFF]: ['rock', 0.3],
+  [T.CAVE_WALL]: ['rock', 0.15],
+};
+
 // ------------------------------------------------------------------ terrain classes & precedence
 
 /** Terrain class per tile id: GRASS / GRASS2 / FLOWERS share one class (same base colour, no seam between them). */
@@ -192,11 +254,21 @@ export interface TerrainOverlay {
   frame: number;
 }
 
+export interface TerrainDecal {
+  /** Top-left in map px (always inside one cell). */
+  x: number;
+  y: number;
+  /** Frame in 'tiles_decal' (see decalFrame). */
+  frame: number;
+}
+
 export interface TerrainLayers {
   /** 'tiles' atlas index per cell (row-major), hashed variant included. */
   base: Uint16Array;
   /** Edge pieces in draw order (cells ascending; within a cell: underlays, soft edges by precedence, wall rim/face). */
   overlays: TerrainOverlay[];
+  /** Detail sprites drawn after the overlays, only on cells whose 3x3 neighbourhood is one terrain. */
+  decals: TerrainDecal[];
 }
 
 /**
@@ -208,6 +280,7 @@ export function computeTerrainLayers(cm: CompiledMap): TerrainLayers {
   const seed = cm.def.seed | 0;
   const base = new Uint16Array(w * h);
   const overlays: TerrainOverlay[] = [];
+  const decals: TerrainDecal[] = [];
   const at = (x: number, y: number) => ground[(y < 0 ? 0 : y >= h ? h - 1 : y) * w + (x < 0 ? 0 : x >= w ? w - 1 : x)];
 
   // Neighbourhood scratch: n[0..8] = 3x3 block in reading order (n[4] = the cell itself).
@@ -246,7 +319,21 @@ export function computeTerrainLayers(cm: CompiledMap): TerrainLayers {
           n[k++] = v;
           if (TERRAIN_CLASS[v] !== TERRAIN_CLASS[t]) uniform = false;
         }
-      if (uniform) continue;
+      if (uniform) {
+        const rule = DECAL_RULES[t];
+        if (!rule) continue;
+        const h = cellHash(x, y, seed, 53);
+        const n = Math.floor(rule[1] + (h & 0xffff) / 0x10000);
+        for (let k = 0; k < n; k++) {
+          const hk = cellHash(x, y, seed, 59 + k);
+          decals.push({
+            x: x * TILE_PX + (hk % (TILE_PX - DECAL_PX + 1)),
+            y: y * TILE_PX + ((hk >>> 8) % (TILE_PX - DECAL_PX + 1)),
+            frame: decalFrame(rule[0], hk >>> 16),
+          });
+        }
+        continue;
+      }
 
       if (isWall(t)) {
         // Face / lit lip on the wall itself: corners that touch any non-wall cell.
@@ -270,12 +357,9 @@ export function computeTerrainLayers(cm: CompiledMap): TerrainLayers {
       soft.sort((a, b) => PRECEDENCE[a] - PRECEDENCE[b]);
       for (const c of soft) push(x, y, SOFT_FAMILY[c], maskOf((v) => TERRAIN_CLASS[v] === c));
 
-      // 3) wall rims (outline + cast shadow) on the floor side
-      for (const wt of [T.CLIFF, T.CAVE_WALL, T.CRYPT_WALL]) {
-        if (t === T.VOID && wt !== T.CLIFF) continue; // dungeon walls simply end in darkness
-        push(x, y, WALL_FAMILIES[wt].rim, maskOf((v) => v === wt));
-      }
+      // 3) wall rims (outline + cast shadow) on the floor side; walls simply end in darkness over the void
+      if (t !== T.VOID) for (const wt of [T.CLIFF, T.CAVE_WALL, T.CRYPT_WALL]) push(x, y, WALL_FAMILIES[wt].rim, maskOf((v) => v === wt));
     }
   }
-  return { base, overlays };
+  return { base, overlays, decals };
 }

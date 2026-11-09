@@ -846,8 +846,8 @@ function trunkPx(b: Ctx, cx: number, top: number, base: number, w: number, ramp:
 // ================================================================== props
 // Origin bottom-centre: the client anchors (0.5, 1) at the tile's bottom edge.
 
-const LEAF_DARK = ['#151320', '#201d31', '#2e2946', '#40395f', '#574d7e', '#8576b0'];
-const LEAF_DUSK = ['#1d1730', '#2b2248', '#3e3168', '#56468a', '#7462aa', '#a690d6'];
+const LEAF_DARK = ['#10181a', '#172426', '#203434', '#2b4642', '#3a5c52', '#5e826e'];
+const LEAF_DUSK = ['#1b1828', '#28233a', '#383150', '#4a4268', '#625a84', '#8c84ac'];
 const PINE = ['#12261c', '#1a3826', '#264e34', '#346840', '#4a8350', '#73a663'];
 const FROST_PINE = ['#122a32', '#1a3c44', '#26545a', '#356e70', '#4c8a86', '#74aaa2'];
 const SNOW = ['#7f97b0', '#a8bdd2', '#cddcea', '#eef4fa', '#ffffff'];
@@ -1014,7 +1014,8 @@ function drawProps(scene: Phaser.Scene): void {
     for (let i = 0; i < 5; i++) {
       const x = Math.round(8 + rnd() * 32);
       const y = Math.round(8 + rnd() * 30);
-      px(b, x, y, '#c8a8ff');
+      px(b, x, y, '#b89ae8');
+      px(b, x + 1, y + 1, '#6a4ea8');
     }
   });
   pineTree(scene, 'pine', PINE, false);
@@ -2877,15 +2878,23 @@ function drawPortals(scene: Phaser.Scene): void {
   });
 }
 
-/** Props (trees, rocks, decor props keyed by PropKind). */
 export { drawProps, drawStructures, drawObjects, drawNodes, drawPortals };
 
-/** Draw every world texture (tiles, props, structures, objects, nodes, portals). Idempotent per key. */
-export function drawWorld(scene: Phaser.Scene): void {
-  drawTiles(scene);
+/**
+ * Every world sprite EXCEPT the tile atlas: props (PropKind keys), struct_*, obj_*, node_*, portal_*, gate_*, hide_*,
+ * bobber and the legacy aliases. Use this together with the terrain artist's art/tiles.ts drawTiles(). Idempotent.
+ */
+export function drawWorldSprites(scene: Phaser.Scene): void {
   drawProps(scene);
   drawStructures(scene);
   drawObjects(scene);
   drawNodes(scene);
   drawPortals(scene);
+}
+
+/** Draw every world texture (v2 tile atlas + all sprites). Idempotent per key: if another module already created
+ *  'tiles', the v2 atlas below is skipped. */
+export function drawWorld(scene: Phaser.Scene): void {
+  drawTiles(scene);
+  drawWorldSprites(scene);
 }

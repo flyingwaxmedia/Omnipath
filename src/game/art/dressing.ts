@@ -220,9 +220,25 @@ function flowerClump(scene: Phaser.Scene, color: keyof typeof FLOWERS, size: key
   tex(scene, key, S.w, S.h, (c, rnd) => {
     const cx = S.w / 2;
     const base = S.h - 2;
+    // bloom spots first (kept apart so each bloom reads on its own), highest blooms at the back
+    const pts: [number, number][] = [];
+    const gap = F.kind === 'spike' ? 3 : size === 's' ? 4 : 5;
+    const pad = F.kind === 'spike' ? 2 : size === 's' ? 2 : 3;
+    for (let i = 0; i < S.blooms; i++) {
+      const t = i / (S.blooms - 1);
+      for (let tries = 0; tries < 24; tries++) {
+        const x = Math.max(pad, Math.min(S.w - 1 - pad, Math.round(3 + t * (S.w - 6) + (rnd() - 0.5) * (2 + tries * 0.4))));
+        const y = Math.max(pad + 1, Math.round(3 + rnd() * (S.h * 0.45) + Math.abs(t - 0.5) * S.h * 0.25));
+        const yy = Math.min(base - 4, y + (F.kind === 'spike' ? 3 : 0));
+        if (tries < 23 && pts.some(([px0, py0]) => Math.abs(px0 - x) < gap && Math.abs(py0 - yy) < gap)) continue;
+        pts.push([x, yy]);
+        break;
+      }
+    }
+    pts.sort((p, q) => p[1] - q[1]);
     shadow(c, cx, base + 0.5, S.w * 0.36, 1.6);
+    // 1) outlined leaf fan
     sprite(c, S.w, S.h, (b) => {
-      // leaves fan out from the base, lily-like arcs
       for (let i = 0; i < S.leaves; i++) {
         const t = i / (S.leaves - 1);
         const ang = -Math.PI / 2 + (t - 0.5) * 2.3 + (rnd() - 0.5) * 0.25;
@@ -231,16 +247,11 @@ function flowerClump(scene: Phaser.Scene, color: keyof typeof FLOWERS, size: key
         const y1 = base + Math.sin(ang) * len * 0.85;
         blade(b, cx + (t - 0.5) * 3, base, x1, y1, size === 's' ? 2 : 3, R.leaf, t < 0.5 ? 4 : 3);
       }
-      // stems + blooms, highest blooms at the back
-      const pts: [number, number][] = [];
-      for (let i = 0; i < S.blooms; i++) {
-        const t = i / (S.blooms - 1);
-        const x = Math.round(3 + t * (S.w - 6) + (rnd() - 0.5) * 2);
-        const y = Math.round(3 + rnd() * (S.h * 0.42) + Math.abs(t - 0.5) * S.h * 0.25);
-        pts.push([x, Math.min(base - 4, y + (F.kind === 'spike' ? 3 : 0))]);
-      }
-      pts.sort((p, q) => p[1] - q[1]);
-      for (const [x, y] of pts) seg(b, Math.round(cx + (x - cx) * 0.3), base - 1, x, y + 1, R.leaf[2]);
+    });
+    // 2) thin stems, un-outlined so the clump stays airy
+    for (const [x, y] of pts) seg(c, Math.round(cx + (x - cx) * 0.3), base - 2, x, y + 1, R.leaf[2]);
+    // 3) outlined blooms on top
+    sprite(c, S.w, S.h, (b) => {
       for (const [x, y] of pts) bloom(b, x, y, F.kind, F.ramp, size !== 's');
     });
   });
@@ -635,30 +646,37 @@ function drawFences(scene: Phaser.Scene): void {
     });
   });
   // Vertical segment (a run going north-south seen from the 3/4 view): stacked posts joined by the rails seen edge-on.
-  // Vertical segment: a run going north-south in the 3/4 view. One chunky post per tile at the foot; the two rails
-  // seen edge-on become a thin darker strip climbing to where the next segment's post stands (a run is capped by
-  // dr_fence_post).
-  tex(scene, 'dr_fence_v', 10, 52, (c) => {
+  // Vertical segment: a run going north-south in the 3/4 view. Two short chunky posts per tile (every 16 px) give the
+  // run a clear rhythm; the rails seen edge-on are a thin strip climbing to the next post. A run is capped at its
+  // north end by dr_fence_v_end.
+  const vpost = (b: Ctx, foot: number) => {
+    const B = R.bark;
+    box(b, 2, foot - 10, 8, 10, B[3]);
+    box(b, 2, foot - 10, 2, 10, B[4]);
+    box(b, 8, foot - 10, 2, 10, B[2]);
+    box(b, 9, foot - 10, 1, 10, B[1]);
+    box(b, 2, foot - 13, 8, 3, R.cream[1]);
+    box(b, 3, foot - 13, 6, 2, R.cream[2]);
+    px(b, 4, foot - 13, R.cream[3]);
+    box(b, 2, foot - 7, 8, 1, R.cream[1]);
+    box(b, 2, foot - 6, 8, 1, R.cream[3]);
+    px(b, 4, foot - 3, B[2]);
+  };
+  tex(scene, 'dr_fence_v', 12, 52, (c) => {
     const vf = 51;
     const B = R.bark;
-    disc(c, 5, vf, 4.5, 1.4, SHADOW);
-    box(c, 6, 22, 2, vf - 24, 'rgba(36,24,15,0.14)');
-    sprite(c, 10, 52, (b) => {
-      box(b, 4, 4, 2, vf - 10, B[2]);
-      box(b, 4, 4, 1, vf - 10, B[4]);
-      for (let y = 8; y < vf - 8; y += 7) px(b, 5, y, B[1]);
-      // chunky post with a cut top and two rope ties
-      box(b, 2, vf - 17, 6, 17, B[3]);
-      box(b, 2, vf - 17, 2, 17, B[4]);
-      box(b, 7, vf - 17, 1, 17, B[1]);
-      box(b, 2, vf - 18, 6, 1, R.cream[2]);
-      px(b, 2, vf - 18, R.cream[3]);
-      box(b, 3, vf - 4, 1, 2, B[2]);
-      for (const yy of [vf - 13, vf - 7]) {
-        box(b, 2, yy, 6, 1, R.cream[1]);
-        box(b, 2, yy + 1, 6, 1, R.cream[2]);
-      }
+    for (const f of [vf, vf - 16]) disc(c, 6, f, 5, 1.5, SHADOW);
+    sprite(c, 12, 52, (b) => {
+      box(b, 5, 9, 2, vf - 13, B[3]);
+      px(b, 5, 9, B[5]);
+      box(b, 6, 10, 1, vf - 14, B[1]);
+      vpost(b, vf - 16);
+      vpost(b, vf);
     });
+  });
+  tex(scene, 'dr_fence_v_end', 12, 16, (c) => {
+    disc(c, 6, 15, 5, 1.5, SHADOW);
+    sprite(c, 12, 16, (b) => vpost(b, 15));
   });
   tex(scene, 'dr_fence_post', 8, H, (c) => {
     disc(c, 4, foot, 4, 1.2, SHADOW);
@@ -783,6 +801,7 @@ export const DRESSING_KEYS: readonly string[] = [
   'dr_fence_h',
   'dr_fence_v',
   'dr_fence_post',
+  'dr_fence_v_end',
   'dr_reeds',
   'dr_ice_shards',
   'dr_spores',

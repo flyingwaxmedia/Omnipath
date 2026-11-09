@@ -463,7 +463,7 @@ export function planDressing(cm: CompiledMap): DressingItem[] {
             const foot = side === 's' ? (ty + 1) * TILE - 3 : ty * TILE + 9;
             put('dr_fence_h', tx * TILE + TILE / 2, foot, false, tx, ty);
           } else {
-            const x = side === 'e' ? (tx + 1) * TILE - 5 : tx * TILE + 5;
+            const x = side === 'e' ? (tx + 1) * TILE - 6 : tx * TILE + 6;
             put('dr_fence_v', x, (ty + 1) * TILE - 1, false, tx, ty);
           }
         }
@@ -471,10 +471,10 @@ export function planDressing(cm: CompiledMap): DressingItem[] {
         const end = i + len;
         if (horizontal) {
           const foot = side === 's' ? (fixed + 1) * TILE - 3 : fixed * TILE + 9;
-          if (!blocked(end, fixed)) put('dr_fence_post', end * TILE + 2, foot);
+          if (inB(end, fixed) && !ban[idx(end, fixed)] && !isPath(end, fixed)) put('dr_fence_post', end * TILE + 2, foot);
         } else {
-          const x = side === 'e' ? (fixed + 1) * TILE - 5 : fixed * TILE + 5;
-          if (!blocked(fixed, i - 1)) put('dr_fence_post', x, i * TILE - 1);
+          const x = side === 'e' ? (fixed + 1) * TILE - 6 : fixed * TILE + 6;
+          if (inB(fixed, i - 1) && !ban[idx(fixed, i - 1)] && !isPath(fixed, i - 1)) put('dr_fence_v_end', x, i * TILE - 1);
         }
       }
       i += len + 1 + (r() < 0.4 ? 1 : 0);
@@ -514,10 +514,12 @@ export function planDressing(cm: CompiledMap): DressingItem[] {
         [s.tx + fp.w, fy - 1, 10],
       ];
       let k = 0;
-      for (const [tx, ty, ox] of spots) {
-        if (k >= items.length) break;
+      for (let si = 0; si < spots.length && k < items.length; si++) {
+        const [tx, ty, ox] = spots[si];
         if (!free(tx, ty)) continue;
-        const key = resolve(items[(k + Math.floor(r() * 2)) % items.length], tx, ty, r);
+        let key = resolve(items[(k + Math.floor(r() * 2)) % items.length], tx, ty, r);
+        // banners flank the front wall only; never stack them on one side
+        if (key.startsWith('dr_banner') && si >= 2) key = 'dr_barrel';
         put(key, tx * TILE + ox, (ty + 1) * TILE - 3, tx >= s.tx + fp.w && !key.startsWith('dr_banner'), tx, ty);
         k++;
       }
@@ -535,7 +537,10 @@ export function planDressing(cm: CompiledMap): DressingItem[] {
         [o.tx + 2, o.ty - 1, 'dr_barrel'],
         [o.tx - 2, o.ty - 2, 'dr_crates'],
       ];
-      for (const [tx, ty, key] of ring) if (free(tx, ty) && r() < 0.85) put(key, tx * TILE + 16, (ty + 1) * TILE - 6, r() < 0.5, tx, ty);
+      // camps sit on plazas, so cobble counts as free here (dirt roads and bridges still do not)
+      const ok = (x: number, y: number) =>
+        inB(x, y) && !ban[idx(x, y)] && !used[idx(x, y)] && !isWater(x, y) && (tileAt(x, y) === T.COBBLE || !isPath(x, y));
+      for (const [tx, ty, key] of ring) if (ok(tx, ty) && r() < 0.85) put(key, tx * TILE + 16, (ty + 1) * TILE - 6, r() < 0.5, tx, ty);
     }
     // Portal mouths: banners flanking edge portals, crates/candles beside doors and stairs.
     const banner = def.region === 'rift' ? 'dr_banner_red' : 'dr_banner_blue';
@@ -608,9 +613,10 @@ export function planDressing(cm: CompiledMap): DressingItem[] {
         if (!wet) continue;
         const r = rng('shore', x, y);
         if (r() > 0.32 * Math.max(0.5, scale)) continue;
+        // stand right at the waterline on the wet side of the tile
         const [dx, dy] = wet;
-        const px = x * TILE + 16 + dx * 9 + Math.floor((r() - 0.5) * 10);
-        const py = (y + 1) * TILE - 4 + dy * 8;
+        const px = dx < 0 ? x * TILE + 6 : dx > 0 ? x * TILE + 26 : x * TILE + 16 + Math.floor((r() - 0.5) * 14);
+        const py = dy < 0 ? y * TILE + 10 : dy > 0 ? (y + 1) * TILE - 1 : (y + 1) * TILE - 8 + Math.floor((r() - 0.5) * 8);
         put(frost ? 'dr_ice_shards' : 'dr_reeds', px, py, r() < 0.5, x, y);
       }
     }

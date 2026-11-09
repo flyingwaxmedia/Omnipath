@@ -288,39 +288,28 @@ points(cls, progress) = progress.rank * cls.tier - sum(spent node ranks * node.c
   leaves a worn `bonus` at most 10 points on any one skill (7 when the tree's stat node is atk/matk). Non-damage
   bonus stats (hp, sp, speed, crit, cdr) are outside the budget.
 
-### 5.1 Sandbox loadouts (owner direction, supersedes "wear" in §5)
+### 5.1 Classes and the skill bar (owner direction v3.1 — supersedes the earlier loadout rule)
 
-The skill system is a **sandbox**: a build is **4–5 similar skills that make you a class + 2–3 personal picks** for the
-situation.
+Simple and automatic: **pick a class and it equips its own skills.**
 
-- **Weapons never gate learned skills.** `SkillDef.weapons` now means *the weapon tree a skill was discovered in*
-  (constellation, morph trees, flavour). Any learned skill works with any weapon. Only tier-0 basic attacks
-  (slash / stab / bolt) stay bound: they ARE the equipped weapon's auto-attack and never go on the skill bar. The
-  weapon still sets the basic attack, ATK/MATK/crit/attack delay and the sprite.
-- **Loadout** = the skill bar: `HOTBAR_SIZE = 8` slots (the basic attack is separate). The game calls
-  `book.setLoadout(ids)` whenever the bar changes (and on load).
-- **Matching**: an equipped skill *matches* a class if it has every tag of ANY of the class's clauses; for
-  distinctElements-only classes a skill matches if it has an element.
-- **Qualifying** (pure function `qualifies(reg, state, cls, loadout)` in `src/core/classes.ts`):
-  - Tier I: ≥ `CLASS.activeMatches[1]` = **4** matching equipped skills, every clause's own count satisfied by the
-    equipped skills, and `distinctElements` (if any) satisfied by the equipped skills' elements.
-  - Tier II: ≥ **5** matching equipped skills, clause counts satisfied by equipped skills at rank ≥ 5 (hardened:
-    distinct authored bases), parents at their required Class Rank, `requires` met.
-  - Tier III: ≥ **5** matching equipped skills + Tier II rules + its `requires` (relic flags).
-  - Hidden classes: same rules plus their `requires`.
-- **Discovery** happens the first time the loadout qualifies for a class (signature skills granted, discovery card,
-  codex). Codex progress (unknown/whispered/near) is still computed from KNOWN skills so players can see what they
-  could build, plus a loadout progress line ("3 / 4 blade skills equipped").
-- **Active class** (`state.worn` keeps holding it for save compatibility) = among discovered classes the loadout
-  qualifies for: the player's preferred class (`setPreferredClass(id)`, stored as flag-free state field
-  `preferredClass`) if it qualifies, else highest tier, then most matching skills, then highest Class Rank, then
-  discovery order. Recomputed on `setLoadout`, rank-ups, discoveries and class-rank changes; emits `classActive`
-  `{ cls | null, previous }` when it changes. No qualifying class = no class (no bonus, no tree), and CR XP only
-  bleeds.
-- The active class grants its bonus, tree passives and outfit; Class Rank XP flows to it (worn share) exactly as the
-  worn class did. Imprints stay slottable from any discovered class (flex). `wear(id)` remains as an alias of
-  `setPreferredClass(id)` (fails with "Equip 4 matching skills to become <class>" when it does not qualify).
-- Tree respec stays limited to safe maps; changing the loadout (and therefore the class) is allowed anywhere.
+- **Weapons never gate learned skills.** `SkillDef.weapons` only says which weapon tree a skill came from. Tier-0 basic
+  attacks stay the equipped weapon's auto-attack and never sit on the bar.
+- **Skill bar = 8 slots**: slots 1–5 are **class slots** (filled automatically by the active class), slots 6–8 are
+  **your slots** (any skill you like). With no class, all 8 slots are yours and newly learned skills drop into empty
+  ones.
+- **Unlocking a class** works from the skills you KNOW (§5 counting: Tier I permissive; Tier II/III hardened + parent
+  Class Levels + requirements). The player sees one card: "New class: Pyroblade — Become a Pyroblade?".
+- **Becoming a class** (Class screen, any time, instant) refills the 5 class slots with
+  `classSkills(reg, state, cls, 5)` — a pure, deterministic pick from KNOWN skills: first enough skills to satisfy each
+  of the class's patterns (e.g. 1 finisher + 2 stealth), then the remaining slots with the best other matching skills
+  (higher tier first, then higher rank, then most recently learned). A skill already sitting in one of your slots moves
+  into the class slot (no duplicates). Fewer than 5 matches leave class slots empty.
+- **Learning a new matching skill** while in a class drops it into an empty class slot, or replaces the weakest
+  class skill if it is a higher tier ("Pyroblade equipped Flame Spin").
+- The active class (`state.worn`) gives its bonus, tree, outfit and Class Level XP exactly as §5. Leaving a class
+  (or choosing "No class") turns the class slots back into free slots keeping their skills.
+- Player-facing words: "Class Level" (not CR), "patterns" are never shown as tags — only as plain goals
+  ("Learn 1 more fire skill").
 
 ## 6. SkillBook v2 orchestration (`src/core/skillbook.ts`)
 

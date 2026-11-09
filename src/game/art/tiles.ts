@@ -11,6 +11,9 @@ import type Phaser from 'phaser';
 import { T, TILE_COUNT } from '../../core/world/tiles';
 import {
   CORNER,
+  DECALS_PER_SET,
+  DECAL_PX,
+  DECAL_SETS,
   EDGE_COLS,
   EDGE_FAMILIES,
   EDGE_ROWS,
@@ -19,20 +22,26 @@ import {
   TILE_SPACING,
   TILE_VARIANTS,
   edgeFrame,
+  type DecalSet,
   type EdgeFamily,
 } from '../render/autotile';
 import { PAL, artRng, keySeed, pixelTex } from './pixel';
 
 export {
   CORNER,
+  DECALS_PER_SET,
+  DECAL_PX,
+  DECAL_SETS,
   EDGE_FAMILIES,
   EDGE_VARIANTS,
   TILE_MARGIN,
   TILE_SPACING,
   TILE_VARIANTS,
   atlasIndex,
+  decalFrame,
   edgeFrame,
   edgeFrameInfo,
+  type DecalSet,
   type EdgeFamily,
 } from '../render/autotile';
 
@@ -189,14 +198,16 @@ function grassGround(g: GrassLook): Ground {
     deco(b, rnd, place, v, density) {
       // a soft darker patch for low-frequency variation (only in full tiles)
       if (density >= 1 && v !== 0) {
-        const p = place(9, 6, 0);
+        const pw = 7 + ri(rnd, 6);
+        const ph = 4 + ri(rnd, 3);
+        const p = place(pw, ph, 0);
         if (p) {
-          const tone = sh(hx(g.base), v === 1 ? -5 : 4);
-          for (let j = 0; j < 6; j++)
-            for (let i = 0; i < 9; i++) {
-              const dx = (i - 4) / 4.5;
-              const dy = (j - 2.5) / 3;
-              if (dx * dx + dy * dy < 1 - rnd() * 0.25) b.set(p[0] + i, p[1] + j, tone);
+          const tone = sh(hx(g.base), v === 1 ? -4 : 3);
+          for (let j = 0; j < ph; j++)
+            for (let i = 0; i < pw; i++) {
+              const dx = (i - (pw - 1) / 2) / (pw / 2);
+              const dy = (j - (ph - 1) / 2) / (ph / 2);
+              if (dx * dx + dy * dy < 0.95 - rnd() * 0.45) b.set(p[0] + i, p[1] + j, tone);
             }
         }
       }
@@ -276,14 +287,16 @@ function dirtGround(g: DirtLook): Ground {
     base,
     deco(b, rnd, place, v, density) {
       if (density >= 1 && v !== 0) {
-        const p = place(10, 6, 0);
+        const pw = 7 + ri(rnd, 6);
+        const ph = 4 + ri(rnd, 3);
+        const p = place(pw, ph, 0);
         if (p) {
-          const tone = sh(base, v === 1 ? -5 : 5);
-          for (let j = 0; j < 6; j++)
-            for (let i = 0; i < 10; i++) {
-              const dx = (i - 4.5) / 5;
-              const dy = (j - 2.5) / 3;
-              if (dx * dx + dy * dy < 1 - rnd() * 0.3) b.set(p[0] + i, p[1] + j, tone);
+          const tone = sh(base, v === 1 ? -4 : 4);
+          for (let j = 0; j < ph; j++)
+            for (let i = 0; i < pw; i++) {
+              const dx = (i - (pw - 1) / 2) / (pw / 2);
+              const dy = (j - (ph - 1) / 2) / (ph / 2);
+              if (dx * dx + dy * dy < 0.95 - rnd() * 0.45) b.set(p[0] + i, p[1] + j, tone);
             }
         }
       }
@@ -429,7 +442,7 @@ function snowGround(): Ground {
   return {
     base,
     deco(b, rnd, place, v, density) {
-      const n = count(rnd, 3 + (v === 2 ? 1 : 0), density);
+      const n = count(rnd, v === 0 ? 1 : v === 1 ? 2 : 0, density);
       for (let i = 0; i < n; i++) {
         const w = 5 + ri(rnd, 4);
         const p = place(w, 3);
@@ -440,11 +453,11 @@ function snowGround(): Ground {
         b.rect(x, y + 1, w, 1, hx(SNOW_LOOK.light));
         b.rect(x + 1, y + 2, w - 2, 1, hx(SNOW_LOOK.shade));
       }
-      const ns = count(rnd, 5, density);
+      const ns = count(rnd, 3, density);
       for (let i = 0; i < ns; i++) {
         const p = place(2, 1, 1);
         if (!p) continue;
-        b.set(p[0], p[1], rnd() < 0.6 ? hx(SNOW_LOOK.shade) : hx(SNOW_LOOK.deep));
+        b.set(p[0], p[1], rnd() < 0.7 ? hx(SNOW_LOOK.shade) : hx(SNOW_LOOK.deep));
         if (rnd() < 0.4) b.set(p[0] + 1, p[1], hx(SNOW_LOOK.shade));
       }
       if (rnd() < 0.7 * density) {
@@ -461,7 +474,7 @@ function iceGround(): Ground {
   return {
     base,
     deco(b, rnd, place, v, density) {
-      const n = count(rnd, 2 + (v === 1 ? 1 : 0), density);
+      const n = count(rnd, v === 1 ? 2 : v === 2 ? 0 : 1, density);
       for (let i = 0; i < n; i++) {
         const len = 5 + ri(rnd, 5);
         const p = place(len, len);
@@ -472,7 +485,7 @@ function iceGround(): Ground {
           if (k % 2 === 0 && k < len - 1) b.set(x + k + 1, y + len - 1 - k, hx(ICE_LOOK.hi));
         }
       }
-      const nc = count(rnd, 2, density);
+      const nc = count(rnd, v === 2 ? 2 : 1, density);
       for (let i = 0; i < nc; i++) {
         const p = place(7, 3);
         if (!p) continue;
@@ -485,7 +498,7 @@ function iceGround(): Ground {
         }
         x += 0;
       }
-      if (rnd() < density) {
+      if (v === 1 && rnd() < density) {
         const p = place(3, 3, 2);
         if (p) {
           b.set(p[0] + 1, p[1], hx(ICE_LOOK.hi));
@@ -643,12 +656,12 @@ const G: Record<string, Ground> = {
     stoneHi: '#85695c',
     pebbles: 2,
     specks: 5,
-    cracks: 2,
+    cracks: 1,
     crackColor: '#2a1a14',
     glow: '#e8642a',
   }),
-  water: waterGround({ base: '#3f86b9', dark: '#3676a8', ripple: '#6aa8d2', sparkle: '#cfeaf6', ripples: 3 }),
-  deep: waterGround({ base: '#2d6596', dark: '#275a87', ripple: '#4580b2', sparkle: '#8cc6e6', ripples: 2 }),
+  water: waterGround({ base: '#3f86b9', dark: '#3676a8', ripple: '#6aa8d2', sparkle: '#cfeaf6', ripples: 1 }),
+  deep: waterGround({ base: '#2d6596', dark: '#275a87', ripple: '#4580b2', sparkle: '#8cc6e6', ripples: 1 }),
   moss: mossGround(),
   snow: snowGround(),
   ice: iceGround(),
@@ -716,8 +729,8 @@ const COBBLES: readonly Stone[] = (() => {
     let x = ri(rnd, S);
     let left = S;
     while (left > 0) {
-      let w = 6 + ri(rnd, 4);
-      if (left - w < 6) w = left;
+      let w = 7 + ri(rnd, 5);
+      if (left - w < 7) w = left;
       const h = 6 + (rnd() < 0.5 ? 1 : 0);
       out.push({ x: x % S, y: row * 8 + (h === 6 ? ri(rnd, 2) : 0), w, h, wraps: (x % S) + w > S, seed: out.length * 131 + 7 });
       x += w;
@@ -727,29 +740,44 @@ const COBBLES: readonly Stone[] = (() => {
   return out;
 })();
 
-const COBBLE = { mortar: hx('#5f5a51'), body: hx('#9d978b'), hi: hx('#b9b3a6'), lo: hx('#78726a'), moss: hx('#6a7e45') };
+const COBBLE = { mortar: hx('#544f47'), body: hx('#9a9488'), hi: hx('#b9b3a6'), lo: hx('#78726a'), moss: hx('#6a7e45') };
 
 /** One cobble stone (wrapped across the tile). `only` restricts drawing to a pixel predicate (edge pieces). */
 function cobbleStone(b: Buf, st: Stone, rnd: Rnd, feature: boolean, only?: (x: number, y: number) => boolean): void {
-  const tone = sh(COBBLE.body, ri(rnd, 17) - 8);
-  const warm = rnd() < 0.3;
-  const body = warm ? mixc(tone, hx('#a8957a'), 0.35) : tone;
+  const body = cobbleTone(rnd);
   const crack = feature && rnd() < 0.5;
   const moss = feature && !crack;
-  for (let j = 0; j < st.h - 1; j++)
-    for (let i = 0; i < st.w - 1; i++) {
-      const corner = (j === 0 || j === st.h - 2) && (i === 0 || i === st.w - 2);
-      if (corner) continue;
-      let c = body;
-      if (j === 0 || i === 0) c = sh(body, 16);
-      if (j === st.h - 2 || i === st.w - 2) c = sh(body, -18);
-      if (j === 0 && i === 1) c = sh(body, 26);
-      if (crack && i === (st.w >> 1) && j > 0 && j < st.h - 2) c = sh(body, -30);
-      if (moss && j === st.h - 2 && i < 3) c = COBBLE.moss;
+  const w = st.w - 1;
+  const h = st.h - 1;
+  for (let j = 0; j < h; j++)
+    for (let i = 0; i < w; i++) {
+      const c = cobblePixel(body, i, j, w, h);
+      if (c < 0) continue;
+      let col = c;
+      if (crack && i === w >> 1 && j > 0 && j < h - 1) col = sh(body, -30);
+      if (moss && j === h - 1 && i > 0 && i < 4) col = COBBLE.moss;
       const x = (st.x + i) % S;
       const y = st.y + j;
-      if (!only || only(x, y)) b.set(x, y, c);
+      if (!only || only(x, y)) b.set(x, y, col);
     }
+}
+
+/** Stone tone: warm/cool greys with the odd brownish stone. */
+function cobbleTone(rnd: Rnd): RGB {
+  const tone = sh(COBBLE.body, ri(rnd, 19) - 9);
+  return rnd() < 0.3 ? mixc(tone, hx('#a8957a'), 0.4) : tone;
+}
+
+/** Rounded, top-lit cobble pixel (or -1 outside the rounded corners). */
+function cobblePixel(body: RGB, i: number, j: number, w: number, h: number): number {
+  const cut = (j === 0 || j === h - 1) && (i === 0 || i === w - 1);
+  if (cut) return -1;
+  if (j === 0) return i === 1 ? sh(body, 30) : sh(body, 18);
+  if (j === h - 1) return sh(body, -22);
+  if (j === h - 2) return i === w - 1 ? sh(body, -16) : sh(body, -8);
+  if (i === 0) return sh(body, 10);
+  if (i === w - 1) return sh(body, -12);
+  return body;
 }
 
 function paintCobble(b: Buf, v: number): void {
@@ -772,9 +800,7 @@ const SLABS: readonly Stone[] = [
 function paintCrypt(b: Buf, v: number): void {
   const seam = hx('#3a3645');
   b.fill(seam);
-  const vr = artRng(keySeed('crypt') + v * 131);
-  const feature = v === 0 ? -1 : ri(vr, 3);
-  SLABS.forEach((st, i) => {
+  SLABS.forEach((st) => {
     const rnd = artRng(st.wraps ? st.seed : st.seed + v * 977);
     const body = sh(hx('#5c5768'), ri(rnd, 11) - 5);
     for (let j = 0; j < st.h - 1; j++)
@@ -786,80 +812,91 @@ function paintCrypt(b: Buf, v: number): void {
       }
     // worn speckles
     for (let q = 0; q < 3; q++) b.set((st.x + 3 + ri(rnd, 10)) % S, st.y + 3 + ri(rnd, 10), sh(body, rnd() < 0.5 ? -10 : 8));
-    if (i === feature) {
-      if (v === 1) {
-        // short hairline crack
-        let x = st.x + 4 + ri(rnd, 6);
-        const y0 = st.y + 3 + ri(rnd, 4);
-        for (let y = y0; y < y0 + 5; y++) {
-          b.set(x % S, y, sh(body, -20));
-          if (rnd() < 0.5) x += rnd() < 0.5 ? 1 : -1;
-        }
-      } else {
-        // chipped corner with a tuft of moss
-        const x = st.x + 1;
-        const y = st.y + st.h - 4;
-        b.rect(x, y, 2, 2, hx('#4a6040'));
-        b.set(x + 2, y + 1, hx('#4a6040'));
-        b.set(x, y, hx('#5c7650'));
-      }
-    }
   });
 }
 
-/** Basalt: foreshortened hexagonal column tops (Voronoi of a hex lattice; period 32). */
-const HEX_CENTRES: readonly [number, number][] = [
-  [0, 0],
-  [0, 16],
-  [16, 8],
-  [16, 24],
-];
-const BASALT = { gap: hx('#1c1a20'), top: hx('#45414b'), hi: hx('#5d5866'), lo: hx('#36333b'), ember: hx('#d0561e') };
-interface HexCell {
-  id: number;
-  edge: number;
-  dx: number;
-  dy: number;
+/** Toroidal Voronoi cells (layout shared by every variant so tile edges always match). */
+interface Plates {
+  /** nearest cell id per pixel */
+  id: Uint8Array;
+  /** distance to the cell border (second-nearest minus nearest) */
+  edge: Float32Array;
+  /** +1 when the pixel lies on the lower-right half of its cell (shadow side) */
+  side: Int8Array;
+  /** centre of the pixel's cell (nearest toroidal copy, may lie outside the tile) */
+  cx: Float32Array;
+  cy: Float32Array;
 }
-let hexMap: HexCell[] | null = null;
-function hexCellAt(x: number, y: number): HexCell {
-  hexMap ??= Array.from({ length: S * S }, (_, i) => computeHexCell(i % S, Math.floor(i / S)));
-  return hexMap[y * S + x];
-}
-function computeHexCell(x: number, y: number): HexCell {
-  let best = 1e9;
-  let second = 1e9;
-  let id = 0;
-  let bdx = 0;
-  let bdy = 0;
-  for (let i = 0; i < HEX_CENTRES.length; i++)
-    for (const ox of [-S, 0, S])
-      for (const oy of [-S, 0, S]) {
-        const dx = x + 0.5 - (HEX_CENTRES[i][0] + ox);
-        const dy = (y + 0.5 - (HEX_CENTRES[i][1] + oy)) * 1.15;
-        const d = Math.sqrt(dx * dx + dy * dy);
-        if (d < best) {
-          second = best;
-          best = d;
-          id = i * 9 + (ox / S + 1) * 3 + (oy / S + 1);
-          bdx = dx;
-          bdy = dy;
-        } else if (d < second) second = d;
-      }
-  return { id, edge: second - best, dx: bdx, dy: bdy };
-}
-function paintBasalt(b: Buf, v: number): void {
-  const rnd = artRng(keySeed('basalt') + v * 31);
-  const emberHex = v === 0 ? -1 : 9 * (2 + ri(rnd, 2)) + 4; // an interior hex centre (16, 8|24)
+const plateCache = new Map<string, Plates>();
+function voronoi(seed: number, n: number, minD: number, yScale: number): Plates {
+  const key = `${seed}:${n}:${minD}:${yScale}`;
+  const hit = plateCache.get(key);
+  if (hit) return hit;
+  const rnd = artRng(seed);
+  const pts: [number, number][] = [];
+  const tdist = (a: [number, number], b: [number, number]) => {
+    const dx = Math.min(Math.abs(a[0] - b[0]), S - Math.abs(a[0] - b[0]));
+    const dy = Math.min(Math.abs(a[1] - b[1]), S - Math.abs(a[1] - b[1])) * yScale;
+    return Math.sqrt(dx * dx + dy * dy);
+  };
+  // Poisson-ish centres: the first few far apart (big cells), the rest fill in (irregular sizes)
+  for (let tries = 0; tries < 600 && pts.length < n; tries++) {
+    const c: [number, number] = [rnd() * S, rnd() * S];
+    const d = pts.length < 3 ? minD * 1.35 : minD;
+    if (pts.every((q) => tdist(q, c) >= d)) pts.push(c);
+  }
+  const id = new Uint8Array(S * S);
+  const edge = new Float32Array(S * S);
+  const side = new Int8Array(S * S);
+  const cx = new Float32Array(S * S);
+  const cy = new Float32Array(S * S);
   for (let y = 0; y < S; y++)
     for (let x = 0; x < S; x++) {
-      const h = hexCellAt(x, y);
-      const tone = sh(BASALT.top, ((h.id * 37) % 9) - 4);
+      let d1 = 1e9;
+      let d2 = 1e9;
+      let best = 0;
+      let bx = 0;
+      let by = 0;
+      pts.forEach(([px, py], i) => {
+        for (const ox of [-S, 0, S])
+          for (const oy of [-S, 0, S]) {
+            const dx = x + 0.5 - (px + ox);
+            const dy = (y + 0.5 - (py + oy)) * yScale;
+            const d = Math.sqrt(dx * dx + dy * dy);
+            if (d < d1) {
+              d2 = d1;
+              d1 = d;
+              best = i;
+              bx = px + ox;
+              by = py + oy;
+            } else if (d < d2) d2 = d;
+          }
+      });
+      const i = y * S + x;
+      id[i] = best;
+      edge[i] = d2 - d1;
+      side[i] = x + 0.5 - bx + (y + 0.5 - by) > 0 ? 1 : -1;
+      cx[i] = bx;
+      cy[i] = by;
+    }
+  const out = { id, edge, side, cx, cy };
+  plateCache.set(key, out);
+  return out;
+}
+
+/** Basalt: irregular polygonal column tops with dark joints, bevelled rims and the odd ember glint. */
+const BASALT = { gap: hx('#1c1a20'), top: hx('#423e48'), hi: hx('#57525f'), lo: hx('#34313a'), ember: hx('#d0561e') };
+const basaltCells = () => voronoi(keySeed('basalt-cells'), 9, 8.5, 1.2);
+function paintBasalt(b: Buf, v: number): void {
+  const pl = basaltCells();
+  for (let y = 0; y < S; y++)
+    for (let x = 0; x < S; x++) {
+      const i = y * S + x;
+      const tone = sh(BASALT.top, ((pl.id[i] * 3 + v * (pl.id[i] % 2)) % 5) - 2);
       let c = tone;
-      if (h.edge < 1.2) c = BASALT.gap;
-      else if (h.edge < 2.4) c = h.dx + h.dy < 0 ? BASALT.hi : BASALT.lo;
-      else if (Math.abs(h.dx + 1) < 1 && Math.abs(h.dy) < 1.5 && (h.id * 7) % 3 === 0) c = sh(tone, -10);
-      if (h.id === emberHex && h.edge >= 1.2 && h.edge < 2.4 && h.dx > 0 && h.dy > 0) c = BASALT.ember;
+      const e = pl.edge[i];
+      if (e < 1.3) c = BASALT.gap;
+      else if (e < 2.5) c = pl.side[i] > 0 ? BASALT.lo : BASALT.hi;
       b.set(x, y, c);
     }
 }
@@ -956,56 +993,6 @@ const WALLS: Readonly<Record<number, WallLook>> = {
   },
 };
 
-/** Toroidal Voronoi plates for rock tops (layout shared by every variant so edges always match). */
-interface Plates {
-  /** nearest plate id per pixel */
-  id: Uint8Array;
-  /** distance to the plate border (second-nearest minus nearest) */
-  edge: Float32Array;
-  /** +1 when the pixel lies on the lower-right half of its plate (shadow side) */
-  side: Int8Array;
-}
-const plateCache = new Map<number, Plates>();
-function rockPlates(seed: number): Plates {
-  const hit = plateCache.get(seed);
-  if (hit) return hit;
-  const rnd = artRng(seed);
-  const pts: [number, number][] = [];
-  for (let gy = 0; gy < 3; gy++) for (let gx = 0; gx < 3; gx++) pts.push([(gx + 0.2 + rnd() * 0.6) * (S / 3), (gy + 0.2 + rnd() * 0.6) * (S / 3)]);
-  const id = new Uint8Array(S * S);
-  const edge = new Float32Array(S * S);
-  const side = new Int8Array(S * S);
-  for (let y = 0; y < S; y++)
-    for (let x = 0; x < S; x++) {
-      let d1 = 1e9;
-      let d2 = 1e9;
-      let best = 0;
-      let bdx = 0;
-      let bdy = 0;
-      pts.forEach(([px, py], i) => {
-        for (const ox of [-S, 0, S])
-          for (const oy of [-S, 0, S]) {
-            const dx = x + 0.5 - (px + ox);
-            const dy = (y + 0.5 - (py + oy)) * 1.25;
-            const d = Math.sqrt(dx * dx + dy * dy);
-            if (d < d1) {
-              d2 = d1;
-              d1 = d;
-              best = i;
-              bdx = dx;
-              bdy = dy;
-            } else if (d < d2) d2 = d;
-          }
-      });
-      id[y * S + x] = best;
-      edge[y * S + x] = d2 - d1;
-      side[y * S + x] = bdx + bdy > 0 ? 1 : -1;
-    }
-  const out = { id, edge, side };
-  plateCache.set(seed, out);
-  return out;
-}
-
 function paintWallTop(b: Buf, t: number, v: number): void {
   const L = WALLS[t];
   const rnd = artRng(keySeed('walltop') + t * 101 + v * 7);
@@ -1027,16 +1014,33 @@ function paintWallTop(b: Buf, t: number, v: number): void {
     }
     return;
   }
-  // rock plateau: irregular plates with dark crevices, lit upper-left rims, shaded lower-right rims
-  const pl = rockPlates(keySeed('plates') + t);
+  // rock mass: Voronoi plates shaded as boulders seen from the south (lit crown, darker front above the crevice)
+  const pl = voronoi(keySeed('plates') + t, 7, 11, 1.25);
+  const idAt = (x: number, y: number) => pl.id[(((y % S) + S) % S) * S + (((x % S) + S) % S)];
+  const edgeAt = (x: number, y: number) => pl.edge[(((y % S) + S) % S) * S + (((x % S) + S) % S)];
   for (let y = 0; y < S; y++)
     for (let x = 0; x < S; x++) {
       const i = y * S + x;
-      const tone = sh(L.top, ((pl.id[i] * 5) % 7) * 2 - 6);
+      const id = pl.id[i];
+      const tone = sh(L.top, ((id * 5) % 7) * 3 - 9);
       let c = tone;
-      const e = pl.edge[i];
-      if (e < 1.1) c = L.crevice;
-      else if (e < 2.3) c = pl.side[i] > 0 ? L.topDark : L.topLight;
+      if (pl.edge[i] < 1.1) c = L.crevice;
+      else {
+        // steps down to the next crevice / plate
+        let down = 0;
+        for (let k = 1; k <= 4; k++)
+          if (idAt(x, y + k) !== id || edgeAt(x, y + k) < 1.1) {
+            down = k;
+            break;
+          }
+        const upEdge = idAt(x, y - 1) !== id || edgeAt(x, y - 1) < 1.1;
+        const upEdge2 = idAt(x, y - 2) !== id || edgeAt(x, y - 2) < 1.1;
+        if (down === 1) c = L.faceDark;
+        else if (down >= 2 && down <= 3) c = mixc(L.face, tone, 0.25);
+        else if (upEdge) c = L.lip;
+        else if (upEdge2) c = L.topLight;
+        else if (pl.edge[i] < 2.2 && pl.side[i] < 0) c = sh(tone, 6);
+      }
       b.set(x, y, c);
     }
   for (let i = 0; i < 3; i++) {
@@ -1426,9 +1430,8 @@ function softPiece(b: Buf, fam: EdgeFamily, st: SoftStyle, mask: number, v: numb
   st.ground.deco(b, rnd, place, v, 0.7);
 }
 
-/** Cobble spill: whole stones whose centre lies inside the shape, wrapped in mortar and an outline. */
-function cobblePiece(b: Buf, mask: number, v: number, noise: Float32Array): void {
-  const f = field(mask, 9, 2.4, noise);
+/** Cobble spill: whole stones whose centre lies inside the shape, set in mortar with an outline. */
+function cobblePiece(b: Buf, mask: number): void {
   const own = new Uint8Array(P * P);
   const chosen: Stone[] = [];
   for (const st of COBBLES) {
@@ -1438,10 +1441,8 @@ function cobblePiece(b: Buf, mask: number, v: number, noise: Float32Array): void
         const cx = st.x + ox + (st.w - 1) / 2;
         const cy = st.y + oy + (st.h - 1) / 2;
         if (cx < -6 || cy < -6 || cx > S + 6 || cy > S + 6) continue;
-        const g = shapeG(mask, 9, cx, cy) + 2.4 * f[pi(clamp(Math.floor(cx), -1, S), clamp(Math.floor(cy), -1, S))] * 0;
-        if (g < 0) {
-          chosen.push({ ...st, x: st.x + ox, y: st.y + oy });
-        }
+        // pure shape (no noise) so both cells sharing a straddling stone always agree on it
+        if (shapeG(mask, 9, cx, cy) < 0) chosen.push({ ...st, x: st.x + ox, y: st.y + oy });
       }
   }
   for (const st of chosen)
@@ -1456,48 +1457,34 @@ function cobblePiece(b: Buf, mask: number, v: number, noise: Float32Array): void
       if (own[pi(x, y)]) b.set(x, y, COBBLE.mortar);
       else if (cov(own, x - 1, y) || cov(own, x + 1, y) || cov(own, x, y - 1) || cov(own, x, y + 1)) b.set(x, y, OUT, 0.55);
     }
-  const vr = artRng(keySeed('cobble') + 0);
-  void vr;
   for (const st of chosen) {
-    const base = COBBLES.find((s) => s.seed === st.seed)!;
-    const rnd = artRng(base.wraps ? base.seed : base.seed + v * 0);
-    const inCell = (x: number, y: number) => x >= 0 && y >= 0 && x < S && y < S;
-    // draw unwrapped at the chosen offset
-    const tmp: Stone = { ...st };
-    const tone = sh(COBBLE.body, ri(rnd, 17) - 8);
-    const warm = rnd() < 0.3;
-    const body = warm ? mixc(tone, hx('#a8957a'), 0.35) : tone;
-    for (let j = 0; j < tmp.h - 1; j++)
-      for (let i = 0; i < tmp.w - 1; i++) {
-        const corner = (j === 0 || j === tmp.h - 2) && (i === 0 || i === tmp.w - 2);
-        if (corner) continue;
-        let col = body;
-        if (j === 0 || i === 0) col = sh(body, 16);
-        if (j === tmp.h - 2 || i === tmp.w - 2) col = sh(body, -18);
-        if (j === 0 && i === 1) col = sh(body, 26);
-        const x = tmp.x + i;
-        const y = tmp.y + j;
-        if (inCell(x, y)) b.set(x, y, col);
+    const base = COBBLES.find((q) => q.seed === st.seed)!;
+    const rnd = artRng(base.seed);
+    const body = cobbleTone(rnd);
+    for (let j = 0; j < st.h - 1; j++)
+      for (let i = 0; i < st.w - 1; i++) {
+        const c = cobblePixel(body, i, j, st.w - 1, st.h - 1);
+        const x = st.x + i;
+        const y = st.y + j;
+        if (c >= 0 && x >= 0 && y >= 0 && x < S && y < S) b.set(x, y, c);
       }
   }
 }
 
-/** Basalt spill: whole hex column tops whose centre is inside the shape. */
 let basaltFull: Buf | null = null;
+/** Basalt spill: whole columns whose centre lies inside the shape, with a dark joint around them. */
 function basaltPiece(b: Buf, mask: number): void {
   if (!basaltFull) {
     basaltFull = new Buf();
     paintBasalt(basaltFull, 0);
   }
   const full = basaltFull;
+  const pl = basaltCells();
   for (let y = 0; y < S; y++)
     for (let x = 0; x < S; x++) {
-      const h = hexCellAt(x, y);
-      const cx = x + 0.5 - h.dx;
-      const cy = y + 0.5 - h.dy / 1.15;
-      if (shapeG(mask, 9, cx, cy) < 0) b.set(x, y, full.rgb(x, y));
+      const i = y * S + x;
+      if (shapeG(mask, 9, pl.cx[i], pl.cy[i]) < 0) b.set(x, y, full.rgb(x, y));
     }
-  // outline around the included columns
   const solid = (x: number, y: number) => x >= 0 && y >= 0 && x < S && y < S && b.alpha(x, y) > 0;
   const marks: [number, number][] = [];
   for (let y = 0; y < S; y++)
@@ -1517,10 +1504,10 @@ function foamPiece(b: Buf, mask: number, v: number): void {
   for (let y = 0; y < S; y++)
     for (let x = 0; x < S; x++) {
       const g = f[pi(x, y)];
-      if (g < -1) b.set(x, y, FOAM.wet, 0.55);
-      else if (g < 1.2) b.set(x, y, FOAM.foam, ((x * 7 + y * 3) % 11 === 0 ? 0.5 : 0.95));
-      else if (g < 2.2) b.set(x, y, FOAM.wet, 0.6);
-      else if (g < 7) b.set(x, y, FOAM.shallow, 0.38);
+      if (g < 0.5) b.set(x, y, FOAM.wet, 0.6);
+      else if (g < 2.6) b.set(x, y, FOAM.foam, (x * 7 + y * 3) % 13 === 0 ? 0.55 : 0.95);
+      else if (g < 3.6) b.set(x, y, FOAM.wet, 0.65);
+      else if (g < 9) b.set(x, y, FOAM.shallow, 0.35);
     }
   // a few loose foam flecks offshore
   for (let i = 0; i < 4; i++) {
@@ -1632,7 +1619,7 @@ function wallFacePiece(b: Buf, t: number, mask: number, v: number): void {
   }
 }
 
-/** Wall rim family, drawn on the FLOOR cell: the wall's outline, rubble at the face foot and a cast shadow. */
+/** Wall rim family, drawn on the FLOOR cell: the wall's outline, rock bumps at the face foot and a cast shadow. */
 function wallRimPiece(b: Buf, t: number, mask: number, v: number): void {
   const L = WALLS[t];
   const nw = !!(mask & CORNER.NW);
@@ -1640,7 +1627,6 @@ function wallRimPiece(b: Buf, t: number, mask: number, v: number): void {
   const sw = !!(mask & CORNER.SW);
   const se = !!(mask & CORNER.SE);
   const noise = familyNoise(`rim-${t}`, v);
-  const rnd = artRng(keySeed(`rim-${t}`) + mask * 17 + v * 3);
   const shadow = (x: number, y: number, a: number) => b.set(x, y, L.outline, a);
   // wall to the north: the face foot (rock bumps for cliffs), outline and a cast shadow
   if (nw && ne) {
@@ -1651,19 +1637,6 @@ function wallRimPiece(b: Buf, t: number, mask: number, v: number): void {
       shadow(x, bump + 1, 0.34);
       shadow(x, bump + 2, 0.2);
       shadow(x, bump + 3, 0.08);
-    }
-    // one fallen stone at the foot of rock walls
-    if (!L.masonry && rnd() < 0.6) {
-      const x = 5 + ri(rnd, 20);
-      const y = 5 + ri(rnd, 3);
-      b.rect(x, y - 1, 3, 1, L.outline, 0.7);
-      b.set(x - 1, y, L.outline, 0.7);
-      b.set(x + 3, y, L.outline, 0.7);
-      b.set(x - 1, y + 1, L.outline);
-      b.set(x + 3, y + 1, L.outline);
-      b.rect(x, y, 3, 1, L.lip);
-      b.rect(x, y + 1, 3, 1, L.face);
-      b.rect(x, y + 2, 3, 1, L.outline);
     }
   }
   // wall to the west: outline + shadow to the east (light from the top-left)
@@ -1686,20 +1659,390 @@ function wallRimPiece(b: Buf, t: number, mask: number, v: number): void {
   }
 }
 
+// ================================================================== decals
+// Small detail sprites (16x16 cells) the baker scatters at hashed pixel offsets on uniform cells, so features never
+// fall into a 32 px rhythm. Each painter draws roughly centred in its cell.
+
+type DecalPainter = (b: Buf, rnd: Rnd) => void;
+type Pal4 = { d: RGB; x: RGB; l: RGB; h: RGB };
+const pal4 = (d: string, x: string, l: string, h: string): Pal4 => ({ d: hx(d), x: hx(x), l: hx(l), h: hx(h) });
+const DG = pal4(GRASS_LOOK.dark, GRASS_LOOK.deep, GRASS_LOOK.light, GRASS_LOOK.hi);
+
+/** 1 px outline around opaque pixels (4-neighbourhood), on transparent pixels only. */
+function outlineBuf(b: Buf, color: RGB, a = 1): void {
+  const marks: number[] = [];
+  const solid = (x: number, y: number) => x >= 0 && y >= 0 && x < b.w && y < b.h && b.alpha(x, y) > 128;
+  for (let y = 0; y < b.h; y++)
+    for (let x = 0; x < b.w; x++)
+      if (!solid(x, y) && (solid(x - 1, y) || solid(x + 1, y) || solid(x, y - 1) || solid(x, y + 1))) marks.push(x, y);
+  for (let i = 0; i < marks.length; i += 2) b.set(marks[i], marks[i + 1], color, a);
+}
+
+const TUFT_BIG: readonly (readonly string[])[] = [
+  ['...h...', '.h.l.h.', '.l.l.l.', 'dlddlld', '.ddxdd.'],
+  ['..h..h.', 'h.l.hl.', 'l.ldl.h', 'dlddldl', '.dxxdd.'],
+];
+const TUFT_SMALL: readonly (readonly string[])[] = [
+  ['.h.h.', 'hl.lh', 'dlldl', '.xdx.'],
+  ['h..h', 'l.hl', 'dldd', '.xd.'],
+];
+const BENT_TUFT: readonly (readonly string[])[] = [
+  ['....hh', '..hll.', '.ll.h.', 'dd.ll.', '.dxd..'],
+  ['...hh.', '.hll..', 'll.hh.', 'ddll..', '.xdd..'],
+];
+const centred = (b: Buf, rows: readonly string[], pal: Readonly<Record<string, RGB>>, dy = 0) =>
+  stamp(b, Math.floor((DECAL_PX - spriteW(rows)) / 2), Math.floor((DECAL_PX - rows.length) / 2) + dy, rows, pal);
+
+const tuft = (p: Pal4, big: boolean, bent = false): DecalPainter => (b, rnd) => {
+  const set = bent ? BENT_TUFT : big ? TUFT_BIG : TUFT_SMALL;
+  centred(b, set[ri(rnd, set.length)], p);
+};
+const clover = (c: string, dark: string): DecalPainter => (b) =>
+  centred(b, ['.cc...', 'cCcc..', '.cCccc', '..cCc.', '...c..'], { c: hx(c), C: hx(dark) });
+const daisies = (petal: string, eye: string, stem: RGB): DecalPainter => (b, rnd) => {
+  const n = 2 + ri(rnd, 2);
+  for (let i = 0; i < n; i++) {
+    const x = 5 + ri(rnd, 6);
+    const y = 5 + ri(rnd, 5);
+    b.set(x, y + 1, stem);
+    b.set(x, y + 2, stem);
+    b.set(x - 1, y, hx(petal));
+    b.set(x + 1, y, hx(petal));
+    b.set(x, y - 1, hx(petal));
+    b.set(x, y, hx(eye));
+  }
+};
+const flowerClump = (petal: string, eye: string, leaf: Pal4): DecalPainter => (b, rnd) => {
+  // leaves first, then 3-5 blooms with a darker lower petal and a bright eye
+  for (let i = 0; i < 6; i++) {
+    const x = 4 + ri(rnd, 8);
+    const y = 7 + ri(rnd, 5);
+    b.set(x, y, leaf.d);
+    b.set(x + 1, y - 1, leaf.l);
+    b.set(x, y + 1, leaf.x);
+  }
+  const n = 3 + ri(rnd, 3);
+  const pc = hx(petal);
+  for (let i = 0; i < n; i++) {
+    const x = 4 + ri(rnd, 8);
+    const y = 4 + ri(rnd, 6);
+    b.set(x, y, pc);
+    b.set(x + 1, y, pc);
+    b.set(x, y + 1, sh(pc, -36));
+    b.set(x + 1, y + 1, sh(pc, -20));
+    b.set(x + (rnd() < 0.5 ? 0 : 1), y, hx(eye));
+  }
+};
+const stone = (body: string, hi: string, lo: string, outlineC: string, big = false): DecalPainter => (b, rnd) => {
+  const w = big ? 6 + ri(rnd, 2) : 4 + ri(rnd, 2);
+  const h = big ? 4 : 3;
+  const x0 = Math.floor((DECAL_PX - w) / 2);
+  const y0 = Math.floor((DECAL_PX - h) / 2);
+  const tmp = new Buf(DECAL_PX, DECAL_PX);
+  for (let j = 0; j < h; j++)
+    for (let i = 0; i < w; i++) {
+      if ((j === 0 || j === h - 1) && (i === 0 || i === w - 1)) continue;
+      tmp.set(x0 + i, y0 + j, j === 0 ? hx(hi) : j === h - 1 ? hx(lo) : hx(body));
+    }
+  tmp.set(x0 + 1, y0 + 1, hx(hi));
+  outlineBuf(tmp, hx(outlineC));
+  // ground shadow under the stone
+  b.rect(x0, y0 + h + 1, w, 1, hx(PAL.outline), 0.25);
+  blitOver(b, tmp);
+};
+const pebbles = (body: string, hi: string, shadow: string): DecalPainter => (b, rnd) => {
+  const n = 2 + ri(rnd, 3);
+  for (let i = 0; i < n; i++) {
+    const x = 3 + ri(rnd, 9);
+    const y = 4 + ri(rnd, 8);
+    const w = 1 + ri(rnd, 2);
+    b.rect(x, y, w, 1, hx(body));
+    b.set(x, y, hx(hi));
+    b.rect(x, y + 1, w, 1, hx(shadow));
+  }
+};
+const patch = (color: RGB, a: number): DecalPainter => (b, rnd) => {
+  const w = 8 + ri(rnd, 6);
+  const h = 4 + ri(rnd, 3);
+  const x0 = Math.floor((DECAL_PX - w) / 2);
+  const y0 = Math.floor((DECAL_PX - h) / 2);
+  for (let j = 0; j < h; j++)
+    for (let i = 0; i < w; i++) {
+      const dx = (i - (w - 1) / 2) / (w / 2);
+      const dy = (j - (h - 1) / 2) / (h / 2);
+      if (dx * dx + dy * dy < 0.9 - rnd() * 0.35) b.set(x0 + i, y0 + j, color, a);
+    }
+};
+const crack = (dark: string, light?: string): DecalPainter => (b, rnd) => {
+  let x = 2 + ri(rnd, 2);
+  let y = 6 + ri(rnd, 4);
+  const len = 9 + ri(rnd, 4);
+  for (let k = 0; k < len; k++) {
+    b.set(x, y, hx(dark));
+    if (light) b.set(x, y + 1, hx(light));
+    if (k === 4 && rnd() < 0.7) {
+      // a short branch
+      b.set(x + 1, y - 1, hx(dark));
+      b.set(x + 2, y - 2, hx(dark));
+    }
+    x++;
+    if (rnd() < 0.4) y = clamp(y + (rnd() < 0.5 ? -1 : 1), 3, 12);
+  }
+};
+const twig = (dark: string, light: string): DecalPainter => (b, rnd) => {
+  const y = 6 + ri(rnd, 4);
+  for (let k = 0; k < 9; k++) {
+    const yy = y + (k > 5 ? 1 : 0);
+    b.set(3 + k, yy, hx(light));
+    b.set(3 + k, yy + 1, hx(dark));
+  }
+  b.set(6, y - 1, hx(light));
+  b.set(5, y - 2, hx(light));
+};
+const leaves = (cols: readonly string[]): DecalPainter => (b, rnd) => {
+  const n = 3 + ri(rnd, 3);
+  for (let i = 0; i < n; i++) {
+    const c = hx(cols[ri(rnd, cols.length)]);
+    const x = 3 + ri(rnd, 9);
+    const y = 4 + ri(rnd, 8);
+    b.set(x, y, c);
+    b.set(x + 1, y, c);
+    b.set(x + 1, y + 1, sh(c, -24));
+    b.set(x, y - 1, sh(c, 16));
+  }
+};
+const mushrooms = (cap: string, capHi: string, stem: string): DecalPainter => (b, rnd) => {
+  const n = 2 + ri(rnd, 2);
+  const tmp = new Buf(DECAL_PX, DECAL_PX);
+  for (let i = 0; i < n; i++) {
+    const x = 4 + i * 3 + ri(rnd, 2);
+    const y = 6 + ri(rnd, 3);
+    const big = i === 0;
+    tmp.rect(x, y + 2, 1, big ? 3 : 2, hx(stem));
+    tmp.rect(x - 1, y + 1, 3, 1, hx(cap));
+    if (big) tmp.rect(x - 2, y + 1, 5, 1, hx(cap));
+    tmp.set(x, y, hx(cap));
+    tmp.set(x - (big ? 1 : 0), y + (big ? 0 : 1), hx(capHi));
+  }
+  outlineBuf(tmp, hx(PAL.outline), 0.85);
+  blitOver(b, tmp);
+};
+const sparkle = (c: string, big = false): DecalPainter => (b) => {
+  const m = 7;
+  b.set(m, m, hx(c));
+  b.set(m - 1, m, hx(c), 0.6);
+  b.set(m + 1, m, hx(c), 0.6);
+  b.set(m, m - 1, hx(c), 0.6);
+  b.set(m, m + 1, hx(c), 0.6);
+  if (big) {
+    b.set(m, m - 2, hx(c), 0.35);
+    b.set(m, m + 2, hx(c), 0.35);
+  }
+};
+const ripple = (light: string, dark: string, small = false): DecalPainter => (b) => {
+  const w = small ? 6 : 9;
+  const x0 = Math.floor((DECAL_PX - w) / 2);
+  const y0 = 7;
+  b.rect(x0 + 2, y0, w - 4, 1, hx(light));
+  b.set(x0 + 1, y0 + 1, hx(light));
+  b.set(x0 + w - 2, y0 + 1, hx(light));
+  b.rect(x0 + 2, y0 + 1, w - 4, 1, hx(dark));
+  b.rect(x0 + 2, y0 + 2, w - 4, 1, hx(light), 0.5);
+};
+const lilypad = (flower: boolean): DecalPainter => (b, rnd) => {
+  const tmp = new Buf(DECAL_PX, DECAL_PX);
+  const cx = 7 + ri(rnd, 2);
+  const cy = 8;
+  for (let y = -3; y <= 3; y++)
+    for (let x = -4; x <= 4; x++) {
+      if ((x / 4.5) ** 2 + (y / 3.2) ** 2 > 1) continue;
+      if (x > 0 && Math.abs(y) <= x * 0.35 && y >= 0) continue; // notch
+      tmp.set(cx + x, cy + y, y < 0 ? hx('#5f9a48') : hx('#4a7f3a'));
+    }
+  tmp.set(cx - 2, cy - 2, hx('#7cb35c'));
+  if (flower) {
+    tmp.set(cx - 1, cy - 1, hx(PAL.rose));
+    tmp.set(cx, cy - 1, hx(PAL.rose));
+    tmp.set(cx - 1, cy - 2, hx('#f6d0d8'));
+  }
+  outlineBuf(tmp, hx('#1f4058'), 0.8);
+  blitOver(b, tmp);
+};
+const drift = (small: boolean): DecalPainter => (b, rnd) => {
+  const w = small ? 6 : 9 + ri(rnd, 3);
+  const x0 = Math.floor((DECAL_PX - w) / 2);
+  const y0 = 6;
+  b.rect(x0 + 2, y0, w - 4, 1, hx(SNOW_LOOK.hi));
+  b.rect(x0 + 1, y0 + 1, w - 2, 1, hx(SNOW_LOOK.light));
+  b.rect(x0, y0 + 2, w, 1, hx(SNOW_LOOK.light));
+  b.rect(x0 + 1, y0 + 3, w - 2, 1, hx(SNOW_LOOK.shade));
+  b.rect(x0 + 2, y0 + 4, w - 4, 1, hx(SNOW_LOOK.deep), 0.6);
+};
+const glowCrack = (): DecalPainter => (b, rnd) => {
+  let x = 2;
+  let y = 7 + ri(rnd, 3);
+  for (let k = 0; k < 12; k++) {
+    b.set(x, y + 1, hx('#2a1a14'));
+    b.set(x, y, k > 2 && k < 9 ? hx('#ff9a3a') : hx('#c8501e'));
+    if (k === 5 || k === 6) b.set(x, y, hx('#ffd27a'));
+    b.set(x, y - 1, hx('#e8642a'), 0.25);
+    x++;
+    if (rnd() < 0.35) y = clamp(y + (rnd() < 0.5 ? -1 : 1), 4, 11);
+  }
+};
+const cinders = (): DecalPainter => (b, rnd) => {
+  for (let i = 0; i < 4; i++) {
+    const x = 3 + ri(rnd, 9);
+    const y = 4 + ri(rnd, 8);
+    b.set(x, y, hx('#2e2420'));
+    b.set(x + 1, y, hx('#3c302a'));
+    if (rnd() < 0.5) b.set(x, y - 1, hx('#e8642a'));
+  }
+};
+const bubble = (small: boolean): DecalPainter => (b) => {
+  const r = small ? 2 : 3;
+  const c = 8;
+  for (let y = -r; y <= r; y++)
+    for (let x = -r; x <= r; x++) {
+      const d = Math.sqrt(x * x + y * y);
+      if (d <= r + 0.2 && d > r - 1) b.set(c + x, c + y, hx(LAVA_LOOK.hotter));
+      else if (d <= r - 1) b.set(c + x, c + y, hx(LAVA_LOOK.base), 1);
+    }
+  b.set(c - 1, c - r + 1, hx(LAVA_LOOK.white));
+};
+const crustPlate = (): DecalPainter => (b, rnd) => {
+  const w = 6 + ri(rnd, 3);
+  const x0 = Math.floor((DECAL_PX - w) / 2);
+  b.rect(x0 + 1, 6, w - 2, 1, hx(LAVA_LOOK.crustHi));
+  b.rect(x0, 7, w, 2, hx(LAVA_LOOK.crust));
+  b.rect(x0 + 1, 9, w - 2, 1, sh(hx(LAVA_LOOK.crust), -18));
+  b.rect(x0 - 1, 7, 1, 2, hx(LAVA_LOOK.hotter));
+  b.rect(x0 + w, 7, 1, 2, hx(LAVA_LOOK.hotter));
+};
+const shell = (): DecalPainter => (b) =>
+  centred(b, ['.ccc.', 'cwcwc', 'cwcwc', '.ccc.', '..s..'], { c: hx('#e8d6c0'), w: hx('#c8a890'), s: hx('#9a8060') });
+const moteGlow = (c: string): DecalPainter => (b, rnd) => {
+  for (let i = 0; i < 2 + ri(rnd, 2); i++) {
+    const x = 4 + ri(rnd, 8);
+    const y = 4 + ri(rnd, 8);
+    b.set(x, y, hx(c));
+    b.set(x + 1, y, hx(c), 0.4);
+    b.set(x, y + 1, hx(c), 0.4);
+  }
+};
+const cushion = (small: boolean): DecalPainter => (b, rnd) => {
+  const w = small ? 5 : 7 + ri(rnd, 2);
+  const h = small ? 3 : 4;
+  const x0 = Math.floor((DECAL_PX - w) / 2);
+  const y0 = Math.floor((DECAL_PX - h) / 2);
+  for (let j = 0; j < h; j++)
+    for (let i = 0; i < w; i++) {
+      if ((j === 0 || j === h - 1) && (i === 0 || i === w - 1)) continue;
+      b.set(x0 + i, y0 + j, j === 0 ? hx(MOSS_LOOK.light) : hx(MOSS_LOOK.base));
+    }
+  b.set(x0 + 1, y0, hx(MOSS_LOOK.hi));
+  b.rect(x0 + 1, y0 + h, w - 2, 1, hx(MOSS_LOOK.deep));
+};
+
+/** Overlay a scratch sprite onto the decal cell. */
+function blitOver(b: Buf, src: Buf): void {
+  for (let y = 0; y < src.h; y++)
+    for (let x = 0; x < src.w; x++) {
+      const a = src.alpha(x, y);
+      if (a) b.set(x, y, src.rgb(x, y), a / 255);
+    }
+}
+
+const PATHP = { body: PATH_LOOK.stone, hi: PATH_LOOK.stoneHi, lo: '#8f7f62', sh: PATH_LOOK.dark };
+const GREY_STONE = stone('#9a958b', '#b8b3a8', '#77726a', '#3a352c');
+
+const DECAL_PAINT: Readonly<Record<DecalSet, readonly DecalPainter[]>> = {
+  grass: [tuft(DG, true), tuft(DG, false), tuft(DG, false), clover('#7c9a48', '#5f7d38'), daisies(PAL.cream, '#e8c040', DG.d), GREY_STONE, patch(hx(GRASS_LOOK.dark), 0.35), tuft(DG, true)],
+  flowers: [
+    flowerClump(PAL.crimson, '#f0c050', DG),
+    flowerClump(PAL.rose, '#fff0c0', DG),
+    flowerClump(PAL.cream, '#e8c040', DG),
+    flowerClump(PAL.violet, '#f0e0ff', DG),
+    flowerClump('#e8c040', '#fff6c8', DG),
+    tuft(DG, true),
+    daisies(PAL.cream, '#e8c040', DG.d),
+    flowerClump(PAL.crimson, '#f0c050', DG),
+  ],
+  hill: (() => {
+    const p = pal4('#6d8840', '#5a7233', '#99b45d', '#b0c871');
+    return [tuft(p, true), tuft(p, false), daisies('#f0d050', '#fff6c8', p.d), GREY_STONE, patch(hx('#99b45d'), 0.35), clover('#9ab45a', '#7a9446'), tuft(p, true), tuft(p, false)];
+  })(),
+  storm: (() => {
+    const p = pal4('#556b57', '#465a49', '#7d957c', '#a6bfa5');
+    return [tuft(p, true, true), tuft(p, false, true), stone('#8d96a0', '#aab3bc', '#6c747d', '#2c3036'), sparkle('#c8e8f0'), patch(hx('#556b57'), 0.4), tuft(p, true, true), tuft(p, false), pebbles('#9aa3a8', '#c0c8cc', '#4c5a50')];
+  })(),
+  dusk: (() => {
+    const p = pal4('#4a446f', '#3c375c', '#6e679b', '#8a80b8');
+    return [tuft(p, true), tuft(p, false), flowerClump('#f0a8d8', '#fff0f8', p), flowerClump('#a8e8ff', '#f0ffff', p), sparkle('#f0c8ff'), patch(hx('#3c375c'), 0.35), mushrooms('#8a6cc0', '#b8a0e8', '#d8d0e8'), tuft(p, true)];
+  })(),
+  glade: (() => {
+    const p = pal4('#3f7858', '#336449', '#61a47c', '#7cc094');
+    return [tuft(p, true), tuft(p, false), moteGlow('#fff2b0'), flowerClump('#f0f8f0', '#fff2b0', p), mushrooms('#d8c8a0', '#f0e8c8', '#e8e0d0'), patch(hx('#336449'), 0.35), clover('#6cb488', '#4a8c66'), moteGlow('#d8fff0')];
+  })(),
+  dark: (() => {
+    const p = pal4('#3c4a31', '#313d28', '#5a6b49', '#6c7f57');
+    return [leaves(['#6e5636', '#7a6038', '#5e4a64']), leaves(['#6e5636', '#5a4a3a']), twig('#3d2817', '#6a4a2a'), mushrooms('#9a5a3a', '#c8845a', '#e0d0b0'), tuft(p, true), tuft(p, false), patch(hx('#313d28'), 0.4), pebbles('#6a6a5a', '#8a8a78', '#2a3020')];
+  })(),
+  moss: [cushion(false), cushion(true), tuft(pal4(MOSS_LOOK.dark, MOSS_LOOK.deep, MOSS_LOOK.light, MOSS_LOOK.hi), false), patch(hx(MOSS_LOOK.light), 0.3), cushion(false), mushrooms('#b8a070', '#e0c890', '#e8e0c8'), pebbles('#6a7a58', '#8a9a70', '#2f4220'), cushion(true)],
+  path: [
+    pebbles(PATHP.body, PATHP.hi, PATHP.sh),
+    stone(PATH_LOOK.stone, PATH_LOOK.stoneHi, PATHP.lo, '#4a3a26'),
+    crack(PATH_LOOK.dark),
+    patch(hx(PATH_LOOK.dark), 0.35),
+    patch(hx(PATH_LOOK.light), 0.4),
+    pebbles(PATHP.body, PATHP.hi, PATHP.sh),
+    tuft(DG, false),
+    twig('#5c3d22', '#8a6038'),
+  ],
+  sand: [shell(), pebbles('#e8dcc0', '#f6eedb', '#b8a473'), ripple('#e2d2a4', '#b8a473'), patch(hx('#b8a473'), 0.3), twig('#8a7050', '#b89a70'), tuft(pal4('#8a9a50', '#6a7a40', '#a8b468', '#c0c880'), false), pebbles('#d8ccb0', '#f0e8d8', '#b8a473'), shell()],
+  stone: [crack('#5c574f', '#a29c91'), pebbles('#a29d93', '#bdb8ae', '#5c574f'), GREY_STONE, patch(hx('#6d6860'), 0.35), clover('#6a7e45', '#4f6233'), crack('#5c574f', '#a29c91'), stone('#9a958b', '#b8b3a8', '#77726a', '#3a352c', true), pebbles('#a29d93', '#bdb8ae', '#5c574f')],
+  cave: [pebbles('#6b6055', '#80746a', '#2e2823'), crack('#2e2823', '#5f554a'), stone('#6b6055', '#80746a', '#4a4038', '#1a1512'), patch(hx('#2e3a44'), 0.45), mushrooms('#5a8ab0', '#8cc0e0', '#c8d8e0'), patch(hx('#3f372f'), 0.4), pebbles('#6b6055', '#80746a', '#2e2823'), crack('#2e2823', '#5f554a')],
+  crypt: [crack('#3a3645', '#6a6576'), crack('#3a3645'), patch(hx('#6a6576'), 0.25), pebbles('#6e697a', '#8a8496', '#2a2733'), clover('#4f6a3e', '#3a5030'), stone('#6e697a', '#8a8496', '#4a4656', '#16141b'), crack('#3a3645', '#6a6576'), pebbles('#6e697a', '#8a8496', '#2a2733')],
+  snow: [drift(false), drift(true), sparkle('#ffffff'), stone('#8a8f98', '#b8bec8', '#6a7078', '#3a4250'), patch(hx(SNOW_LOOK.shade), 0.45), drift(false), twig('#4a3a2a', '#7a6048'), sparkle('#ffffff', true)],
+  ice: [crack(ICE_LOOK.deep, ICE_LOOK.light), crack(ICE_LOOK.deep), sparkle('#ffffff'), patch(hx(ICE_LOOK.light), 0.5), sparkle('#ffffff', true), crack(ICE_LOOK.deep, ICE_LOOK.hi), patch(hx(ICE_LOOK.dark), 0.3), sparkle(ICE_LOOK.hi)],
+  ember: [glowCrack(), glowCrack(), patch(hx('#7a6a62'), 0.35), cinders(), twig('#2a1a14', '#4a3028'), glowCrack(), patch(hx('#46302a'), 0.4), cinders()],
+  basalt: [glowCrack(), patch(hx('#6a6670'), 0.25), cinders(), crack('#1c1a20'), glowCrack(), cinders(), patch(hx('#2a2830'), 0.4), pebbles('#55505e', '#6a6574', '#1c1a20')],
+  water: [ripple('#6aa8d2', '#3676a8'), ripple('#6aa8d2', '#3676a8', true), sparkle('#cfeaf6'), lilypad(false), lilypad(true), ripple('#8cc6e6', '#3676a8', true), sparkle('#cfeaf6', true), lilypad(false)],
+  lava: [bubble(false), bubble(true), crustPlate(), sparkle(LAVA_LOOK.white), bubble(true), crustPlate(), sparkle(LAVA_LOOK.hotter, true), bubble(false)],
+  rock: [
+    tuft(pal4('#56702f', '#45592a', '#7a9845', '#94b057'), false),
+    stone('#8d8574', '#a8a08c', '#6a6252', '#2a2119'),
+    crack('#433d33'),
+    patch(hx('#5a7a3a'), 0.45),
+    tuft(pal4('#56702f', '#45592a', '#7a9845', '#94b057'), true),
+    pebbles('#958c79', '#aea38c', '#433d33'),
+    crack('#433d33', '#958c79'),
+    patch(hx('#685f50'), 0.4),
+  ],
+};
+
+/** One decal (16x16 RGBA) — exported for contact sheets. */
+export function paintDecal(set: DecalSet, k: number): ImageData {
+  const b = new Buf(DECAL_PX, DECAL_PX);
+  DECAL_PAINT[set][k % DECALS_PER_SET](b, artRng(keySeed(`decal-${set}`) + k * 131));
+  return new ImageData(b.d, DECAL_PX, DECAL_PX);
+}
+
 // ================================================================== atlases
 
 function blitToAtlas(img: ImageData, src: Buf, col: number, row: number): void {
-  const step = S + TILE_SPACING;
+  const n = src.w;
+  const step = n + TILE_SPACING;
   const ox = TILE_MARGIN + col * step;
   const oy = TILE_MARGIN + row * step;
   const W = img.width;
   const d = img.data;
   // cell + 1 px extrusion on every side (clamped copy of the border pixels)
-  for (let y = -1; y <= S; y++)
-    for (let x = -1; x <= S; x++) {
-      const sx = clamp(x, 0, S - 1);
-      const sy = clamp(y, 0, S - 1);
-      const si = (sy * S + sx) * 4;
+  for (let y = -1; y <= n; y++)
+    for (let x = -1; x <= n; x++) {
+      const sx = clamp(x, 0, n - 1);
+      const sy = clamp(y, 0, n - 1);
+      const si = (sy * n + sx) * 4;
       const di = ((oy + y) * W + (ox + x)) * 4;
       d[di] = src.d[si];
       d[di + 1] = src.d[si + 1];
@@ -1708,15 +2051,22 @@ function blitToAtlas(img: ImageData, src: Buf, col: number, row: number): void {
     }
 }
 
-function sheetSize(cols: number, rows: number): [number, number] {
-  return [TILE_MARGIN * 2 + cols * S + (cols - 1) * TILE_SPACING, TILE_MARGIN * 2 + rows * S + (rows - 1) * TILE_SPACING];
+function sheetSize(cols: number, rows: number, cell = S): [number, number] {
+  return [TILE_MARGIN * 2 + cols * cell + (cols - 1) * TILE_SPACING, TILE_MARGIN * 2 + rows * cell + (rows - 1) * TILE_SPACING];
 }
 
-function registerFrames(scene: Phaser.Scene, key: string, cols: number, rows: number, frameOf: (col: number, row: number) => number): void {
+function registerFrames(
+  scene: Phaser.Scene,
+  key: string,
+  cols: number,
+  rows: number,
+  frameOf: (col: number, row: number) => number,
+  cell = S,
+): void {
   const tex = scene.textures.get(key);
-  const step = S + TILE_SPACING;
+  const step = cell + TILE_SPACING;
   for (let r = 0; r < rows; r++)
-    for (let c = 0; c < cols; c++) tex.add(frameOf(c, r), 0, TILE_MARGIN + c * step, TILE_MARGIN + r * step, S, S);
+    for (let c = 0; c < cols; c++) tex.add(frameOf(c, r), 0, TILE_MARGIN + c * step, TILE_MARGIN + r * step, cell, cell);
 }
 
 /** One base tile (32x32 RGBA) — exported for contact sheets / tests. */
@@ -1758,7 +2108,7 @@ function drawPiece(b: Buf, fam: EdgeFamily, mask: number, v: number): void {
     case 'abyss':
       return abyssPiece(b, mask, v);
     case 'cobble':
-      return cobblePiece(b, mask, v, familyNoise('cobble', v));
+      return cobblePiece(b, mask);
     case 'basalt':
       return basaltPiece(b, mask);
   }
@@ -1767,11 +2117,46 @@ function drawPiece(b: Buf, fam: EdgeFamily, mask: number, v: number): void {
   softPiece(b, fam, st, mask, v, familyNoise(fam, v, st.hiFreq));
 }
 
+/** Edge families already painted into a given 'tiles_edge' texture (rows are painted lazily). */
+const paintedEdges = new WeakMap<object, Set<number>>();
+
 /**
- * Builds 'tiles' (base atlas) and 'tiles_edge' (autotile pieces). Idempotent per key.
- * Call once at boot before the first map is baked.
+ * Paints the given edge families (indices into EDGE_FAMILIES) into 'tiles_edge' if they are not there yet, and
+ * re-uploads the texture once. bakeGround calls this with the families a map uses; call it with every index (or use
+ * drawTiles(scene, { allEdges: true })) if you need the whole sheet up front.
  */
-export function drawTiles(scene: Phaser.Scene): void {
+export function ensureEdgeFamilies(scene: Phaser.Scene, families: Iterable<number>): void {
+  const tex = scene.textures.get('tiles_edge') as Phaser.Textures.CanvasTexture;
+  if (!tex || typeof tex.getContext !== 'function') return;
+  let done = paintedEdges.get(tex);
+  if (!done) paintedEdges.set(tex, (done = new Set()));
+  const todo = [...new Set(families)].filter((f) => f >= 0 && f < EDGE_ROWS && !done.has(f));
+  if (!todo.length) return;
+  const c = tex.getContext();
+  const step = S + TILE_SPACING;
+  for (const row of todo) {
+    // paint one row into a strip, then copy it into place
+    const [w] = sheetSize(EDGE_COLS, 1);
+    const img = c.createImageData(w, S + 2);
+    const fam = EDGE_FAMILIES[row];
+    for (let v = 0; v < EDGE_VARIANTS; v++)
+      for (let mask = 1; mask < 16; mask++) {
+        const b = new Buf();
+        drawPiece(b, fam, mask, v);
+        blitToAtlas(img, b, v * 16 + mask, 0);
+      }
+    c.putImageData(img, 0, row * step);
+    done.add(row);
+  }
+  tex.refresh();
+}
+
+/**
+ * Builds 'tiles' (base atlas), 'tiles_decal' (detail sprites) and the 'tiles_edge' sheet (autotile pieces; its rows
+ * are painted on demand by ensureEdgeFamilies / bakeGround unless `allEdges` is set). Idempotent per key.
+ * Call once at boot, before the first map is baked.
+ */
+export function drawTiles(scene: Phaser.Scene, opts: { allEdges?: boolean } = {}): void {
   if (!scene.textures.exists('tiles')) {
     const [w, h] = sheetSize(TILE_COUNT, TILE_VARIANTS);
     pixelTex(scene, 'tiles', w, h, (c) => {
@@ -1786,20 +2171,25 @@ export function drawTiles(scene: Phaser.Scene): void {
     });
     registerFrames(scene, 'tiles', TILE_COUNT, TILE_VARIANTS, (c, r) => r * TILE_COUNT + c);
   }
-  if (!scene.textures.exists('tiles_edge')) {
-    const [w, h] = sheetSize(EDGE_COLS, EDGE_ROWS);
-    pixelTex(scene, 'tiles_edge', w, h, (c) => {
+  if (!scene.textures.exists('tiles_decal')) {
+    const [w, h] = sheetSize(DECALS_PER_SET, DECAL_SETS.length, DECAL_PX);
+    pixelTex(scene, 'tiles_decal', w, h, (c) => {
       const img = c.createImageData(w, h);
-      EDGE_FAMILIES.forEach((fam, row) => {
-        for (let v = 0; v < EDGE_VARIANTS; v++)
-          for (let mask = 1; mask < 16; mask++) {
-            const b = new Buf();
-            drawPiece(b, fam, mask, v);
-            blitToAtlas(img, b, v * 16 + mask, row);
-          }
+      DECAL_SETS.forEach((set, row) => {
+        for (let k = 0; k < DECALS_PER_SET; k++) {
+          const b = new Buf(DECAL_PX, DECAL_PX);
+          DECAL_PAINT[set][k](b, artRng(keySeed(`decal-${set}`) + k * 131));
+          blitToAtlas(img, b, k, row);
+        }
       });
       c.putImageData(img, 0, 0);
     });
+    registerFrames(scene, 'tiles_decal', DECALS_PER_SET, DECAL_SETS.length, (c, r) => r * DECALS_PER_SET + c, DECAL_PX);
+  }
+  if (!scene.textures.exists('tiles_edge')) {
+    const [w, h] = sheetSize(EDGE_COLS, EDGE_ROWS);
+    pixelTex(scene, 'tiles_edge', w, h, () => {});
     registerFrames(scene, 'tiles_edge', EDGE_COLS, EDGE_ROWS, (c, r) => edgeFrame(r, c & 15, c >> 4));
   }
+  if (opts.allEdges) ensureEdgeFamilies(scene, EDGE_FAMILIES.map((_, i) => i));
 }
