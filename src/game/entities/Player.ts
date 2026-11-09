@@ -6,12 +6,17 @@ export class Player {
   readonly shadow: Phaser.GameObjects.Image;
   readonly nameText: Phaser.GameObjects.Text;
   readonly aura: Phaser.GameObjects.Graphics;
+  /** Wind-up bar drawn above the head while a castMs skill charges. */
+  readonly castBar: Phaser.GameObjects.Graphics;
   path: { x: number; y: number }[] = [];
   facing = 1;
   aimAngle = 0;
   moving = false;
-  /** While > now, input movement is locked (dashes, channels). */
+  /** While > now, input movement is locked (dashes). */
   lockedUntil = 0;
+  /** Monster slows on the player (soak, chill). */
+  slowUntil = 0;
+  slowMult = 1;
   private walkT = 0;
   private lunge = 0;
 
@@ -25,6 +30,7 @@ export class Player {
     this.shadow = scene.add.image(x, y, 'shadow');
     this.aura = scene.add.graphics();
     this.sprite = scene.add.image(x, y, `player_${weapon}`).setOrigin(0.45, 0.95);
+    this.castBar = scene.add.graphics().setDepth(100001);
     this.nameText = scene.add
       .text(x, y, name, {
         fontFamily: 'system-ui, sans-serif',
@@ -48,6 +54,22 @@ export class Player {
 
   attackAnim(): void {
     this.lunge = 1;
+  }
+
+  speedMult(now: number): number {
+    return now < this.slowUntil ? this.slowMult : 1;
+  }
+
+  /** Draws the wind-up bar (progress 0..1) or hides it (null). */
+  setCast(progress: number | null, color = 0x9fe0ff): void {
+    const g = this.castBar;
+    g.clear();
+    if (progress === null) return;
+    const w = 34;
+    const x = this.x - w / 2;
+    const y = this.y - 58;
+    g.fillStyle(0x000000, 0.6).fillRoundedRect(x - 1, y - 1, w + 2, 6, 3);
+    g.fillStyle(color, 1).fillRoundedRect(x, y, Math.max(2, w * Math.min(1, progress)), 4, 2);
   }
 
   sync(dt: number, auraColors: number[]): void {

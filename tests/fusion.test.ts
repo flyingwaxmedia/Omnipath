@@ -90,7 +90,7 @@ const DATA: GameData = {
   ],
   classes: [],
   essences: [
-    ess({ id: 'split', category: 'multiply', appliesTo: ['projectile'], powerMul: 0.55, spMul: 1.3, mod: { count: 2, spread: 25 } }),
+    ess({ id: 'split', category: 'multiply', appliesTo: ['projectile'], powerMul: 1.1, spMul: 1.3, mod: { count: 2, spread: 25 } }),
     ess({ id: 'flurry', category: 'multiply', appliesTo: ['strike'], mod: { hits: 1 } }),
     ess({ id: 'pierce', category: 'propagate', appliesTo: ['projectile'], mod: { pierce: 2 } }),
     ess({ id: 'return', category: 'propagate', appliesTo: ['projectile'], mod: { returns: true } }),
@@ -348,9 +348,22 @@ describe('step 5: shape merges', () => {
 
   it('tier-0 skills and skills without a shared tag do not merge', () => {
     expect(failure(resolveFusion(reg, veteran({ slash: 5, whirlwind: 5 }), 'skill:slash', 'skill:whirlwind')).message).toMatch(/too simple/);
-    expect(failure(resolveFusion(reg, veteran({ heavy_cleave: 5, focus: 5 }), 'skill:heavy_cleave', 'skill:focus')).message).toMatch(
+    expect(failure(resolveFusion(reg, veteran({ heavy_cleave: 5, bolt: 5 }), 'skill:heavy_cleave', 'skill:bolt')).message).toMatch(
       /share no common thread/,
     );
+  });
+
+  it('a buff parent never merges: nothing, with a clear message', () => {
+    // focus shares the arcane thread with bolt, yet a stance has no rider to give.
+    for (const [a, b] of [
+      ['skill:bolt', 'skill:focus'],
+      ['skill:focus', 'skill:bolt'],
+      ['skill:mend', 'skill:whirlwind'],
+    ]) {
+      const o = failure(resolveFusion(reg, veteran({ bolt: 5, focus: 5, mend: 3, whirlwind: 5 }), a, b));
+      expect(o.reason).toBe('nothing');
+      expect(o.message).toMatch(/is a stance, not a strike; stances cannot be shape-merged/);
+    }
   });
 });
 

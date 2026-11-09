@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { classTreeTemplate } from '../src/core/balance';
+import { CLASS_TREE_POWER, classTreeTemplate } from '../src/core/balance';
 import { classXpToNext } from '../src/core/classes';
 import { MASTERY, monsterThreat, overmasteryCost, xpForHit, xpToNext } from '../src/core/mastery';
 import { Registry } from '../src/core/registry';
@@ -399,6 +399,18 @@ describe('mastery v2', () => {
     expect(book.progress('whirlwind')!.xp).toBeCloseTo(cost, 6);
     expect(book.essenceSlots('whirlwind')).toBe(2);
     expect(charges.map((e) => e.charges)).toEqual([2, 3]);
+  });
+
+  it('opens the 2nd essence slot without spending charges even when charges are already capped', () => {
+    // E.g. a migrated v1 save: max rank, 3 banked charges, no overmastery bars yet.
+    book.learn('whirlwind', 'start');
+    trainTo(book, 'whirlwind', 5);
+    book.progress('whirlwind')!.charges = MASTERY.maxCharges;
+    const cost = overmasteryCost(5, 1);
+    book.addMastery('whirlwind', cost * 10);
+    expect(book.progress('whirlwind')).toMatchObject({ overBars: 3, charges: MASTERY.maxCharges });
+    expect(book.essenceSlots('whirlwind')).toBe(2);
+    expect(book.progress('whirlwind')!.xp).toBeCloseTo(cost, 6); // then the bar holds full
   });
 
   it('grants threat-weighted use XP once per engaged cast', () => {
@@ -870,7 +882,8 @@ describe('classes', () => {
     expect(book.setImprints(['blademaster', 'sword_saint', 'mimic'])).toMatchObject({ ok: false });
     expect(book.setImprints(['blademaster'])).toEqual({ ok: true, message: 'Imprints set.' });
     expect(book.passives().find((p) => p.source === 'imprint')).toMatchObject({ rank: 1, strength: 1 });
-    expect(book.tagPowerFor(reg.skill('whirlwind')!)).toBe(5); // imprint +5% blade; Saint has no tagPower
+    // The Tier I blade imprint; Saint has no tagPower.
+    expect(book.tagPowerFor(reg.skill('whirlwind')!)).toBe(CLASS_TREE_POWER[1].imprint);
     expect(book.wear('blademaster').ok).toBe(true);
     expect(book.state.imprints).toEqual([]);
   });
@@ -882,7 +895,7 @@ describe('classes', () => {
     expect(book.buyNode('blademaster', 'n4')).toMatchObject({ ok: false });
     expect(book.buyNode('pyroblade', 'n1')).toEqual({ ok: false, message: 'You have not discovered that class.' });
     expect(book.buyNode('blademaster', 'n1')).toEqual({ ok: true, message: 'Blade Focus rank 1.' });
-    expect(book.tagPowerFor(reg.skill('slash')!)).toBe(13);
+    expect(book.tagPowerFor(reg.skill('slash')!)).toBe(10 + CLASS_TREE_POWER[1].power);
     expect(book.buyNode('blademaster', 'n2')).toEqual({ ok: false, message: 'Needs 1 point (0 available).' });
     expect(book.respec('blademaster').ok).toBe(true);
     expect(book.tagPowerFor(reg.skill('slash')!)).toBe(10);
@@ -890,7 +903,7 @@ describe('classes', () => {
     book.addMastery('whirlwind', 120); // 60 class XP → CR 2
     expect(book.state.classes.blademaster.rank).toBe(2);
     expect(book.buyNode('blademaster', 'n4').ok).toBe(true);
-    expect(book.activeBonus()).toEqual({ atk: 13 });
+    expect(book.activeBonus()).toEqual({ atk: 10 + CLASS_TREE_POWER[1].damageStat });
     expect(book.wear('pyroblade')).toMatchObject({ ok: false });
     expect(book.wear('blademaster')).toMatchObject({ ok: true });
   });

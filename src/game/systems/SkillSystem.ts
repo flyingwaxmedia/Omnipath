@@ -1,24 +1,39 @@
+// Shape FX, hit tests, projectiles and riders (docs/CLIENT-v2.md §6): turns SkillDef shapes into on-screen
+// effects and calls the host for every hit. Damage, statuses and XP live in Combat.ts.
 import Phaser from 'phaser';
+import type { DamageRoll } from '../../core/combat';
 import type { SkillDef } from '../../core/types';
+import { isBlockedPx } from '../../core/world/compile';
+import type { CompiledMap } from '../../core/world/types';
 import type { Monster } from '../entities/Monster';
 import type { Player } from '../entities/Player';
-import { isWalkablePx, type WorldMap } from '../world/map';
 
 export interface Cast {
   id: number;
   skill: SkillDef;
   rank: number;
   origin: { x: number; y: number };
-  /** Shared across copies of the cast (pulses, projectiles) for the mastery hit cap. */
+  /** Shared across copies of the cast (pulses, projectiles, reprise) for the mastery hit cap. */
   tally: { hits: number };
+  /** Shared: recordUse has been granted (lazily, on the cast's first hit). */
+  used: { v: boolean };
+  /** Shared: HP leeched by this cast (capped at 8% max HP). */
+  leech: { healed: number };
+  /** Power multiplier of this copy (reprise). */
+  mult: number;
+  /** True for the reprised copy (never reprises again). */
+  reprise: boolean;
+  /** Arc rider zaps never arc again. */
+  arcZap?: boolean;
 }
 
 export interface CombatHost {
   world: Phaser.Scene;
-  map: WorldMap;
+  cm: CompiledMap;
   player: Player;
   liveMonsters(): Monster[];
-  hit(m: Monster, cast: Cast, falloff?: number): void;
+  /** Applies one hit; returns the roll, or null when nothing happened (target already dead). */
+  hit(m: Monster, cast: Cast, falloff?: number): DamageRoll | null;
   applyBuff(skill: SkillDef, rank: number): void;
   colorFor(skill: SkillDef): number;
 }
@@ -30,14 +45,17 @@ interface Projectile {
   y: number;
   vx: number;
   vy: number;
+  speed: number;
   traveled: number;
   range: number;
   pierce: number;
+  pierceMax: number;
   size: number;
   hitSet: Set<Monster>;
   spin: number;
   color: number;
   trailT: number;
+  returning: boolean;
 }
 
 const DEG = Math.PI / 180;
@@ -49,7 +67,7 @@ function angleDiff(a: number, b: number): number {
   return Math.abs(d);
 }
 
-function distToSegment(px: number, py: number, ax: number, ay: number, bx: number, by: number): number {
+export function distToSegment(px: number, py: number, ax: number, ay: number, bx: number, by: number): number {
   const dx = bx - ax;
   const dy = by - ay;
   const len2 = dx * dx + dy * dy;
@@ -57,7 +75,11 @@ function distToSegment(px: number, py: number, ax: number, ay: number, bx: numbe
   return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
 }
 
-/** Turns SkillDef shapes into on-screen effects and hit tests. */
+/** Chain-shaped knife skills render as bouncing knives, not lightning. */
+export function isKnifeChain(skill: SkillDef): boolean {
+  return skill.shape.kind === 'chain' && (skill.tags.includes('projectile') || skill.tags.includes('pierce'));
+}
+
 export class SkillSystem {
   private projectiles: Projectile[] = [];
   private nextId = 1;
@@ -65,7 +87,17 @@ export class SkillSystem {
   constructor(private host: CombatHost) {}
 
   newCast(skill: SkillDef, rank: number, origin: { x: number; y: number }): Cast {
-    return { id: this.nextId++, skill, rank, origin: { ...origin }, tally: { hits: 0 } };
+    return {
+      id: this.nextId++,
+      skill,
+      rank,
+      origin: { ...origin },
+      tally: { hits: 0 },
+      used: { v: false },
+      leech: { healed: 0 },
+      mult: 1,
+      reprise: false,
+    };
   }
 
   /** Range used for auto-targeting this skill. */
@@ -89,17 +121,33 @@ export class SkillSystem {
     }
   }
 
+  /** Executes a cast (and schedules its reprise rider). */
   execute(cast: Cast, aim: { x: number; y: number }, target: Monster | null): void {
+    this.run(cast, aim, target);
+    const rep = cast.skill.riders?.reprise;
+    if (rep && !cast.reprise && cast.skill.shape.kind !== 'buff') {
+      this.host.world.time.delayedCall(rep.delayMs, () => {
+        const p = this.host.player;
+        const t = target && target.alive ? target : null;
+        const a = t ? { x: t.x, y: t.y } : { x: p.x + (aim.x - cast.origin.x), y: p.y + (aim.y - cast.origin.y) };
+        this.fxRing(p.x, p.y - 6, 26, this.host.colorFor(cast.skill), false);
+        this.run({ ...cast, origin: { x: p.x, y: p.y }, mult: cast.mult * rep.mult, reprise: true }, a, t);
+      });
+    }
+  }
+
+  private run(cast: Cast, aim: { x: number; y: number }, target: Monster | null): void {
     const { skill } = cast;
     const s = skill.shape;
     const o = cast.origin;
     const ang = Math.atan2(aim.y - o.y, aim.x - o.x);
     const color = this.host.colorFor(skill);
+    const scene = this.host.world;
     switch (s.kind) {
       case 'strike': {
         const hits = s.hits ?? 1;
         for (let h = 0; h < hits; h++) {
-          this.host.world.time.delayedCall(h * 130, () => {
+          scene.time.delayedCall(h * 130, () => {
             const p = this.host.player;
             this.fxArc(p.x, p.y - 12, ang, s.arc * DEG, s.range, color, h % 2 === 1);
             for (const m of this.host.liveMonsters()) {
@@ -107,21 +155,22 @@ export class SkillSystem {
               if (d > s.range + m.radius) continue;
               const a = Math.atan2(m.y - p.y, m.x - p.x);
               if (d > m.radius + 8 && angleDiff(a, ang) > (s.arc * DEG) / 2) continue;
-              this.host.hit(m, cast);
+              this.host.hit(m, { ...cast, origin: { x: p.x, y: p.y } });
             }
           });
         }
-        if (skill.power >= 2) this.host.world.cameras.main.shake(90, 0.004);
+        if (skill.power >= 2) scene.cameras.main.shake(90, 0.004);
         break;
       }
       case 'spin': {
         const pulses = s.pulses ?? 1;
         for (let i = 0; i < pulses; i++) {
-          this.host.world.time.delayedCall(i * 170, () => {
+          scene.time.delayedCall(i * 170, () => {
             const p = this.host.player;
             this.fxRing(p.x, p.y - 6, s.radius, color, true);
             for (const m of this.host.liveMonsters()) {
-              if (Math.hypot(m.x - p.x, m.y - p.y) <= s.radius + m.radius) this.host.hit(m, { ...cast, origin: { x: p.x, y: p.y } }, i === 0 ? 1 : 0.85);
+              if (Math.hypot(m.x - p.x, m.y - p.y) <= s.radius + m.radius)
+                this.host.hit(m, { ...cast, origin: { x: p.x, y: p.y } }, i === 0 ? 1 : 0.85);
             }
           });
         }
@@ -139,70 +188,28 @@ export class SkillSystem {
         }
         break;
       }
-      case 'dash': {
+      case 'dash':
         this.dash(cast, ang, s.distance, s.width, !!s.spin, color);
         break;
-      }
       case 'nova': {
         const d = Math.min(s.range, Math.hypot(aim.x - o.x, aim.y - o.y));
         const cx = o.x + Math.cos(ang) * d;
         const cy = o.y + Math.sin(ang) * d;
         const delay = s.delay ?? 200;
         this.fxTelegraph(cx, cy, s.radius, color, delay);
-        this.host.world.time.delayedCall(delay, () => {
+        scene.time.delayedCall(delay, () => {
           this.fxRing(cx, cy, s.radius, color, false);
           this.fxBurst(cx, cy, color, 14);
           for (const m of this.host.liveMonsters()) {
             if (Math.hypot(m.x - cx, m.y - cy) <= s.radius + m.radius) this.host.hit(m, { ...cast, origin: { x: cx, y: cy } });
           }
-          if (skill.power >= 2) this.host.world.cameras.main.shake(120, 0.006);
+          if (skill.power >= 2) scene.cameras.main.shake(120, 0.006);
         });
         break;
       }
-      case 'chain': {
-        const live = this.host.liveMonsters();
-        let first: Monster | null = target && target.alive && Math.hypot(target.x - o.x, target.y - o.y) <= s.range ? target : null;
-        if (!first) {
-          let best = Infinity;
-          for (const m of live) {
-            const dd = Math.hypot(m.x - o.x, m.y - o.y);
-            if (dd <= s.range && dd < best) {
-              best = dd;
-              first = m;
-            }
-          }
-        }
-        const pts: { x: number; y: number }[] = [{ x: o.x, y: o.y - 16 }];
-        if (!first) {
-          pts.push({ x: o.x + Math.cos(ang) * s.range * 0.6, y: o.y + Math.sin(ang) * s.range * 0.6 });
-          this.fxLightning(pts, color);
-          break;
-        }
-        const chain: Monster[] = [first];
-        while (chain.length <= s.jumps) {
-          const last = chain[chain.length - 1];
-          let next: Monster | null = null;
-          let best = 150;
-          for (const m of live) {
-            if (chain.includes(m)) continue;
-            const dd = Math.hypot(m.x - last.x, m.y - last.y);
-            if (dd < best) {
-              best = dd;
-              next = m;
-            }
-          }
-          if (!next) break;
-          chain.push(next);
-        }
-        chain.forEach((m, i) => {
-          pts.push({ x: m.x, y: m.y - 10 });
-          this.host.world.time.delayedCall(i * 60, () => {
-            if (m.alive) this.host.hit(m, cast, Math.pow(0.85, i));
-          });
-        });
-        this.fxLightning(pts, color);
+      case 'chain':
+        this.chain(cast, s.range, s.jumps, ang, target, color);
         break;
-      }
       case 'buff': {
         this.host.applyBuff(skill, cast.rank);
         const p = this.host.player;
@@ -216,11 +223,90 @@ export class SkillSystem {
     }
   }
 
-  update(dt: number): void {
-    const map = this.host.map;
+  private chain(cast: Cast, range: number, jumps: number, ang: number, target: Monster | null, color: number): void {
+    const o = cast.origin;
     const live = this.host.liveMonsters();
+    const knives = isKnifeChain(cast.skill);
+    let first: Monster | null = target && target.alive && Math.hypot(target.x - o.x, target.y - o.y) <= range + target.radius ? target : null;
+    if (!first) {
+      let best = Infinity;
+      for (const m of live) {
+        const dd = Math.hypot(m.x - o.x, m.y - o.y);
+        if (dd <= range + m.radius && dd < best) {
+          best = dd;
+          first = m;
+        }
+      }
+    }
+    const start = { x: o.x, y: o.y - 16 };
+    if (!first) {
+      const end = { x: o.x + Math.cos(ang) * range * 0.6, y: o.y + Math.sin(ang) * range * 0.6 };
+      if (knives) this.fxKnife(start, end, color, 0);
+      else this.fxLightning([start, end], color);
+      return;
+    }
+    const chain: Monster[] = [first];
+    const nextFrom = (last: Monster): Monster | null => {
+      let next: Monster | null = null;
+      let best = 150;
+      for (const m of this.host.liveMonsters()) {
+        if (chain.includes(m)) continue;
+        const dd = Math.hypot(m.x - last.x, m.y - last.y);
+        if (dd < best) {
+          best = dd;
+          next = m;
+        }
+      }
+      return next;
+    };
+    while (chain.length <= jumps) {
+      const next = nextFrom(chain[chain.length - 1]);
+      if (!next) break;
+      chain.push(next);
+    }
+    const step = knives ? 90 : 60;
+    let extended = false;
+    const strike = (m: Monster, i: number, from: { x: number; y: number }) => {
+      const to = { x: m.x, y: m.y - 10 };
+      if (knives) this.fxKnife(from, to, color, i * step);
+      this.host.world.time.delayedCall(i * step + (knives ? step : 0), () => {
+        if (!m.alive) return;
+        const roll = this.host.hit(m, cast, Math.pow(0.85, i));
+        // Conduct: one extra jump on chain shapes.
+        if (roll?.combo?.extraJump && !extended) {
+          extended = true;
+          const extra = nextFrom(chain[chain.length - 1]);
+          if (extra) {
+            const last = chain[chain.length - 1];
+            chain.push(extra);
+            if (!knives) this.fxLightning([{ x: last.x, y: last.y - 10 }, { x: extra.x, y: extra.y - 10 }], color);
+            strike(extra, chain.length - 1, { x: last.x, y: last.y - 10 });
+          }
+        }
+      });
+    };
+    const pts: { x: number; y: number }[] = [start];
+    chain.forEach((m, i) => {
+      strike(m, i, pts[pts.length - 1]);
+      pts.push({ x: m.x, y: m.y - 10 });
+    });
+    if (!knives) this.fxLightning(pts, color);
+  }
+
+  update(dt: number): void {
+    const map = this.host.cm;
+    const live = this.host.liveMonsters();
+    const p = this.host.player;
     for (let i = this.projectiles.length - 1; i >= 0; i--) {
       const pr = this.projectiles[i];
+      if (pr.returning) {
+        // Home back toward the caster.
+        const dx = p.x - pr.x;
+        const dy = p.y - pr.y;
+        const d = Math.hypot(dx, dy) || 1;
+        pr.vx = (dx / d) * pr.speed;
+        pr.vy = (dy / d) * pr.speed;
+      }
       const stepX = pr.vx * dt;
       const stepY = pr.vy * dt;
       pr.x += stepX;
@@ -228,21 +314,27 @@ export class SkillSystem {
       pr.traveled += Math.hypot(stepX, stepY);
       pr.img.setPosition(pr.x, pr.y - 14);
       if (pr.spin) pr.img.rotation += pr.spin * dt;
+      else pr.img.rotation = Math.atan2(pr.vy, pr.vx);
       pr.img.setDepth(pr.y + 20);
       pr.trailT -= dt;
       if (pr.trailT <= 0) {
         pr.trailT = 0.03;
         this.particle(pr.x, pr.y - 14, pr.color, 0, 0, 220, pr.size / 20);
       }
-      let dead = pr.traveled >= pr.range || !isWalkablePx(map, pr.x, pr.y);
+      let dead = false;
+      if (pr.returning) {
+        dead = Math.hypot(p.x - pr.x, p.y - pr.y) < 18 || pr.traveled > pr.range * 3;
+      } else if (pr.traveled >= pr.range || isBlockedPx(map, pr.x, pr.y)) {
+        dead = !this.turnBack(pr);
+      }
       if (!dead) {
         for (const m of live) {
           if (pr.hitSet.has(m) || !m.alive) continue;
-          if (Math.hypot(m.x - pr.x, m.y - 10 - (pr.y - 10)) <= m.radius + pr.size / 2) {
+          if (Math.hypot(m.x - pr.x, m.y - pr.y) <= m.radius + pr.size / 2) {
             pr.hitSet.add(m);
             this.host.hit(m, { ...pr.cast, origin: { x: pr.x - pr.vx * 0.05, y: pr.y - pr.vy * 0.05 } });
             if (pr.pierce-- <= 0) {
-              dead = true;
+              dead = !this.turnBack(pr);
               break;
             }
           }
@@ -254,6 +346,16 @@ export class SkillSystem {
         this.projectiles.splice(i, 1);
       }
     }
+  }
+
+  /** `returns` rider: the projectile flies back once (hit set cleared once). False if it cannot. */
+  private turnBack(pr: Projectile): boolean {
+    if (pr.returning || !pr.cast.skill.riders?.returns) return false;
+    pr.returning = true;
+    pr.hitSet.clear();
+    pr.pierce = pr.pierceMax;
+    pr.traveled = 0;
+    return true;
   }
 
   // ------------------------------------------------------------ helpers
@@ -273,14 +375,17 @@ export class SkillSystem {
       y: cast.origin.y,
       vx: Math.cos(a) * speed,
       vy: Math.sin(a) * speed,
+      speed,
       traveled: 0,
       range,
       pierce,
+      pierceMax: pierce,
       size,
       hitSet: new Set(),
       spin: key === 'fx_blade' ? 18 : 0,
       color,
       trailT: 0,
+      returning: false,
     });
   }
 
@@ -293,7 +398,7 @@ export class SkillSystem {
     for (let d = 8; d <= distance; d += 8) {
       const nx = sx + Math.cos(ang) * d;
       const ny = sy + Math.sin(ang) * d;
-      if (!isWalkablePx(this.host.map, nx, ny)) break;
+      if (isBlockedPx(this.host.cm, nx, ny)) break;
       ex = nx;
       ey = ny;
     }
@@ -301,7 +406,6 @@ export class SkillSystem {
     const dur = 170;
     p.path = [];
     p.lockedUntil = scene.time.now + dur + 30;
-    // Afterimages.
     for (let i = 0; i < 5; i++) {
       const t = i / 5;
       const ghost = scene.add
@@ -375,7 +479,7 @@ export class SkillSystem {
     }
   }
 
-  private fxArc(x: number, y: number, ang: number, arc: number, range: number, color: number, flip: boolean) {
+  fxArc(x: number, y: number, ang: number, arc: number, range: number, color: number, flip: boolean) {
     const scene = this.host.world;
     const g = scene.add.graphics({ x, y }).setDepth(y + 40).setBlendMode(Phaser.BlendModes.ADD);
     const r = range * 0.75;
@@ -418,7 +522,7 @@ export class SkillSystem {
     });
   }
 
-  private fxTelegraph(x: number, y: number, radius: number, color: number, delay: number) {
+  fxTelegraph(x: number, y: number, radius: number, color: number, delay: number) {
     const scene = this.host.world;
     const g = scene.add.graphics({ x, y }).setDepth(y - 900);
     g.lineStyle(2, color, 0.8);
@@ -428,7 +532,31 @@ export class SkillSystem {
     scene.tweens.add({ targets: g, alpha: 0.3, duration: delay, onComplete: () => g.destroy() });
   }
 
-  private fxLightning(pts: { x: number; y: number }[], color: number) {
+  /** A knife flying from a to b (bouncing chain knives). */
+  fxKnife(a: { x: number; y: number }, b: { x: number; y: number }, color: number, delay: number) {
+    const scene = this.host.world;
+    const img = scene.add
+      .image(a.x, a.y, 'fx_knife')
+      .setTint(color)
+      .setScale(1.1)
+      .setRotation(Math.atan2(b.y - a.y, b.x - a.x))
+      .setDepth(100000)
+      .setAlpha(0);
+    scene.tweens.add({
+      targets: img,
+      x: b.x,
+      y: b.y,
+      alpha: { from: 1, to: 1 },
+      delay,
+      duration: 90,
+      onComplete: () => {
+        this.fxBurst(b.x, b.y, color, 3);
+        img.destroy();
+      },
+    });
+  }
+
+  fxLightning(pts: { x: number; y: number }[], color: number) {
     const scene = this.host.world;
     const g = scene.add.graphics().setDepth(100000).setBlendMode(Phaser.BlendModes.ADD);
     const draw = (w: number, c: number, a: number) => {

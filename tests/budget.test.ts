@@ -4,22 +4,15 @@
 // legal essence set of size 0–2, plus every legal shape merge (± element ± 1 essence; pairs with an
 // authored recipe never merge), and checks:
 // - potentialHits ≤ MAX_HITS, cooldown ≥ 300 ms (authored skills may use 0 = weapon delay), name ≤ 4 words;
-// - damage per SP within ±35%:
+// - damage per SP within ±35%, with NO waivers:
 //   · essence variants: every essence step is budgeted — a 1-essence variant against base (or
 //     base@element), a 2-essence variant against each of its 1-essence subsets. Damage is `power`,
 //     or `power × hits per cast` once a multiply essence (split/flurry) is on the skill;
 //   · merges: within [0.65 × the weaker, 1.35 × the stronger] attacking parent, damage = power × hits
 //     per cast (a merge changes shape);
 //   · references that cost 0 SP (auto-attacks) have no SP budget and are skipped.
-//
-// KNOWN SPEC GAPS — the −35% floor is waived (the +35% ceiling never is) for three cases the SPEC §3
-// numbers cannot satisfy; they are reported upstream and the waivers go when the spec changes:
-// 1. a multiply step whose hit gain is below break-even, (1 − 0.35) × spMul / powerMul (split: ×1.54,
-//    flurry: ×1.21) — split's flat "+2 count" on volleys of 4+ projectiles, or a gain the hit clamp
-//    caps;
-// 2. a step on a multiply variant that the hit clamp makes lose hits (count is trimmed before
-//    arc.targets);
-// 3. a merge with a buff parent (no rider, yet sp = max + 0.6 × min charges for the buff).
+// The rules that make this hold (SPEC §3): split spreads 1.1 × the volley over the new projectile
+// count; a hit-trimmed variant is renormalized (capped at +35% per step); buff parents never merge.
 import { beforeAll, describe, expect, it } from 'vitest';
 import {
   MAX_HITS,
@@ -56,14 +49,12 @@ interface Report {
   invariants: string[];
   /** Above +35%: never waived. */
   ceiling: string[];
-  /** Below −35%, outside the known spec gaps. */
+  /** Below −35%: never waived either. */
   floor: string[];
-  /** Below −35% inside a known spec gap (waived). */
-  gaps: number;
   checked: number;
 }
 
-const emptyReport = (): Report => ({ invariants: [], ceiling: [], floor: [], gaps: 0, checked: 0 });
+const emptyReport = (): Report => ({ invariants: [], ceiling: [], floor: [], checked: 0 });
 
 function checkInvariants(s: SkillDef, out: Report): void {
   out.checked++;
@@ -74,20 +65,15 @@ function checkInvariants(s: SkillDef, out: Report): void {
   if (words(s.name) > MAX_NAME_WORDS) out.invariants.push(`${s.id}: name "${s.name}" has ${words(s.name)} words`);
 }
 
-/** One essence step: `v` is `ref` plus the essence `added`. */
-function checkStep(v: SkillDef, ref: SkillDef, added: EssenceDef, out: Report): void {
+/** One essence step: `v` is `ref` plus one more essence. */
+function checkStep(v: SkillDef, ref: SkillDef, out: Report): void {
   if (ref.spCost <= 0) return;
   const total = multiplies(v);
   const dmg = (s: SkillDef): number => (total ? totalDamage(s) : s.power);
   const ratio = dmg(v) / v.spCost / (dmg(ref) / ref.spCost);
   const msg = `${v.id}: damage/SP ${pct(ratio)} vs ${ref.id}`;
   if (ratio > 1 + BAND) out.ceiling.push(msg);
-  if (ratio >= 1 - BAND) return;
-  const gain = shapeHits(v.shape) / shapeHits(ref.shape);
-  const multiplyBelowBreakEven = added.category === 'multiply' && gain < ((1 - BAND) * added.spMul) / added.powerMul;
-  const clampedMultiply = total && gain < 1;
-  if (multiplyBelowBreakEven || clampedMultiply) out.gaps++;
-  else out.floor.push(msg);
+  if (ratio < 1 - BAND) out.floor.push(msg);
 }
 
 function checkMerge(m: SkillDef, a: SkillDef, b: SkillDef, out: Report): void {
@@ -98,9 +84,7 @@ function checkMerge(m: SkillDef, a: SkillDef, b: SkillDef, out: Report): void {
   const hi = Math.max(...rates) * (1 + BAND);
   const msg = `${m.id}: damage/SP ${r.toFixed(3)} outside [${lo.toFixed(3)}, ${hi.toFixed(3)}] of ${a.id} / ${b.id}`;
   if (r > hi) out.ceiling.push(msg);
-  if (r >= lo) return;
-  if (a.shape.kind === 'buff' || b.shape.kind === 'buff') out.gaps++;
-  else out.floor.push(msg);
+  if (r < lo) out.floor.push(msg);
 }
 
 function variantsReport(): Report {
@@ -111,17 +95,17 @@ function variantsReport(): Report {
       const ref = compose(base, el, []);
       checkInvariants(ref, out);
       const singles = fit.map((e) => compose(base, el, [e]));
-      fit.forEach((e, i) => {
+      fit.forEach((_, i) => {
         checkInvariants(singles[i], out);
-        checkStep(singles[i], ref, e, out);
+        checkStep(singles[i], ref, out);
       });
       for (let i = 0; i < fit.length; i++) {
         for (let j = i + 1; j < fit.length; j++) {
           if (!legalEssenceSet(base, [fit[i], fit[j]])) continue;
           const v = compose(base, el, [fit[i], fit[j]]);
           checkInvariants(v, out);
-          checkStep(v, singles[i], fit[j], out);
-          checkStep(v, singles[j], fit[i], out);
+          checkStep(v, singles[i], out);
+          checkStep(v, singles[j], out);
         }
       }
     }
@@ -146,7 +130,7 @@ function mergesReport(): Report {
         for (const e of fit) {
           const v = compose(m, el, [e]);
           checkInvariants(v, out);
-          checkStep(v, ref, e, out);
+          checkStep(v, ref, out);
         }
       }
     }
@@ -185,7 +169,7 @@ describe('procedural skill budget (src/data)', () => {
     expect(variants.ceiling, summary(variants.ceiling)).toEqual([]);
   });
 
-  it('variants: no essence step loses more than 35% damage per SP (outside the known spec gaps)', () => {
+  it('variants: no essence step loses more than 35% damage per SP', () => {
     expect(variants.floor, summary(variants.floor)).toEqual([]);
   });
 
@@ -197,7 +181,38 @@ describe('procedural skill budget (src/data)', () => {
     expect(merges.ceiling, summary(merges.ceiling)).toEqual([]);
   });
 
-  it('merges: never more than 35% below the weaker parent (outside the known spec gaps)', () => {
+  it('merges: never more than 35% below the weaker parent', () => {
     expect(merges.floor, summary(merges.floor)).toEqual([]);
+  });
+
+  it('split: every untrimmed volley deals 1.1x the base volley (1.1c/(c+2) per projectile) for 1.3x the SP', () => {
+    const split = reg.essence('split')!;
+    const bad: string[] = [];
+    let n = 0;
+    for (const base of reg.authoredSkills().filter(isAttack)) {
+      if (!legalEssenceSet(base, [split])) continue;
+      const v = compose(base, undefined, [split]);
+      const c = shapeHits(base.shape);
+      if (shapeHits(v.shape) !== c + 2) continue; // trimmed by the hit clamp (renormalized instead)
+      n++;
+      // Per projectile 1.1 × c / (c + 2) of the base, to the 0.01 power rounding.
+      const expected = (1.1 * base.power * c) / (c + 2);
+      // An SP-free base (auto-attack) starts essence variants at 2 SP.
+      if (Math.abs(v.power - expected) > 0.0051 || v.spCost !== Math.round((base.spCost || 2) * 1.3 * 100) / 100) {
+        bad.push(`${v.id}: power ${v.power} (expected ${expected.toFixed(3)}), sp ${v.spCost}`);
+      }
+    }
+    expect(n).toBeGreaterThan(0);
+    expect(bad).toEqual([]);
+  });
+
+  it('merges: no buff parent ever merges', () => {
+    const authored = reg.authoredSkills();
+    const buffs = authored.filter((s) => s.shape.kind === 'buff');
+    expect(buffs.length).toBeGreaterThan(0);
+    const merged = buffs.flatMap((buff) =>
+      authored.filter((o) => o.id !== buff.id && mergeSkills(buff, o) !== null).map((o) => `${buff.id} + ${o.id}`),
+    );
+    expect(merged).toEqual([]);
   });
 });

@@ -1,0 +1,748 @@
+/* Panels: modal + bottom sheets and every panel body (skills, altar, classes, codex, bag, trainer, map). */
+
+.modal {
+  position: absolute;
+  inset: 0;
+  background: rgba(4, 7, 16, 0.55);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  animation: fadein 0.15s;
+}
+
+.sheet {
+  width: min(580px, 100%);
+  max-height: 88vh;
+  display: flex;
+  flex-direction: column;
+  background: linear-gradient(#1d2850, #111933);
+  border: 1px solid var(--edge);
+  border-bottom: none;
+  border-radius: 20px 20px 0 0;
+  box-shadow: 0 -10px 40px rgba(0, 0, 0, 0.5);
+  animation: sheetin 0.22s ease-out;
+  padding-bottom: var(--safe-b);
+  user-select: text;
+}
+
+.sheet header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.sheet h2 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.sheet .x {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.08);
+  font-size: 16px;
+}
+
+.sheet-body {
+  overflow-y: auto;
+  padding: 6px 16px 18px;
+  -webkit-overflow-scrolling: touch;
+  touch-action: pan-y;
+}
+
+.sheet h3 {
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--gold);
+  margin: 16px 0 8px;
+}
+
+.sheet h3 small {
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--mute);
+}
+
+.sub {
+  color: var(--mute);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.foot {
+  color: var(--mute);
+  font-size: 12px;
+  text-align: center;
+  margin-top: 18px;
+}
+
+.warn {
+  color: #ffb0a0;
+  font-size: 13px;
+}
+
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 8px;
+}
+
+.skill-card {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  text-align: left;
+  padding: 10px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.skill-card .ico {
+  font-size: 28px;
+  width: 40px;
+  text-align: center;
+}
+
+.skill-card .meta {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.skill-card .rank {
+  font-size: 11px;
+  color: var(--mute);
+}
+
+.skill-card .rank em {
+  color: var(--gold);
+  font-style: normal;
+  font-weight: 700;
+}
+
+.skill-card.maxed {
+  border-color: rgba(255, 215, 106, 0.4);
+}
+
+.skill-card.can-morph {
+  animation: morphglow 1.2s ease-in-out infinite;
+}
+
+.back {
+  color: var(--gold);
+  font-weight: 700;
+  padding: 8px 0;
+}
+
+.skill-head {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+.skill-head .big-ico {
+  font-size: 42px;
+}
+
+.skill-head .nm {
+  margin: 0;
+  color: var(--ink);
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 20px;
+}
+
+.kv {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 6px 14px;
+  font-size: 13px;
+  align-items: center;
+  background: rgba(0, 0, 0, 0.2);
+  padding: 10px 12px;
+  border-radius: 12px;
+}
+
+.kv span {
+  color: var(--mute);
+}
+
+.assign {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.slotpick {
+  width: 48px;
+  height: 48px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+  padding: 0;
+}
+
+.slotpick small {
+  font-size: 9px;
+  color: var(--mute);
+}
+
+.slotpick.on {
+  border-color: var(--gold);
+  box-shadow: 0 0 0 1px var(--gold);
+}
+
+.morphs,
+.classes,
+.weapons,
+.els {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.morph,
+.cls,
+.wpn,
+.el-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 10px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.morph > span:nth-child(2),
+.cls > span:nth-child(2),
+.wpn > span:nth-child(2),
+.el-row > span:nth-child(2) {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.morph small,
+.cls small,
+.wpn small,
+.el-row small {
+  color: var(--mute);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.morph .ico,
+.cls .ico,
+.wpn .ico,
+.el-row .ico {
+  font-size: 26px;
+  width: 36px;
+  text-align: center;
+}
+
+.morph.ready {
+  border-color: rgba(255, 215, 106, 0.5);
+  background: rgba(255, 215, 106, 0.08);
+}
+
+.morph.locked,
+.cls.locked,
+.el-row.locked {
+  opacity: 0.75;
+  border-style: dashed;
+}
+
+.morph.owned {
+  opacity: 0.6;
+}
+
+.cls.active {
+  border-color: var(--gold);
+  background: rgba(255, 215, 106, 0.08);
+}
+
+.cls .bonus {
+  color: #b8f0c0 !important;
+}
+
+.el-row .src {
+  color: var(--gold) !important;
+}
+
+.wpn.on {
+  border-color: var(--gold);
+}
+
+.altar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 16px 8px;
+  border-radius: 16px;
+  background: radial-gradient(circle at 50% 50%, rgba(160, 110, 255, 0.22), rgba(0, 0, 0, 0.25));
+  border: 1px solid rgba(190, 150, 255, 0.3);
+  flex-wrap: wrap;
+}
+
+.altar.fusing {
+  animation: fusing 0.65s ease-in;
+}
+
+@keyframes fusing {
+  30% {
+    transform: scale(1.03) rotate(-1deg);
+    box-shadow: 0 0 30px rgba(200, 160, 255, 0.6);
+  }
+  60% {
+    transform: scale(0.98) rotate(1deg);
+    filter: brightness(1.6);
+  }
+  100% {
+    filter: brightness(2.2);
+  }
+}
+
+.fslot {
+  width: 86px;
+  height: 86px;
+  border-radius: 16px;
+  border: 2px dashed rgba(200, 170, 255, 0.5);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  background: rgba(0, 0, 0, 0.3);
+}
+
+.fslot .ico {
+  font-size: 32px;
+}
+
+.fslot small {
+  font-size: 10px;
+  color: var(--mute);
+  max-width: 80px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fslot.full {
+  border-style: solid;
+  border-color: #c8a8ff;
+  background: rgba(160, 110, 255, 0.18);
+}
+
+.altar .plus {
+  font-size: 26px;
+  color: #c8a8ff;
+}
+
+.altar .fuse {
+  flex-basis: 100%;
+  max-width: 200px;
+  margin-top: 6px;
+}
+
+.memory {
+  text-align: center;
+  font-size: 12px;
+  margin: 8px 0;
+  color: var(--mute);
+}
+
+.memory .good {
+  color: #b8f0c0;
+}
+
+.memory .bad {
+  color: #ffb0a0;
+}
+
+.result {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 12px;
+  border-radius: 12px;
+  margin-bottom: 8px;
+  flex-direction: column;
+  text-align: center;
+  animation: pop 0.35s ease-out;
+}
+
+.result.good {
+  background: rgba(255, 215, 106, 0.14);
+  border: 1px solid var(--gold);
+  flex-direction: row;
+  text-align: left;
+}
+
+.result.good .ico {
+  font-size: 32px;
+}
+
+.result.good span {
+  display: flex;
+  flex-direction: column;
+}
+
+.result.bad {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--mute);
+  font-size: 13px;
+}
+
+@keyframes pop {
+  from {
+    transform: scale(0.85);
+    opacity: 0;
+  }
+}
+
+.ings {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(76px, 1fr));
+  gap: 6px;
+}
+
+.ing {
+  position: relative;
+  padding: 8px 4px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+}
+
+.ing .ico {
+  font-size: 24px;
+}
+
+.ing small {
+  font-size: 10px;
+  text-align: center;
+  line-height: 1.15;
+  color: var(--ink);
+}
+
+.ing .rk {
+  position: absolute;
+  top: 3px;
+  right: 5px;
+  font-size: 9px;
+  color: var(--mute);
+}
+
+.ing.locked {
+  opacity: 0.4;
+}
+
+.ing.inuse {
+  border-color: #c8a8ff;
+  background: rgba(160, 110, 255, 0.2);
+}
+
+.whisper {
+  font-style: italic;
+  color: #c8b8ff;
+  font-size: 13px;
+  margin: 4px 0;
+}
+
+.recipe {
+  font-size: 13px;
+  padding: 6px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin: 8px 0;
+}
+
+.stat-grid > div {
+  background: rgba(0, 0, 0, 0.22);
+  border-radius: 12px;
+  padding: 10px 6px;
+  text-align: center;
+}
+
+.stat-grid b {
+  display: block;
+  font-size: 18px;
+  color: var(--gold);
+}
+
+.stat-grid small {
+  color: var(--mute);
+  font-size: 11px;
+}
+
+.tips {
+  padding-left: 18px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--mute);
+}
+
+.tips b {
+  color: var(--ink);
+}
+
+.eat {
+  width: 100%;
+}
+
+@media (max-height: 460px) {
+  .sheet {
+    max-height: 96vh;
+  }
+}
+
+@media (min-width: 900px) {
+  .modal {
+    align-items: center;
+  }
+
+  .sheet {
+    border-radius: 20px;
+    border-bottom: 1px solid var(--edge);
+  }
+}
+
+/* ------------------------------------------------------------------ v2: shared panel widgets */
+
+.sheet .x {
+  width: 44px;
+  height: 44px;
+}
+
+.back {
+  min-height: 44px;
+}
+
+.tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 8px 0 4px;
+}
+
+.tabs .tab {
+  flex: 1 0 auto;
+  min-height: 44px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: var(--mute);
+  font-weight: 700;
+  font-size: 13px;
+}
+
+.tabs .tab.on {
+  color: var(--gold);
+  border-color: var(--edge);
+  background: rgba(255, 215, 106, 0.1);
+}
+
+.skill-card.variant {
+  margin-left: 18px;
+  border-style: dashed;
+}
+
+.skill-card.unusable {
+  opacity: 0.55;
+}
+
+.reqs {
+  list-style: none;
+  padding: 0;
+  margin: 4px 0;
+  font-size: 12px;
+}
+
+.reqs li.ok {
+  color: #b8f0c0;
+}
+
+.reqs li.no {
+  color: #ffb0a0;
+}
+
+.morph small.spark {
+  color: var(--gold);
+}
+
+.morph.sealed {
+  opacity: 0.85;
+}
+
+.prow,
+.mrow,
+.irow,
+.trow,
+.tnode {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 8px 10px;
+  margin-bottom: 6px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.prow > span:nth-child(2),
+.mrow > span:nth-child(2),
+.irow > span:nth-child(2),
+.trow > span:nth-child(2),
+.tnode > span:nth-child(2) {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.prow small,
+.mrow small,
+.irow small,
+.trow small,
+.tnode small {
+  color: var(--mute);
+  font-size: 11px;
+}
+
+.prow .ico,
+.mrow .ico,
+.irow .ico,
+.trow .ico,
+.tnode .ico {
+  font-size: 24px;
+  width: 32px;
+  text-align: center;
+}
+
+.prow.dim,
+.mrow.locked {
+  opacity: 0.55;
+}
+
+.mrow.owned {
+  border-color: rgba(255, 215, 106, 0.35);
+}
+
+.irow .btns {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.trow.here {
+  border-color: var(--edge);
+}
+
+.trow .you {
+  color: var(--gold);
+}
+
+.stars {
+  color: var(--gold);
+  letter-spacing: 1px;
+  font-size: 12px;
+}
+
+.tnode.bought {
+  border-color: rgba(255, 215, 106, 0.35);
+}
+
+.tnode.capstone {
+  background: rgba(200, 160, 255, 0.08);
+}
+
+.btn.respec {
+  width: 100%;
+  margin-top: 10px;
+}
+
+.cls.big .ico {
+  font-size: 40px;
+}
+
+.cls.locked.near {
+  opacity: 0.9;
+}
+
+.lessons {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.lesson {
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.lesson.owned {
+  border-color: rgba(127, 255, 159, 0.3);
+}
+
+.lesson.locked {
+  opacity: 0.8;
+}
+
+.lesson small {
+  color: var(--mute);
+}
+
+.lesson .lhead small {
+  color: var(--gold);
+}
+
+.lesson .grant {
+  font-size: 13px;
+}
+
+.lesson .lfoot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.lesson .cost {
+  font-size: 12px;
+  color: #ffe9a0;
+}
+
+.ing .rk {
+  pointer-events: none;
+}

@@ -1,0 +1,73 @@
+// Shared panel plumbing: the host every panel renders through, tabs, and small HTML helpers.
+import type { GameController } from '../controller';
+import { $$, esc } from '../util';
+
+export interface PanelHost {
+  readonly ctrl: GameController;
+  readonly modal: HTMLElement;
+  /** Per-panel UI state that survives re-renders (tabs, fuse sockets, selections). */
+  readonly state: Record<string, unknown>;
+  /** Renders a bottom sheet (centred on desktop) and returns its body element. */
+  sheet(title: string, body: string, extraClass?: string): HTMLElement;
+  open(name: string, arg?: string): void;
+  /** Re-renders the current panel. */
+  render(): void;
+  close(): void;
+  toast(msg: string): void;
+}
+
+export type PanelRender = (host: PanelHost, arg?: string) => void;
+
+/** Tab bar HTML; wire it with wireTabs. */
+export function tabsHtml(key: string, tabs: [string, string][], current: string): string {
+  return `<div class="tabs" role="tablist" data-tabs="${key}">${tabs
+    .map(([id, label]) => `<button class="tab ${id === current ? 'on' : ''}" role="tab" data-tab="${id}">${label}</button>`)
+    .join('')}</div>`;
+}
+
+export function wireTabs(host: PanelHost, key: string): void {
+  $$<HTMLButtonElement>(host.modal, `[data-tabs="${key}"] .tab`).forEach((b) =>
+    b.addEventListener('click', () => {
+      host.state[key] = b.dataset.tab;
+      host.render();
+    }),
+  );
+}
+
+export function tab(host: PanelHost, key: string, fallback: string): string {
+  return (host.state[key] as string | undefined) ?? fallback;
+}
+
+/** "✓ text" / "✗ text" requirement rows. */
+export function reqList(reqs: { text: string; ok: boolean }[]): string {
+  if (!reqs.length) return '';
+  return `<ul class="reqs">${reqs.map((r) => `<li class="${r.ok ? 'ok' : 'no'}">${r.ok ? '✓' : '✗'} ${esc(r.text)}</li>`).join('')}</ul>`;
+}
+
+export function costText(cost?: { coins?: number; items?: Record<string, number> }, ctrl?: GameController): string {
+  if (!cost) return 'Free';
+  const parts: string[] = [];
+  if (cost.coins) parts.push(`🪙${cost.coins}`);
+  for (const [id, n] of Object.entries(cost.items ?? {})) {
+    const it = ctrl?.reg.item(id);
+    parts.push(`${it?.icon ?? ''}${n} ${esc(it?.name ?? id)}`);
+  }
+  return parts.join(' + ') || 'Free';
+}
+
+/** Two-tap confirmation for destructive buttons (native confirm() is unavailable in embedded webviews). */
+export function armTwice(btn: HTMLButtonElement, armedText: string, action: () => void): void {
+  const text = btn.textContent ?? '';
+  let armed = 0;
+  btn.addEventListener('click', () => {
+    if (Date.now() < armed) {
+      action();
+      return;
+    }
+    armed = Date.now() + 4000;
+    btn.textContent = armedText;
+    setTimeout(() => {
+      if (btn.isConnected && Date.now() >= armed) btn.textContent = text;
+    }, 4100);
+  });
+}

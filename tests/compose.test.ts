@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
+  ESSENCE_BUDGET_BAND,
   MAX_HITS,
   MIN_COOLDOWN,
   SHAPE_PRIORITY,
+  budgetDamage,
   canApplyEssence,
   compose,
+  essencePowerMul,
   elementSlotState,
   legalEssenceSet,
   mergeBlocker,
@@ -52,7 +55,7 @@ const ess = (e: Partial<EssenceDef> & Pick<EssenceDef, 'id' | 'category' | 'appl
 
 /** The SPEC §3 starter essences. */
 const ESSENCES: EssenceDef[] = [
-  ess({ id: 'split', category: 'multiply', appliesTo: ['projectile'], powerMul: 0.55, spMul: 1.3, mod: { count: 2, spread: 25 } }),
+  ess({ id: 'split', category: 'multiply', appliesTo: ['projectile'], powerMul: 1.1, spMul: 1.3, mod: { count: 2, spread: 25 } }),
   ess({ id: 'flurry', category: 'multiply', appliesTo: ['strike'], powerMul: 0.7, spMul: 1.3, mod: { hits: 1 }, affix: { text: 'Twin', pos: 'prefix' } }),
   ess({
     id: 'arc',
@@ -286,12 +289,31 @@ describe('compose: element', () => {
 });
 
 describe('compose: essences', () => {
+  it('essencePowerMul: split spreads 1.1x the volley over the new count; others use powerMul', () => {
+    const proj = (count?: number): SkillDef['shape'] => ({ kind: 'projectile', speed: 1, range: 1, ...(count ? { count } : {}) });
+    expect(essencePowerMul(E('split'), proj())).toBeCloseTo(1.1 / 3, 10);
+    expect(essencePowerMul(E('split'), proj(4))).toBeCloseTo((1.1 * 4) / 6, 10);
+    expect(essencePowerMul(E('split'), proj(10))).toBeCloseTo((1.1 * 10) / 12, 10);
+    expect(essencePowerMul(E('flurry'), { kind: 'strike', range: 1, arc: 1 })).toBe(0.7);
+    expect(essencePowerMul(E('haste'), proj(5))).toBe(E('haste').powerMul);
+  });
+
+  it('split keeps the volley at 1.1x for any base count', () => {
+    for (const id of ['sword_throw', 'fan']) {
+      const base = S(id);
+      const v = compose(base, undefined, [E('split')]);
+      expect(shapeHits(v.shape)).toBe(shapeHits(base.shape) + 2);
+      expect((v.power * shapeHits(v.shape)) / (base.power * shapeHits(base.shape))).toBeCloseTo(1.1, 1);
+    }
+  });
+
   it('split adds projectiles and scales power/sp', () => {
     const s = compose(S('sword_throw'), undefined, [E('split')]);
     expect(s.id).toBe('sword_throw~split');
     expect(s.name).toBe('Split Sword Throw');
     expect(s.shape).toMatchObject({ kind: 'projectile', count: 3, spread: 25, pierce: 1 });
-    expect(s.power).toBe(r2(1.3 * 0.55));
+    // The volley deals 1.1x the original, spread over 3 projectiles: 1.1 × 1 / (1 + 2) each.
+    expect(s.power).toBe(r2((1.3 * 1.1) / 3));
     expect(s.spCost).toBeCloseTo(6 * 1.3, 5);
     expect(s.tier).toBe(2);
     expect(s.essences).toEqual(['split']);
@@ -303,7 +325,7 @@ describe('compose: essences', () => {
     const s = compose(S('sword_throw'), FIRE, [E('split')]);
     expect(s.id).toBe('sword_throw@fire~split');
     expect(s.name).toBe('Blazing Split Sword Throw');
-    expect(s.power).toBe(r2(1.3 * 1.2 * 0.55));
+    expect(s.power).toBe(r2((1.3 * 1.2 * 1.1) / 3));
     expect(s.spCost).toBeCloseTo(Math.ceil(6 * 1.25 + 2) * 1.3, 5);
   });
 
@@ -402,12 +424,41 @@ describe('hit clamp', () => {
     expect(s.shape).toMatchObject({ kind: 'projectile', count: 4 });
     expect(s.riders?.arc).toEqual({ targets: 2, mult: 0.6 });
     expect(potentialHits(s)).toBe(12);
+    // Renormalized: power × 15/12 keeps the cast's total potential damage (well under the cap).
+    expect(s.power).toBe(r2(0.6 * 0.9 * (15 / 12)));
+    expect(Math.abs(s.power * potentialHits(s) - 0.6 * 0.9 * 15)).toBeLessThanOrEqual(0.005 * 12 + 1e-9); // 0.01 rounding
+  });
+
+  it('renormalizes trimmed jumps fully when the step stays in budget', () => {
+    // (1 + 6 + 2) x2 = 18 hits -> 12: power x1.5 (vs chain_bolt~arc: +4% damage per SP).
+    const repeat: EssenceDef = { ...E('reprise'), id: 'echo_test', appliesTo: ['chain'] };
+    const s = compose(S('chain_bolt'), undefined, [E('arc'), repeat]);
+    expect(s.power).toBe(r2(1.1 * 0.9 * 1.5));
+  });
+
+  it('caps renormalization so no essence step gains more than +35% damage per SP', () => {
+    // fan~arc~reprise: 5 x 3 x 2 = 30 hits -> count 2 => 12; a full x2.5 would make the arc step
+    // vs fan~reprise worth +92% per SP, so the power stops at the +35% line instead.
+    const v = compose(S('fan'), undefined, [E('arc'), E('reprise')]);
+    expect(v.shape).toMatchObject({ kind: 'projectile', count: 2 });
+    const full = 0.6 * 0.9 * 2.5;
+    expect(v.power).toBeLessThan(full);
+    const rate = (s: SkillDef): number => budgetDamage(s, false) / s.spCost;
+    const refs = [compose(S('fan'), undefined, [E('reprise')]), compose(S('fan'), undefined, [E('arc')])];
+    const steps = refs.map((r) => rate(v) / rate(r));
+    expect(Math.max(...steps)).toBeLessThanOrEqual(1 + ESSENCE_BUDGET_BAND);
+    expect(Math.max(...steps)).toBeGreaterThan(1 + ESSENCE_BUDGET_BAND - 0.02);
+    // Never below the unrenormalized power.
+    expect(v.power).toBeGreaterThanOrEqual(r2(0.6 * 0.9));
   });
 
   it('split cannot push a 12-projectile ring past the cap', () => {
     const s = compose(S('knife_ring'), undefined, [E('split')]);
     expect(s.shape).toMatchObject({ kind: 'projectile', count: 12 });
     expect(potentialHits(s)).toBe(12);
+    // 14 projectiles at 1.1 × 12/14 each, trimmed to 12 and renormalized: the ring still deals 1.1x.
+    expect(s.power).toBe(r2(0.5 * 1.1));
+    expect(budgetDamage(s, true) / budgetDamage(S('knife_ring'), true)).toBeCloseTo(1.1, 2);
   });
 
   it('trims arc targets before strike hits', () => {
@@ -563,11 +614,12 @@ describe('shape merges', () => {
     expect(m.weapons).toBeUndefined(); // knife_ring is any-weapon
   });
 
-  it('buff lower adds no rider', () => {
-    const m = mergeSkills(S('guard'), S('jab'))!;
-    expect(m.shape).toEqual(S('jab').shape);
-    expect(m.riders).toBeUndefined();
-    expect(m.name).toBe('Jab Aura');
+  it('a buff parent never merges (it adds no rider, so it could only dilute the SP budget)', () => {
+    // guard and jab share the blade thread, yet the stance blocks the merge either way round.
+    expect(mergeSkills(S('guard'), S('jab'))).toBeNull();
+    expect(mergeSkills(S('jab'), S('guard'))).toBeNull();
+    expect(mergeBlocker(S('guard'), S('jab'))).toMatch(/Guard is a stance, not a strike/);
+    expect(mergeBlocker(S('jab'), S('guard'))).toMatch(/Guard is a stance, not a strike/);
   });
 
   it('aligned parents pass their element on', () => {
@@ -582,6 +634,7 @@ describe('shape merges', () => {
     expect(mergeSkills(S('sword_throw@fire'), S('whirlwind'))).toBeNull(); // generated
     expect(mergeSkills(S('fuse:heavy_cleave|whirlwind'), S('sword_throw'))).toBeNull(); // never re-merged
     expect(mergeSkills(S('focus'), S('guard'))).toBeNull(); // two buffs
+    expect(mergeSkills(S('focus'), S('quake'))).toBeNull(); // one buff (they share arcane)
     expect(mergeSkills(S('mon_zap'), S('sword_throw'))).toBeNull(); // monster-only
     expect(mergeSkills(S('lunge'), S('quake'))).toBeNull(); // no shared merge tag
   });

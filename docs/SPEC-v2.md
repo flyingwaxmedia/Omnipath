@@ -41,8 +41,11 @@ threatMult(delta)  // delta = monsterThreat - skillLevel
 - *Kill XP* = `killXp * threatMult * study` (not subject to the instance cap). Wardens: ×1.5.
 - *Study bonus*: ×`studyMult` while this skill has killed fewer than `studyKills` of that species.
 - Passive `masteryXp` bonuses multiply hit/kill XP.
-- At max rank XP flows into overmastery; each full bar: `overBars++` and +1 charge (cap `maxCharges`; when capped
-  the bar holds full). `overBars >= 3` opens the 2nd essence slot.
+- At max rank XP flows into overmastery (bar = `overmasteryCost(maxRank, tier)`); each full bar: `overBars++` and +1
+  charge while charges < `maxCharges`. With charges capped a bar **still completes until the 2nd essence slot is
+  open** (`overBars < 3`), so the slot never waits on spending a charge (even for a migrated save holding 3 charges
+  at `overBars` 0); once every slot the skill can have is open (buffs: 0 slots, so at once) the bar holds full
+  (`xp` = bar size). `overBars >= 3` opens the 2nd essence slot (`fusion.SECOND_SLOT_OVERBARS`).
 - Class Rank XP: every skill-XP grant also feeds classes (§5).
 
 ## 2. Combat v2 (`src/core/combat.ts`)
@@ -71,7 +74,11 @@ Water's element status is now `soak` (slow ×0.55 for 2.2 s + soaked marker).
 
 **Stacking**: `dmg = base * power * rankPower * (1+tagPct/100) * (1+familyPct/100) * (1+statusPct/100) * size *
 element * combo * falloff * variance(0.9..1.1) * (crit ? 1.5 : 1) - def * (crit ? 0.5 : 1)`, min 1 (0 when
-element multiplier is 0). Hybrid skills (arcane + blade/pierce) use max(atk, matk) as today.
+element multiplier is 0). **Hybrid** skills use max(atk, matk) (`combat.isHybrid`): arcane + blade/pierce
+techniques, and every skill tagged `spirit`, `technique` or `echo` (`HYBRID_TAGS` — the any-weapon skills, so a staff
+user is never crippled by a trainer technique or an echo; variants and merges keep the tag). Any-weapon authored
+results built only from techniques/echoes carry `technique` (or `spirit`) for the same reason (`tests/content.test.ts`).
+Only `arcane` forces MATK and ignores size; a non-arcane hybrid uses the weapon's size row.
 
 `computeDamage(elements, skill, rank, attacker, defender, mods)` returns `{ amount, crit, multiplier, resisted, combo }`.
 `Attacker = { atk, matk, crit, weapon }`, `Defender = { def, element?, elementLevel?, size?, family?, statuses? }`,
@@ -93,25 +100,39 @@ deterministically (old v1 ids like `slash@fire` stay valid).
 - tier = min(3, base.tier + 1) when anything is applied; maxRank = min(base.maxRank, 8); `generated: true`,
   `baseId`, `essences` set; tags = base tags (minus `basic`) + element + essence `tag`s + `'infused'` if element.
 - element: power ×1.2, spCost = ceil(sp*1.25 + 2), cooldown = base.cooldown || 800 (as v1 infusion).
-- each essence: power ×powerMul, sp ×spMul, cooldown ×cdMul; apply `mod` to the shape (counts add, multipliers
-  multiply, `arcAdd` adds degrees to strike arc, `radiusMul` to spin/nova radius, `rangeMul` to range/distance)
-  and riders (`returns`, `reprise`, `arc`, `leech`, `knockback`).
+- each essence (alphabetical order): power × `essencePowerMul`, sp ×spMul (an SP-free base starts at 2), cooldown
+  ×cdMul; apply `mod` to the shape (counts add, multipliers multiply, `arcAdd` adds degrees to strike arc,
+  `radiusMul` to spin/nova radius, `rangeMul` to range/distance) and riders (`returns`, `reprise`, `arc`, `leech`,
+  `knockback`).
+  - `essencePowerMul` is `powerMul`, except for a **multiply essence that adds projectiles** (`mod.count`: split),
+    whose `powerMul` budgets the whole volley: each of the `c + count` projectiles deals `powerMul × c / (c + count)`
+    (c = the projectile count before the essence). Split: **1.1 × c / (c + 2)** per projectile, so the volley deals
+    1.1× the base volley for 1.3× SP whatever c is (1 → 0.367 each, 4 → 0.733, 10 → 0.917). It is keyed on
+    category + `mod.count`, never on the essence id.
 - **Hit clamp**: `potentialHits = count × pulses × hits × (1 + jumps) × (reprise ? 2 : 1) × (returns ? 2 : 1) ×
-  (arc ? 1 + arc.targets : 1)` must be ≤ `MAX_HITS = 12`; trim in order jumps → pulses → count → arc.targets.
+  (arc ? 1 + arc.targets : 1)` must be ≤ `MAX_HITS = 12`; trim in order jumps → pulses → count → arc.targets, then
+  strike hits as a last resort.
+- **Hit renormalization**: when the clamp trims hits, power ×= `hitsBefore / hitsAfter` so the cast's total
+  potential damage is preserved — capped so that **no essence step gains more than +35% damage per SP**
+  (`ESSENCE_BUDGET_BAND`) over the same skill (same base and element) with any one of its essences removed, measured
+  with `budgetDamage` (power; power × shapeHits once a multiply essence is on the skill) and skipping SP-free
+  references; never below the unrenormalized power. Values round to 0.01 (the cap rounds down).
 - cooldown ≥ 300 ms.
 
 **Element slot rules**: an *authored unaligned* attack (non-buff, power > 0) has one element slot. A generated variant
 of such a base may swap element (`sword_throw@fire~split` + water → `sword_throw@water~split`, essences kept, none
 consumed). Authored *aligned* skills (Flame Spin, Firebolt…) cannot take an element ("already bound").
 
-**Essence slots**: 1 slot for every non-buff skill; 2 when that skill's `overBars ≥ 3`. Same-category essences
-never stack. `appliesTo` must include the skill's shape kind. Essences are **consumed on success only**.
+**Essence slots** (`fusion.essenceSlots`): buffs 0; 1 slot for every other skill; 2 when that skill id's own
+`overBars ≥ 3` (a variant overmasters separately from its base; see §1 for how capped charges never block the bars).
+Same-category essences never stack. `appliesTo` must include the skill's shape kind. Essences are **consumed on
+success only** (and not at all when the player already knows the resulting variant).
 
 **Starter essences** (`src/data/essences.ts`):
 
 | id | category | appliesTo | effect | power / sp / cd |
 |---|---|---|---|---|
-| split | multiply | projectile | count +2, spread +25 | 0.55 / 1.3 / 1 |
+| split | multiply | projectile | count +2, spread +25 | 1.1 per volley (1.1·c/(c+2) per projectile) / 1.3 / 1 |
 | flurry | multiply | strike | hits +1 | 0.7 / 1.3 / 1 |
 | arc | propagate | projectile, strike, chain | chain: jumps +2; others: arc {2, 0.6} | 0.9 / 1.3 / 1 |
 | pierce | propagate | projectile | pierce +2 | 0.9 / 1.2 / 1 |
@@ -128,34 +149,60 @@ never stack. `appliesTo` must include the skill's shape kind. Essences are **con
 3. skill/variant + `el:<id>` → element apply/swap (fails: `bound` for authored aligned skills or buffs).
 4. `el` + `el` → authored fused element (step 1) else **Resonance** recipe (authored in recipes as
    `result: 'passive:res_*'` with `tagCount` requirements) — so this is also step 1.
-5. skill + skill (both authored, not generated, tier ≥ 1, rank ≥ fusionMinRank, sharing ≥ 1 of
-   blade/pierce/arcane/spin/projectile/dash/aoe/stealth/heavy) → **shape merge** `fuse:a|b`.
-   Shape priority dash > nova > projectile > chain > spin > strike > buff: the higher skill sets the shape, the
+5. skill + skill (both authored, not generated, tier ≥ 1, rank ≥ fusionMinRank, **neither a buff**, not monster
+   techniques, sharing ≥ 1 of blade/pierce/arcane/spin/projectile/dash/aoe/stealth/heavy) → **shape merge**
+   `fuse:a|b`. A buff parent is refused (`mergeSkills` → null; `resolveFusion` → `nothing`, "<Buff> is a stance, not
+   a strike; stances cannot be shape-merged."): it adds no rider, so it could only dilute the SP budget.
+   Shape priority dash > nova > projectile > chain > spin > strike (> buff): the higher skill sets the shape, the
    lower adds a rider (spin: +1 pulse / radial for projectiles / spin:true for dash; strike: +1 hit; chain: +1 jump;
-   nova: arc {2, 0.5}; projectile: +1 count; dash: knockback; buff: none). power = max ×1.1, sp = max + 0.6×min,
-   cooldown = max, tier = min(3, max tier + 1), maxRank 5, tags = union, weapons = union (or undefined if either is
-   any-weapon). Name = higher skill name + rider noun (Cyclone, Rend, Arc, Burst, Volley, Rush, Aura) ≤ 4 words.
+   nova: arc {2, 0.5}; projectile: +1 count; dash: knockback); a "+1" the merged shape has no axis for (nova, dash)
+   becomes arc {1, 0.5}; the rider set is then hit-clamped. **Power**: the merge's per-cast damage
+   (`power × shapeHits`) = 1.1 × the stronger parent's per-cast damage, spread over the merged shape's hits —
+   `power = round2(1.1 × max(power_a × shapeHits_a, power_b × shapeHits_b) / shapeHits_merged)` (= max power × 1.1 when
+   both hit once; a heavy single hit never multiplies across extra pulses). sp = max + 0.6×min, cooldown = max (≥ 300;
+   800 if both are 0), tier = min(3, max tier + 1), maxRank 5, tags = union, weapons = union (or undefined if either is
+   any-weapon), element/status from the primary (else the other parent), `baseId` = the higher-tier parent (ties:
+   the primary). Name = higher skill name + rider noun (Cyclone, Rend, Arc, Burst, Volley, Rush) ≤ 4 words.
    Merges can take an element and essences but are never merged again.
 6. Otherwise `nothing` (+ whisper hint from an undiscovered recipe using either ingredient, as v1).
 Skill ingredients need rank ≥ `fusionMinRank`. Ingredients are never consumed except essences.
 Every attempt is remembered (attempts/discoveries keyed by the sorted pair).
 
-Budget test (`tests/budget.test.ts`): enumerate every authored non-buff attack × (none + each element it can take)
-× every legal essence set of size 0–2, plus every legal shape merge (± element ± 1 essence): assert hits ≤ 12,
-cooldown ≥ 300, name ≤ 4 words, and damage-per-SP within ±35% of the base (or base@element) — `split`/`flurry`
-variants compare total damage across all hits.
+Budget test (`tests/budget.test.ts`, **no waivers**): enumerate every authored non-buff attack × (none + each element
+it can take) × every legal essence set of size 0–2, plus every legal shape merge (± element ± 1 essence; pairs with an
+authored recipe never merge): assert hits ≤ 12, cooldown ≥ 300, name ≤ 4 words, and damage-per-SP within ±35% for
+every essence step — a 1-essence variant vs base (or base@element), a 2-essence variant vs each 1-essence subset;
+damage is `power`, or `power × hits per cast` once a multiply essence (split/flurry) is on the skill — and every merge
+within [0.65 × the weaker, 1.35 × the stronger] attacking parent (per-cast damage). SP-free references are skipped.
+Split's volley rule, hit renormalization and the buff-merge ban are what make this hold; the test also checks split's
+1.1× volley on every untrimmed projectile and that no buff ever merges.
 
 ## 4. Discovery systems
 
+**Requirements** (`src/core/requirements.ts`) are shared by morphs, recipes, lessons, classes: `tagCount { tags,
+count, minRank? }` counts distinct authored skills carrying every tag (a variant counts as its base, a merge as its
+higher-tier parent, at the max rank among them); **an empty `tags` list counts any skill** ("Any skill rank 3"). A
+`flag` requirement may only read a flag the game sets — `kills`, `kill_<monsterId>` (existing monsters), the node
+flags of §7.4, `meditations`, `forge_success`, `visited:<mapId>` (existing maps; `mapVisited` reads it),
+`warden_<wardenId>`, relic flags of relic items, `mastered_any`, `class_worn`, `brann_gift` (set-by table in
+`docs/CLIENT-v2.md` §5; enforced by `tests/content.test.ts`).
+
+**Reachability** (`tests/content.test.ts`): every authored skill except monster-only techniques (tag `monster`) is
+obtainable from a weapon basic, a morph from an obtainable parent, a recipe whose skill ingredients are obtainable, a
+class grant or tree `skill` node, a lesson of a trainer placed on a map, an echo technique of a spawned monster, or a
+tome that drops or sits in a chest.
+
 ### 4.1 Morph trees (`src/data/morphs.ts`)
-Every weapon tree has **13 nodes**: root, 3×T1, 6×T2 (2 per branch), 3×T3 capstones (1 per branch).
+Every weapon tree (the weapon's basic attack + everything reachable from it by morphs) has **13 nodes**: root, 3×T1,
+6×T2 (2 per branch), 3×T3 capstones (1 per branch) — skill tiers 0/1/2/3 = 1/3/6/3 (`tests/content.test.ts`).
 - T1: parent at max rank + 1 charge (v1 rule).
 - T2: + `requires` ≥ 1 sibling-branch skill at rank ≥ 5.
 - T3: + ≥ 2 other tree skills at rank ≥ 5, 1 element, and the weapon's warden relic flag
   (`relic_stone` sword, `relic_dusk` dagger, `relic_storm` staff — set when the relic item is obtained).
 - Per tree: ≥ 2 T1/T2 nodes have a `spark` spec; ≥ 2 nodes have a world-flag `requires` (hidden, hint shown).
 - **Sparks** waive only the charge and the parent max-rank requirement (parent must be ≥ `minParentRank`, default 3).
-  Every other `requires` entry still applies. Capstones never have `spark`.
+  Every other `requires` entry still applies. Capstones never have `spark`, and neither does a morph whose parent is a
+  buff (a buff never lands the hit a spark rolls on) — both are `Registry.validate` errors.
 
 ### 4.2 Sparks (`src/core/spark.ts`)
 ```
@@ -222,7 +269,20 @@ points(cls, progress) = progress.rank * cls.tier - sum(spent node ranks * node.c
   Worn class: tree passives active and its `bonus` applies. Signature skills (`grants`) learned on discovery.
 - **Imprints**: unlocked at CR `imprintAt[tier]`. Slots: 1 when any class reaches its imprint CR, 2 at first Tier II
   discovered, 3 at first Tier III or 12 classes discovered. The worn class's own imprint cannot be slotted.
-- Power budget: class bonus + tree + imprints ≤ 20% damage on any skill (test).
+- **Class power budget** (`balance.CLASS_POWER_BUDGET = 25`, `tests/class-budget.test.ts` over every class): for
+  any single skill — every authored attack and legal shape merge, with any element it can take (+ `infused`) and any
+  legal tag-adding essence (heavy) — the worst-case extra damage, in **percentage points summed**, of
+  - the worn class's `bonus`: Σ `tagPower` over the skill's distinct tags + its ATK % (physical), MATK % (arcane) or
+    max of the two (hybrids, §2), counting the tree's atk/matk stat node at max rank as part of that stat;
+  - + the worn tree's power nodes that apply to the skill (primary-tag node, untagged capstone), at max rank;
+  - + the 3 best imprints of other classes that apply to the skill, × their strength (§4.5)
+
+  is **≤ 25**. (The points add inside `powerPctFor`'s `tagPct`, except the stat, which multiplies ATK/MATK, so the
+  real multiplier is at most ≈ +26.6%.) Template numbers (`balance.CLASS_TREE_POWER`, flat across tiers): tag Focus
+  +2%/rank (×3), capstone +3% to every skill, imprint +2% (Tier I) / +3% × 0.6 = 1.8% (Tier II/III), an atk/matk
+  Training node +1%/rank (×3); SP economy, tempo and non-damage stat nodes still scale ×1/×1.25/×1.5 by tier. That
+  leaves a worn `bonus` at most 10 points on any one skill (7 when the tree's stat node is atk/matk). Non-damage
+  bonus stats (hp, sp, speed, crit, cdr) are outside the budget.
 
 ## 6. SkillBook v2 orchestration (`src/core/skillbook.ts`)
 
@@ -285,12 +345,16 @@ Ground adjacent to water becomes SAND in meadow/lake/town biomes. Decor scatter 
 paths (+1 tile margin), portals (+2), structures, NPCs, nodes, objects (+1) or spawn centres.
 
 ### 7.2 Map rules (checked by `tests/world.test.ts` / `validateWorld`)
-- Sizes (tiles): town 40×32 · outpost 24×20 · field 56×44 to 64×48 · dungeon floor 40×40 · arena 24×24 · secret 16×16–24×24.
+- Sizes (tiles): town 40×32 · outpost 24×20 · field 56×44 to 64×48, **or exactly 40×32** (`vale.stormbreak_approach`)
+  · dungeon floor 40×40 · arena 24×24 · secret 16×16–24×24 (`MAP_SIZES` in `src/core/world/validate.ts`).
 - Every portal `to` exists and pairs back (unless `oneWay`); arrival tiles (2 tiles inward from the destination rect
   centre along the reverse facing) are walkable; edge portals are ≥ 3 tiles wide and sit on the map border.
 - Flood fill from every arrival reaches every NPC, node, object, other portal and spawn centre (hidden-portal and
   gated destinations excluded from *their* map's requirement only).
 - Every map has ≤ 60 monsters total, ≤ 12 spawn entries, ≤ 12 NPCs, ≤ 8 portals; safe maps have 0 spawns.
+- **Hidden portals** (`PortalReveal`) are revealed by a cast within 3 tiles whose skill matches **any of**: `tag`, OR
+  its element is `element` or one of `elements`, OR its shape kind is `shape` (e.g. the quarry shaft: tag heavy OR
+  shape nova; the gloomwood glade: element shadow OR holy).
 - Graph test: from `vale.hearthvale`, using only non-hidden, non-gated portals, reach a source for ≥ 3 primal elements
   (fire: hearthvale forge, holy needs 3, earth: quarry ore, water: mirror lake fishing, wind: windcrest shrine,
   shadow: gloomwood obelisk) — so the 3-element Prism Gate to Stormbreak can never soft-lock.

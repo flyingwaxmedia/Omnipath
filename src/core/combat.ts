@@ -11,8 +11,19 @@ export function isMagic(skill: SkillDef): boolean {
   return skill.tags.includes('arcane');
 }
 
-/** Hybrid techniques (arcane + blade/pierce) scale off whichever of ATK/MATK is higher. */
+/**
+ * Tags of any-weapon skills (trainer techniques, spirit arts, monster echoes) that scale off the
+ * better of ATK/MATK, so a staff user is never crippled by a technique learned outside the tree.
+ */
+export const HYBRID_TAGS: readonly string[] = ['spirit', 'technique', 'echo'];
+
+/**
+ * Hybrid skills scale off whichever of ATK/MATK is higher: arcane + blade/pierce techniques, and
+ * any skill tagged spirit, technique or echo (HYBRID_TAGS; variants and merges keep the tag).
+ * Size handling is unchanged: only `arcane` ignores size.
+ */
 export function isHybrid(skill: SkillDef): boolean {
+  if (HYBRID_TAGS.some((t) => skill.tags.includes(t))) return true;
   return isMagic(skill) && (skill.tags.includes('blade') || skill.tags.includes('pierce'));
 }
 
@@ -202,7 +213,7 @@ function fallbackRng(): () => number {
  * Damage of one hit:
  * `base * power * rankPower * (1+tagPct/100) * (1+familyPct/100) * (1+statusPct/100) * size * element *
  * combo * falloff * variance(0.9..1.1) * (crit ? 1.5 : 1) - def * (crit ? 0.5 : 1)`, rounded, min 1.
- * `base` is ATK, MATK for arcane skills, or max(ATK, MATK) for hybrids. Crit chance is
+ * `base` is ATK, MATK for arcane skills, or max(ATK, MATK) for hybrids (isHybrid). Crit chance is
  * `attacker.crit + skill.critBonus` percent.
  *
  * When the element multiplier is 0 the hit is resisted: amount 0, no crit, no combo (statuses are kept)

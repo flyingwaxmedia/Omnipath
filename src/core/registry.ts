@@ -308,7 +308,12 @@ export class Registry {
 
   // ---------------------------------------------------------------- validation
 
-  /** Data integrity check. Returns human-readable problems; [] means the bundle is consistent. */
+  /**
+   * Data integrity check. Returns human-readable problems; [] means the bundle is consistent.
+   * Covers duplicate ids, reserved characters, unknown references in every table and requirement,
+   * morph edges (self-morphs; sparks on capstones or from buff parents), recipe shapes, class
+   * parents/trees, lessons, monsters and items.
+   */
   validate(): string[] {
     const errs: string[] = [];
     const d = this.data;
@@ -379,6 +384,10 @@ export class Registry {
       if (!target) errs.push(`morph ${k}: unknown result ${m.to}`);
       if (m.from === m.to) errs.push(`morph ${k}: morphs into itself`);
       if (m.spark && (m.tier ?? target?.tier) === 3) errs.push(`morph ${k}: capstone (tier 3) morphs cannot spark`);
+      // Sparks roll on the parent's hits; a buff never lands one, so its morphs could never spark.
+      if (m.spark && this.skill(m.from)?.shape.kind === 'buff') {
+        errs.push(`morph ${k}: buff parent ${m.from} never hits, so the morph cannot spark`);
+      }
       checkReqs(`morph ${k}`, m.requires);
     }
 

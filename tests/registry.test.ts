@@ -82,7 +82,7 @@ const SPLIT: EssenceDef = {
   affix: { text: 'Split', pos: 'prefix' },
   category: 'multiply',
   appliesTo: ['projectile'],
-  powerMul: 0.55,
+  powerMul: 1.1,
   spMul: 1.3,
   mod: { count: 2 },
 };
@@ -209,6 +209,7 @@ describe('validate', () => {
         sk({ id: 'whirlwind', name: 'Whirlwind Again', shape: { kind: 'spin', radius: 1 } }),
         sk({ id: 'storm_slash', name: 'Storm Slash', element: 'storm', shape: { kind: 'strike', range: 1, arc: 1 } }),
         sk({ id: 'zero', name: 'Zero', maxRank: 0, shape: { kind: 'strike', range: 1, arc: 1 } }),
+        sk({ id: 'brace', name: 'Brace', power: 0, shape: { kind: 'buff', stat: 'def', amount: 10, duration: 5000 } }),
       ],
       essences: [SPLIT, { ...SPLIT, id: 'split' }, { ...SPLIT, id: 'bad~ess', appliesTo: [] }],
       morphs: [
@@ -218,6 +219,7 @@ describe('validate', () => {
         { from: 'flame_spin', to: 'guillotine', tier: 3, spark: { threat: 9 } },
         { from: 'slash', to: 'slash' },
         { from: 'whirlwind', to: 'guillotine', requires: [{ type: 'skill', id: 'nope', rank: 5 }] },
+        { from: 'brace', to: 'whirlwind', tier: 1, spark: { threat: 3 } },
       ],
       recipes: [
         ...CLEAN.recipes,
@@ -321,6 +323,7 @@ describe('validate', () => {
       'morph flame_spin>guillotine: capstone (tier 3) morphs cannot spark',
       'morph slash>slash: morphs into itself',
       'morph whirlwind>guillotine: unknown skill nope',
+      'morph brace>whirlwind: buff parent brace never hits, so the morph cannot spark',
       'recipe el:fire+skill:whirlwind: duplicate pair',
       'recipe el:fire+el:wind: element pair result passive:forgehand is not a resonance passive',
       'recipe mod:ghost+skill:slash: unknown ref mod:ghost',

@@ -6,7 +6,9 @@ import type { SkillDef } from '../../core/types';
 //     weapons' skills (recipes in src/data/recipes/cross.ts). Weapons = the weapon parent's weapons
 //     (union across weapons); undefined when both parents are any-weapon echoes/techniques.
 //   - v2 morphs of techniques and echoes (src/data/morphs/misc.ts): any weapon, tier 2.
-// Fusion results do not carry the parents' `echo`/`technique` tags: those mark how a skill is learned.
+// Fusion results do not carry the parents' `echo` tag (it marks a witnessed echo and feeds Mimic / the echo
+// tag passive). An ANY-WEAPON result built only from echoes/techniques carries `technique` (or `spirit`)
+// instead, so it keeps hybrid max(ATK, MATK) scaling (combat.HYBRID_TAGS, SPEC §2) for staff users too.
 
 export const CROSS_SKILLS: SkillDef[] = [
   // ---------------------------------------------------------------- v1 cross-weapon fusions
@@ -164,7 +166,7 @@ export const CROSS_SKILLS: SkillDef[] = [
     desc: 'Cast a hook of barrow-cold shadow that snags a distant foe, opens a bleeding wound and reels it in.',
     icon: '⚓',
     tier: 2,
-    tags: ['projectile', 'ranged'],
+    tags: ['projectile', 'ranged', 'technique'],
     element: 'shadow',
     power: 1.5,
     spCost: 11,
@@ -195,7 +197,7 @@ export const CROSS_SKILLS: SkillDef[] = [
     desc: 'Hurl a geode-studded hammer that bursts into crystal spikes where it lands, stunning everything nearby.',
     icon: '⛏️',
     tier: 2,
-    tags: ['heavy', 'aoe', 'ranged'],
+    tags: ['heavy', 'aoe', 'ranged', 'technique'],
     element: 'earth',
     power: 2.0,
     spCost: 16,
@@ -211,7 +213,7 @@ export const CROSS_SKILLS: SkillDef[] = [
     desc: 'Brace, then charge like the Colossus: every stride is a tremor that stuns and flattens foes in your path.',
     icon: '🦣',
     tier: 3,
-    tags: ['dash', 'heavy', 'aoe'],
+    tags: ['dash', 'heavy', 'aoe', 'technique'],
     element: 'earth',
     power: 2.8,
     spCost: 24,
@@ -250,7 +252,7 @@ export const CROSS_SKILLS: SkillDef[] = [
     desc: 'Leap and drive your heel down on a foe: two quick blows, each one knocking it back.',
     icon: '🦅',
     tier: 2,
-    tags: ['melee'],
+    tags: ['melee', 'technique'],
     power: 1.1,
     spCost: 9,
     cooldown: 3000,
@@ -281,7 +283,7 @@ export const CROSS_SKILLS: SkillDef[] = [
     desc: "Bound high and land with a Monarch's full weight at a nearby point, knocking back every foe beneath.",
     icon: '👑',
     tier: 2,
-    tags: ['heavy', 'aoe'],
+    tags: ['heavy', 'aoe', 'technique'],
     power: 1.7,
     spCost: 14,
     cooldown: 5500,

@@ -12,6 +12,7 @@ import {
   computeDamage,
   elementMultiplier,
   elementRelation,
+  HYBRID_TAGS,
   isHybrid,
   isMagic,
   sizeMultiplier,
@@ -315,6 +316,18 @@ describe('isMagic / isHybrid', () => {
     expect(isHybrid(skill({ tags: ['arcane', 'spin'] }))).toBe(false);
     expect(isHybrid(skill({ tags: ['blade', 'pierce'] }))).toBe(false);
   });
+
+  it('any-weapon skills tagged spirit, technique or echo are hybrids', () => {
+    expect(HYBRID_TAGS).toEqual(['spirit', 'technique', 'echo']);
+    expect(isHybrid(skill({ tags: ['spirit', 'melee'] }))).toBe(true);
+    expect(isHybrid(skill({ tags: ['melee', 'technique'] }))).toBe(true);
+    expect(isHybrid(skill({ tags: ['echo', 'aoe'] }))).toBe(true);
+    // A variant or merge keeps its base tags, so it stays hybrid.
+    expect(isHybrid(skill({ tags: ['echo', 'projectile', 'water', 'infused'], generated: true }))).toBe(true);
+    // Not magic: only arcane ignores size and forces MATK.
+    expect(isMagic(skill({ tags: ['spirit'] }))).toBe(false);
+    expect(isHybrid(skill({ tags: ['melee', 'heavy'] }))).toBe(false);
+  });
 });
 
 describe('computeDamage', () => {
@@ -368,6 +381,20 @@ describe('computeDamage', () => {
     expect(computeDamage(elements, arcane, 1, atkHeavy, d, { rng: flat() }).amount).toBe(40);
     expect(computeDamage(elements, hybrid, 1, atkHeavy, d, { rng: flat() }).amount).toBe(100);
     expect(computeDamage(elements, hybrid, 1, matkHeavy, d, { rng: flat() }).amount).toBe(80);
+  });
+
+  it('spirit / technique / echo skills use max(ATK, MATK): a staff user is not crippled', () => {
+    const d: Defender = { def: 0, size: 'L' };
+    // Oak Staff stats (atk 3, matk 13) scaled up; a sword user for comparison.
+    const staff: Attacker = { atk: 30, matk: 130, crit: 0, weapon: 'staff' };
+    const sword: Attacker = { atk: 100, matk: 0, crit: 0, weapon: 'sword' };
+    for (const tags of [['spirit', 'melee'], ['technique', 'melee'], ['echo', 'aoe']]) {
+      const s = skill({ tags });
+      expect(computeDamage(elements, s, 1, staff, d, { rng: flat() }).amount).toBe(130); // staff row L = 1.0
+      expect(computeDamage(elements, s, 1, sword, d, { rng: flat() }).amount).toBe(90); // sword row L = 0.9
+    }
+    // A plain physical skill on the same staff still uses ATK.
+    expect(computeDamage(elements, skill({ tags: ['melee'] }), 1, staff, d, { rng: flat() }).amount).toBe(30);
   });
 
   it('applies size from the attacker weapon and defender size', () => {

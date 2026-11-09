@@ -1,0 +1,133 @@
+/* Minimap (HUD) and world map grid. The hud-maps stage owns and extends this file. */
+
+.minimap {
+  position: absolute;
+  top: calc(8px + var(--safe-t));
+  right: calc(8px + var(--safe-r));
+  width: 112px;
+  height: 112px;
+}
+
+.minimap .mm-face {
+  display: block;
+  width: 112px;
+  height: 112px;
+  padding: 0;
+  border-radius: 50%;
+  overflow: hidden;
+  border: 2px solid var(--edge);
+  box-shadow:
+    0 4px 14px rgba(0, 0, 0, 0.45),
+    inset 0 0 18px rgba(0, 0, 0, 0.6);
+  background: #0c1220;
+}
+
+.minimap canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+  image-rendering: pixelated;
+}
+
+.minimap .mm-toggle {
+  position: absolute;
+  left: -8px;
+  bottom: -6px;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: transparent;
+  display: flex;
+  align-items: flex-end;
+  justify-content: flex-start;
+  padding: 0 0 6px 8px;
+  font-weight: 800;
+  color: var(--ink);
+  text-shadow: 0 1px 2px #000;
+}
+
+.minimap .mm-toggle::before {
+  content: '';
+  position: absolute;
+  left: 6px;
+  bottom: 6px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--glass);
+  border: 1px solid var(--edge);
+  z-index: -1;
+}
+
+.minimap.collapsed {
+  height: 0;
+}
+
+.minimap.collapsed .mm-face {
+  display: none;
+}
+
+.minimap.collapsed .mm-toggle {
+  left: auto;
+  right: 0;
+  top: 0;
+  bottom: auto;
+}
+
+.wgrid {
+  display: grid;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+
+.wcell {
+  position: relative;
+  min-height: 52px;
+  padding: 6px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  font-size: 11px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.wcell.empty {
+  background: transparent;
+  border-color: rgba(255, 255, 255, 0.03);
+}
+
+.wcell.seen {
+  opacity: 0.6;
+  border-style: dashed;
+}
+
+.wcell.here {
+  border-color: var(--gold);
+  box-shadow: 0 0 10px rgba(255, 215, 106, 0.35);
+}
+
+.wcell b {
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+.wcell small {
+  color: var(--mute);
+  font-size: 10px;
+}
+
+.wcell .pin {
+  position: absolute;
+  right: 4px;
+  top: 2px;
+}
+
+@media (max-height: 460px) {
+  .minimap,
+  .minimap .mm-face {
+    width: 88px;
+    height: 88px;
+  }
+}

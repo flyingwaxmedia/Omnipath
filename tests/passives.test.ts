@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { classTreeTemplate } from '../src/core/balance';
+import { CLASS_TREE_POWER, classTreeTemplate } from '../src/core/balance';
 import {
   BESTIARY_BONUS,
   IMPRINT_STRENGTH,
@@ -460,8 +460,8 @@ describe('aggregate and readers', () => {
       },
     );
     const t = aggregate(reg, state);
-    // forgehand 3×2 + tree n4 (+3 atk × 2).
-    expect(statPct(t, 'atk')).toBe(12);
+    // forgehand 3×2 + tree n4 (atk stat node × 2).
+    expect(statPct(t, 'atk')).toBe(6 + 2 * CLASS_TREE_POWER[1].damageStat);
     expect(statPct(t, 'sp')).toBe(5);
     // bestiary 3-star species.
     expect(statPct(t, 'hp')).toBe(1);

@@ -1,7 +1,8 @@
 import type { EssenceDef } from '../core/types';
 
 // Starter essences (SPEC-v2 §3). Category / appliesTo / mod / power-SP-cooldown multipliers are fixed by the
-// spec table; names, icons, affixes and descriptions are flavour.
+// spec table; names, icons, affixes and descriptions are flavour. For a multiply essence that adds projectiles
+// (split) `powerMul` is the multiplier on the whole volley, spread over the new projectile count.
 // Affixes are single words so composed names stay within the 4-word limit as often as possible
 // ("Blazing Forked Sword Throw", "Whirlwind Reprise").
 // Essences drop from monster species (see `essence` in monsters.ts) and are sold by some trainers.
@@ -11,11 +12,13 @@ export const ESSENCES: EssenceDef[] = [
     id: 'split',
     name: 'Splitting',
     icon: '🔀',
-    desc: 'Projectiles fork: 2 extra shots in a wider fan. Each hits a bit over half as hard. More SP.',
+    desc: 'Projectiles fork: 2 extra shots in a wider fan. The volley shares 110% of the original damage between them. More SP.',
     affix: { text: 'Forked', pos: 'prefix' },
     category: 'multiply',
     appliesTo: ['projectile'],
-    powerMul: 0.55,
+    // Volley budget (compose.essencePowerMul): each of the c + 2 projectiles deals 1.1 × c / (c + 2), so the
+    // whole volley deals 1.1 × the original for 1.3 × the SP, however many projectiles the base already fires.
+    powerMul: 1.1,
     spMul: 1.3,
     cdMul: 1,
     mod: { count: 2, spread: 25 },

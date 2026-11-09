@@ -17,6 +17,11 @@ import type {
 export const MAX_HITS = 12;
 /** Floor for the cooldown of any composed skill (ms). */
 export const MIN_COOLDOWN = 300;
+/**
+ * Essence budget band (SPEC §3): each essence step keeps damage per SP within ±35% of the skill
+ * without that essence. compose() caps hit renormalization at the upper edge.
+ */
+export const ESSENCE_BUDGET_BAND = 0.35;
 /** Composed and merged names never exceed this many words. */
 export const MAX_NAME_WORDS = 4;
 /** A skill carries at most this many essences (the 2nd slot opens with overmastery). */
@@ -203,6 +208,22 @@ function clampHits(shape: SkillShape, riders: SkillRiders | undefined): { shape:
   return r && Object.keys(r).length > 0 ? { shape: s, riders: r } : { shape: s };
 }
 
+/**
+ * Power multiplier `ess` applies to a skill whose shape is `shape` (the shape BEFORE this essence's
+ * own mod). A multiply essence that adds projectiles (`mod.count`, e.g. split) budgets the whole
+ * volley: its `powerMul` multiplies the volley's total damage, spread over the new count, so each
+ * projectile deals `powerMul × c / (c + count)` (c = the projectile count before the essence; split:
+ * 1.1 × c / (c + 2)). Every other essence multiplies power by `powerMul`.
+ */
+export function essencePowerMul(ess: Pick<EssenceDef, 'category' | 'powerMul' | 'mod'>, shape: SkillShape): number {
+  const added = ess.mod.count ?? 0;
+  if (ess.category === 'multiply' && added > 0 && shape.kind === 'projectile') {
+    const c = shape.count ?? 1;
+    return (ess.powerMul * c) / (c + added);
+  }
+  return ess.powerMul;
+}
+
 // ------------------------------------------------------------------ riders & shape mods
 
 /**
@@ -373,8 +394,13 @@ function rootOf(reg: Pick<Registry, 'skill'>, skill: SkillDef): SkillDef | undef
  *   over MAX_NAME_WORDS the essence affix is dropped, then the element prefix, then leading words.
  * - tags: base tags − 'basic' + element + essence tags + 'infused' (with an element).
  * - element: power ×1.2, sp = ceil(sp × 1.25 + 2). Cooldown starts at `base.cooldown || 800`.
- * - essences: power ×powerMul, sp ×spMul (an SP-free base starts at 2), cooldown ×cdMul; shape mods
- *   and riders applied; then the hit clamp (≤ MAX_HITS) and cooldown ≥ MIN_COOLDOWN.
+ * - essences (alphabetical order): power × essencePowerMul (split spreads 1.1 × the volley over the
+ *   new count), sp ×spMul (an SP-free base starts at 2), cooldown ×cdMul; shape mods and riders
+ *   applied; then the hit clamp (≤ MAX_HITS) and cooldown ≥ MIN_COOLDOWN.
+ * - hit renormalization: when the clamp trims hits, power × (hits before / hits after) so the
+ *   cast's total potential damage is kept — capped so that no essence step gains more than
+ *   ESSENCE_BUDGET_BAND (+35%) damage per SP over the same skill with that essence removed (see
+ *   budgetDamage), and never lowered below the unrenormalized power.
  */
 export function compose(base: SkillDef, el: ElementDef | undefined, mods: readonly EssenceDef[]): SkillDef {
   if (!el && mods.length === 0) return base;
@@ -393,13 +419,21 @@ export function compose(base: SkillDef, el: ElementDef | undefined, mods: readon
   let shape: SkillShape = base.shape;
   let riders: SkillRiders | undefined = base.riders;
   for (const e of essences) {
-    power *= e.powerMul;
+    power *= essencePowerMul(e, shape);
     sp *= e.spMul;
     cooldown *= e.cdMul ?? 1;
     shape = applyShapeMod(shape, e.mod);
     riders = combineRiders(riders, essenceRiders(shape.kind, e.mod));
   }
+  const rawHits = hitsWith(shape, riders);
   const clamped = clampHits(shape, riders);
+  const keptHits = hitsWith(clamped.shape, clamped.riders);
+  const spCost = round2(sp);
+  let finalPower = round2(power);
+  if (keptHits > 0 && keptHits < rawHits) {
+    const ceiling = renormCeiling(base, el, essences, clamped.shape, spCost);
+    finalPower = Math.max(finalPower, Math.min(round2((power * rawHits) / keptHits), ceiling));
+  }
   const extraTags: string[] = [];
   if (el) extraTags.push(el.id);
   for (const e of essences) if (e.tag) extraTags.push(e.tag);
@@ -414,8 +448,8 @@ export function compose(base: SkillDef, el: ElementDef | undefined, mods: readon
     maxRank: Math.min(base.maxRank, 8),
     tags: uniq([...base.tags.filter((t) => t !== 'basic'), ...extraTags]),
     element: el?.id ?? base.element,
-    power: round2(power),
-    spCost: round2(sp),
+    power: finalPower,
+    spCost,
     cooldown: Math.max(MIN_COOLDOWN, Math.round(cooldown)),
     shape: clamped.shape,
     riders: clamped.riders,
@@ -423,6 +457,42 @@ export function compose(base: SkillDef, el: ElementDef | undefined, mods: readon
     baseId: base.generated ? (base.baseId ?? base.id) : base.id,
     essences: essences.map((e) => e.id),
   };
+}
+
+/**
+ * Damage of one cast as the essence budget measures it (SPEC §3 budget): `power`, or
+ * `power × shapeHits` once a multiply essence (split, flurry) is on the skill — multiply hits land
+ * on the same target, while propagate/repeat riders spread to other targets or later moments.
+ * `multiply` says whether the skill being judged carries a multiply essence; compare a variant and
+ * its reference with the same flag.
+ */
+export function budgetDamage(skill: Pick<SkillDef, 'power' | 'shape'>, multiply: boolean): number {
+  return multiply ? skill.power * shapeHits(skill.shape) : skill.power;
+}
+
+/**
+ * Highest power a hit-trimmed variant may be renormalized to: for every reference composition
+ * with one essence removed (same base and element; SP-free references are skipped, as in the
+ * budget test), its budgetDamage per SP × (1 + ESSENCE_BUDGET_BAND), rounded down to 0.01.
+ */
+function renormCeiling(
+  base: SkillDef,
+  el: ElementDef | undefined,
+  essences: readonly EssenceDef[],
+  shape: SkillShape,
+  spCost: number,
+): number {
+  const multiply = essences.some((e) => e.category === 'multiply');
+  const hits = multiply ? shapeHits(shape) : 1;
+  let ceiling = Infinity;
+  for (let i = 0; i < essences.length; i++) {
+    const ref = compose(base, el, essences.filter((_, j) => j !== i));
+    if (ref.spCost <= 0) continue;
+    const rate = budgetDamage(ref, multiply) / ref.spCost;
+    ceiling = Math.min(ceiling, ((1 + ESSENCE_BUDGET_BAND) * rate * spCost) / hits);
+  }
+  // A hair under the band so float noise in a ratio check can never read as > +35%.
+  return Number.isFinite(ceiling) ? Math.floor(ceiling * (1 - 1e-9) * 100) / 100 : Infinity;
 }
 
 function composeName(baseName: string, elPrefix: string | undefined, affix: EssenceDef['affix'] | undefined): string {
@@ -451,8 +521,9 @@ function composeDesc(baseDesc: string, el: ElementDef | undefined, essences: rea
 
 /**
  * Why two skills cannot shape-merge, or null if they can: both authored (not generated) and
- * distinct, tier ≥ 1, not monster techniques, not both buffs, sharing ≥ 1 of MERGE_TAGS.
- * Fusion rank requirements are checked by resolveFusion, not here.
+ * distinct, tier ≥ 1, not monster techniques, neither a buff (a buff adds no rider, so it could
+ * only dilute the attack's SP budget), sharing ≥ 1 of MERGE_TAGS. Fusion rank requirements are
+ * checked by resolveFusion, not here.
  */
 export function mergeBlocker(a: SkillDef, b: SkillDef): string | null {
   if (a.id === b.id) return `${a.name} cannot be merged with itself.`;
@@ -461,8 +532,8 @@ export function mergeBlocker(a: SkillDef, b: SkillDef): string | null {
     if (s.tags.includes(MONSTER_TAG)) return `${s.name} belongs to monsters alone.`;
     if (s.tier < 1) return `${s.name} is too simple a form to merge.`;
   }
-  if (a.shape.kind === 'buff' && b.shape.kind === 'buff') {
-    return `${a.name} and ${b.name} are both stances; neither can carry the other.`;
+  for (const s of [a, b]) {
+    if (s.shape.kind === 'buff') return `${s.name} is a stance, not a strike; stances cannot be shape-merged.`;
   }
   if (!MERGE_TAGS.some((t) => a.tags.includes(t) && b.tags.includes(t))) {
     return `${a.name} and ${b.name} share no common thread to bind them.`;
@@ -529,10 +600,10 @@ const castDamage = (s: SkillDef): number => s.power * shapeHits(s.shape);
 
 /**
  * Shape merge of two authored skills (SPEC §3 step 5), or null if they cannot merge (see
- * mergeBlocker). The higher-priority parent sets the shape and the lower adds a rider (spin: +1
- * pulse / radial projectiles / spinning dash; strike: +1 hit; chain: +1 jump; nova: arc {2, 0.5};
- * projectile: +1 count; dash: knockback; buff: none). A "+1" the primary's shape has no axis for
- * (nova, dash) becomes arc {1, 0.5}.
+ * mergeBlocker; buff parents never merge). The higher-priority parent sets the shape and the lower
+ * adds a rider (spin: +1 pulse / radial projectiles / spinning dash; strike: +1 hit; chain: +1
+ * jump; nova: arc {2, 0.5}; projectile: +1 count; dash: knockback). A "+1" the primary's shape has
+ * no axis for (nova, dash) becomes arc {1, 0.5}.
  *
  * Damage: per-cast damage (power × shapeHits) = 1.1 × the stronger parent's, spread over the merged
  * hits — equal to max(power) × 1.1 when both parents hit once, and never letting a heavy single hit

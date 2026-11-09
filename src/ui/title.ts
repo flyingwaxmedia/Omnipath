@@ -1,6 +1,6 @@
 import type { WeaponType } from '../core/types';
 import { WEAPONS } from '../data/weapons';
-import { esc } from './ui';
+import { esc } from './util';
 
 export interface TitleChoice {
   kind: 'continue' | 'new';

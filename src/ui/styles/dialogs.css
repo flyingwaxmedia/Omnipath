@@ -1,0 +1,220 @@
+/* Dialogs, discovery cards and minigames. */
+
+.dialog {
+  width: min(520px, calc(100% - 20px));
+  margin-bottom: calc(14px + var(--safe-b));
+  background: linear-gradient(#f4ead2, #e3d3ae);
+  color: #2b2210;
+  border: 2px solid #8a6a2a;
+  border-radius: 16px;
+  padding: 14px 16px;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.55);
+  animation: sheetin 0.2s ease-out;
+}
+
+.dialog .speaker {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 16px;
+  margin-bottom: 6px;
+}
+
+.dialog .speaker .ico {
+  font-size: 26px;
+}
+
+.dialog p {
+  margin: 0 0 12px;
+  line-height: 1.5;
+  font-size: 14px;
+}
+
+.dialog small {
+  color: #6a5a30;
+}
+
+.dialog .opts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.dialog .btn {
+  background: rgba(0, 0, 0, 0.08);
+  border-color: rgba(0, 0, 0, 0.2);
+  color: #2b2210;
+}
+
+.dialog .btn.gold {
+  background: linear-gradient(#ffe39a, #d9a63e);
+}
+
+.minigame .meter {
+  position: relative;
+  height: 30px;
+  border-radius: 10px;
+  background: linear-gradient(90deg, #3a2a1a, #5a3a1a);
+  overflow: hidden;
+  margin: 8px 0 10px;
+  border: 2px solid #6a4a20;
+}
+
+.minigame .meter .zone {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: radial-gradient(circle, #fff3a0, #ff8a2a);
+  box-shadow: 0 0 16px #ff8a2a;
+}
+
+.minigame .meter .marker {
+  position: absolute;
+  top: -2px;
+  bottom: -2px;
+  width: 4px;
+  margin-left: -2px;
+  background: #fff;
+  box-shadow: 0 0 6px #000;
+}
+
+.minigame .hot {
+  color: #c45a10;
+}
+
+.minigame .strikes {
+  display: flex;
+  justify-content: center;
+  gap: 16px;
+  font-size: 22px;
+  margin-bottom: 10px;
+}
+
+.minigame .strikes .hit {
+  color: #d9801a;
+}
+
+.minigame .strikes .miss {
+  color: #a03030;
+}
+
+.minigame .btn.gold {
+  width: 100%;
+  padding: 14px;
+  font-size: 17px;
+}
+
+.pond {
+  height: 90px;
+  border-radius: 12px;
+  background: linear-gradient(#5fb0e8, #2d6fb0);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 10px;
+  font-size: 22px;
+}
+
+.pond .bob {
+  animation: bob 1.4s ease-in-out infinite;
+}
+
+.pond .bob.bite {
+  animation: bite 0.18s ease-in-out infinite;
+}
+
+@keyframes bob {
+  50% {
+    transform: translateY(4px);
+  }
+}
+
+@keyframes bite {
+  50% {
+    transform: translateY(12px) scale(0.85);
+  }
+}
+
+.discovery {
+  position: relative;
+  margin: auto;
+  width: min(380px, calc(100% - 32px));
+  padding: 28px 22px 20px;
+  border-radius: 22px;
+  text-align: center;
+  background: radial-gradient(circle at 50% 30%, #2a3870, #121a33 70%);
+  border: 2px solid var(--accent);
+  box-shadow:
+    0 0 40px color-mix(in srgb, var(--accent) 50%, transparent),
+    0 20px 60px rgba(0, 0, 0, 0.6);
+  overflow: hidden;
+  animation: discin 0.45s cubic-bezier(0.2, 1.4, 0.4, 1);
+}
+
+.modal:has(.discovery) {
+  align-items: center;
+}
+
+@keyframes discin {
+  from {
+    transform: scale(0.6);
+    opacity: 0;
+  }
+}
+
+.discovery .rays {
+  position: absolute;
+  inset: -50%;
+  background: repeating-conic-gradient(
+    from 0deg,
+    color-mix(in srgb, var(--accent) 16%, transparent) 0deg 10deg,
+    transparent 10deg 24deg
+  );
+  animation: spin 12s linear infinite;
+  pointer-events: none;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.discovery > *:not(.rays) {
+  position: relative;
+}
+
+.discovery .kicker {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.22em;
+  color: var(--accent);
+}
+
+.discovery .big-ico {
+  font-size: 64px;
+  margin: 10px 0 4px;
+  animation: pop 0.6s 0.1s both cubic-bezier(0.2, 1.6, 0.4, 1);
+  filter: drop-shadow(0 0 16px var(--accent));
+}
+
+.discovery h2 {
+  margin: 4px 0 8px;
+  font-size: 24px;
+}
+
+.discovery p {
+  font-size: 14px;
+  line-height: 1.5;
+  color: #cfd8f2;
+}
+
+.discovery small {
+  color: var(--accent);
+}
+
+.discovery .btn {
+  margin-top: 8px;
+  min-width: 140px;
+}

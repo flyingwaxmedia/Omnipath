@@ -93,7 +93,7 @@ damage.
 
 | thing | action |
 |---|---|
-| smith (brann) | dialog: Forge (2 ore, timing minigame; 3 good forges → fire), Lessons, Buy weapons (60 coins). First visit: gift 6 ore (flag `brann_gift`). |
+| smith (brann) | dialog: Forge (2 ore, timing minigame; each good forge → `forge_success` +1; 3 → fire), Lessons, Buy weapons (60 coins). First visit: gift 6 ore (flag `brann_gift`). |
 | priestess (alba) | full heal; grants holy when ≥ 3 elements; Lessons |
 | hermit / fisher / trainer | lines + Lessons (trainer panel) |
 | waykeeper | set save point here, Travel (attuned waystones: same region free, other region 40 coins), sell materials |
@@ -110,9 +110,26 @@ damage.
 | portal | gate check → dialog showing sockets/hint if closed; else warp |
 
 Hidden portal reveal: whenever the player casts a skill whose tags/element/shape match `reveal` within 3 tiles of
-the portal rect → add to `world.revealed`, burst FX, toast "A hidden way opens".
+the portal rect (any-of: `tag` OR `element`/`elements` OR `shape`) → add to `world.revealed`, burst FX, toast "A
+hidden way opens".
 Map entry: `book.incFlag('visited:' + mapId)` the first time, `world.visited`, banner with name + level band.
 Fog: mark the 4×4 cells within 6 tiles of the player every 500 ms.
+
+**Flag contract.** Content `Requirement`s (morphs, recipes, lessons, classes) and portal gates may read ONLY these
+SkillBook flags (`tests/content.test.ts` enforces it), so the client must set every one of them with `book.incFlag`:
+
+| flag | set by | when |
+|---|---|---|
+| `visited:<mapId>` | client (§5) | first entry into a map (to 1) |
+| `ore_mined`, `fish_caught`, `herb_gathered`, `ember_gathered`, `chime_gathered`, `storm_gathered`, `spore_gathered`, `sun_gathered`, `frost_gathered` | client (§5) | +1 per successful gather of that node kind (SPEC §7.4) |
+| `meditations` | client (§5) | +1 per completed wind-shrine meditation |
+| `forge_success` | client (§5) | +1 per good forge at Brann (3 → fire) |
+| `brann_gift` | client (§5) | Brann's first-visit ore gift (to 1) |
+| `kills` | client (§6) | +1 per monster killed (any species) |
+| `kill_<monsterId>` | client (§6) | +1 per kill of that species (elites/wardens under their own id) |
+| `warden_<wardenId>` | client (§6) | +1 per warden defeat |
+| relic flags (`relic_stone`, `relic_dusk`, `relic_storm` — `ItemDef.flag` of relic items) | client (§6) | relic picked up |
+| `mastered_any`, `class_worn` | core SkillBook | first skill at max rank / first class worn (to 1) |
 
 ## 6. Combat (`src/game/systems/Combat.ts`, `SkillSystem.ts`, `MonsterSkills.ts`)
 
@@ -131,7 +148,8 @@ Fog: mark the 4×4 cells within 6 tiles of the player every 500 ms.
   `instanceHits` counts hit-XP grants for (skill, monster instance).
 - Sparks: on every hit by a skill with unknown spark morphs: `const s = book.trySpark(skill.id, m.def, now)`; on success:
   250 ms hit-stop (`this.time.timeScale`/tween pause), radial flash, banner "✦ New form: <name>", `navigator.vibrate?.(60)`.
-- Kills: `book.recordKill(def)` (essence → toast "Essence of <X>"), flags `kill_<id>`, bestiary star toasts; wardens:
+- Kills: `book.recordKill(def)` (essence → toast "Essence of <X>"), flags `kills` and `kill_<id>` (see the §5 flag
+  contract), bestiary star toasts; wardens:
   `book.incFlag('warden_' + id)`, `world.wardens[id] = Date.now()`; drops: relic → bag item + `book.incFlag(relic.flag)`;
   tome → learn; shard → element.
 - Echo witness: when a monster BEGINS an echo technique targeted at the player within 6 tiles, mark it witnessed on that

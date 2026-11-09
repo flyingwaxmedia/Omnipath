@@ -20,6 +20,7 @@ import { MONSTER_TAG } from './compose';
 import { anchorFor, echoNeed, witnessOutcome, type EchoContext, type WitnessOutcome } from './echo';
 import { Emitter } from './emitter';
 import {
+  SECOND_SLOT_OVERBARS,
   essenceSlots as slotsFor,
   hintCandidates,
   resolveFusion,
@@ -610,9 +611,8 @@ export class SkillBook {
   /**
    * Low-level mastery grant: adds `amount × MASTERY.rate` XP to a known skill, ranking it up (a
    * charge and `mastered` at max rank), then filling overmastery bars: each bar adds overBars + 1 and
-   * a charge while below MASTERY.maxCharges. With charges capped a bar still completes while it would
-   * open an essence slot (so the 2nd slot never depends on spending charges); after that it holds
-   * full. Every grant also feeds Class Ranks (classRank events), and rank-ups re-run discovery.
+   * a charge while below MASTERY.maxCharges. With charges capped a bar still completes until the 2nd
+   * essence slot is open (so that slot never depends on spending charges); after that it holds full. Every grant also feeds Class Ranks (classRank events), and rank-ups re-run discovery.
    * Returns the XP granted (0 for unknown skills or non-positive amounts).
    */
   addMastery(id: string, amount: number): number {
@@ -1181,12 +1181,18 @@ export class SkillBook {
     if (!list.includes(value)) list.push(value);
   }
 
-  /** Completes overmastery bars at max rank (see addMastery). */
+  /**
+   * Completes overmastery bars at max rank (see addMastery). With charges capped, a bar still
+   * completes while the skill's 2nd essence slot is not open yet (overBars < SECOND_SLOT_OVERBARS —
+   * so the slot never waits on spending charges, even for a migrated save holding 3 charges at
+   * overBars 0); once every slot the skill can have is open, the bar holds full.
+   */
   private fillOverBars(p: SkillProgress, skill: SkillDef): void {
     const cost = overmasteryCost(skill.maxRank, skill.tier);
+    const allSlots = slotsFor(skill, SECOND_SLOT_OVERBARS);
     while (p.xp >= cost) {
       const capped = p.charges >= MASTERY.maxCharges;
-      if (capped && slotsFor(skill, p.overBars) >= slotsFor(skill, p.overBars + 1)) {
+      if (capped && slotsFor(skill, p.overBars) >= allSlots) {
         p.xp = cost;
         return;
       }

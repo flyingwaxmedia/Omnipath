@@ -12,9 +12,13 @@ import type { ClassDef, PassiveDef, Requirement } from '../core/types';
  * Every class gets its tree + imprint from `classTreeTemplate`; all of those PassiveDefs are exported as
  * CLASS_PASSIVES and registered by src/data/index.ts. Signature skills live in skills/signatures.ts.
  *
- * Bonus budget (worn class only): atk/matk <= 12, tagPower <= 20, speed <= 12, crit <= 15, cdr <= 10 for
- * Tier I; Tier II/III add more non-damage stats, but on any single skill max(atk, matk) + the summed
- * tagPower it can collect stays <= 20%.
+ * Class power budget (SPEC §5, enforced by tests/class-budget.test.ts): for any single skill, the worn
+ * class's bonus (Σ tagPower over the skill's tags + its ATK or MATK %, the tree's atk/matk node included)
+ * + its maxed tree power nodes + capstone + the 3 best slottable imprints at their strengths <= 25 points.
+ * The template (balance.CLASS_TREE_POWER) takes 15 of them in the worst case (18 with an atk/matk tree
+ * node), so a worn `bonus` may add at most 10 damage points to any one skill (7 with an atk/matk node):
+ * the hybrid stat is max(atk, matk), and tagPower entries a single skill can carry together add up.
+ * Non-damage stats stay within speed <= 12, crit <= 15, cdr <= 10, hp/sp <= 15.
  */
 
 /** A class as authored here: everything but `tree`/`imprint`, plus the template knobs that build them. */
@@ -35,7 +39,7 @@ const SEEDS: ClassSeed[] = [
     hint: 'One hand, four edges: learn four different ways a blade can cut.',
     tier: 1,
     clauses: [{ tags: ['blade'], count: 4 }],
-    bonus: { atk: 10 },
+    bonus: { atk: 7, crit: 3 },
     grants: ['blade_aura'],
     tree: { tag: 'blade', tag2: 'melee', stat: 'atk' },
   },
@@ -47,7 +51,7 @@ const SEEDS: ClassSeed[] = [
     hint: 'Turn once and it is a step; turn twice, a dance. Know three ways to turn, and become the storm.',
     tier: 1,
     clauses: [{ tags: ['spin'], count: 3 }],
-    bonus: { speed: 5, tagPower: { spin: 20 } },
+    bonus: { speed: 8, tagPower: { spin: 10 } },
     grants: ['eye_of_the_storm'],
     tree: { tag: 'spin', tag2: 'aoe', stat: 'speed' },
   },
@@ -59,7 +63,7 @@ const SEEDS: ClassSeed[] = [
     hint: "The forge's fire need not stay in the forge. Carry it on an edge — then on a second.",
     tier: 1,
     clauses: [{ tags: ['blade', 'fire'], count: 2 }],
-    bonus: { atk: 5, tagPower: { fire: 15 } },
+    bonus: { atk: 3, hp: 5, tagPower: { fire: 4 } },
     grants: ['searing_edge'],
     tree: { tag: 'fire', tag2: 'blade', stat: 'atk' },
   },
@@ -83,7 +87,7 @@ const SEEDS: ClassSeed[] = [
     hint: 'Three sharp points that leave your hand and fly. Keep them all in the air at once.',
     tier: 1,
     clauses: [{ tags: ['pierce', 'projectile'], count: 3 }],
-    bonus: { tagPower: { projectile: 15 }, speed: 5 },
+    bonus: { tagPower: { projectile: 10 }, speed: 5 },
     tree: { tag: 'projectile', tag2: 'pierce', stat: 'crit' },
   },
   {
@@ -97,7 +101,7 @@ const SEEDS: ClassSeed[] = [
       { tags: ['execute'], count: 1 },
       { tags: ['stealth'], count: 2 },
     ],
-    bonus: { crit: 15, tagPower: { execute: 20 } },
+    bonus: { crit: 15, tagPower: { execute: 10 } },
     tree: { tag: 'execute', tag2: 'stealth', stat: 'crit', skillNode: 'shade_cloak' },
   },
   {
@@ -108,7 +112,7 @@ const SEEDS: ClassSeed[] = [
     hint: 'Four spells that wear no colour but their own.',
     tier: 1,
     clauses: [{ tags: ['arcane'], count: 4 }],
-    bonus: { matk: 12, sp: 10 },
+    bonus: { matk: 7, sp: 10 },
     grants: ['mana_surge'],
     tree: { tag: 'arcane', tag2: 'aoe', stat: 'matk' },
   },
@@ -120,7 +124,7 @@ const SEEDS: ClassSeed[] = [
     hint: 'Speak a spell and set it alight. Then speak another, and burn that one too.',
     tier: 1,
     clauses: [{ tags: ['arcane', 'fire'], count: 2 }],
-    bonus: { matk: 5, tagPower: { fire: 15 } },
+    bonus: { matk: 3, sp: 5, tagPower: { fire: 4 } },
     tree: { tag: 'fire', tag2: 'arcane', stat: 'matk', skillNode: 'mana_surge' },
   },
   {
@@ -131,7 +135,7 @@ const SEEDS: ClassSeed[] = [
     hint: 'Call the water once and it ripples. Call it twice and the tide learns your name.',
     tier: 1,
     clauses: [{ tags: ['water'], count: 2 }],
-    bonus: { hp: 10, sp: 10, tagPower: { water: 15 } },
+    bonus: { hp: 10, sp: 10, tagPower: { water: 10 } },
     tree: { tag: 'water', stat: 'sp' },
   },
   {
@@ -145,7 +149,7 @@ const SEEDS: ClassSeed[] = [
       { tags: ['lightning'], count: 2 },
       { tags: ['wind'], count: 1 },
     ],
-    bonus: { sp: 5, tagPower: { lightning: 12, wind: 8 } },
+    bonus: { sp: 5, speed: 4, tagPower: { lightning: 5, wind: 2 } },
     tree: { tag: 'lightning', tag2: 'wind', stat: 'matk', skillNode: 'eye_of_the_storm' },
   },
   {
@@ -156,7 +160,7 @@ const SEEDS: ClassSeed[] = [
     hint: 'Strike the ground twice in its own tongue, and it will remember you.',
     tier: 1,
     clauses: [{ tags: ['earth'], count: 2 }],
-    bonus: { hp: 15, tagPower: { earth: 15 } },
+    bonus: { hp: 15, tagPower: { earth: 10 } },
     tree: { tag: 'earth', tag2: 'heavy', stat: 'hp' },
   },
   {
@@ -183,7 +187,7 @@ const SEEDS: ClassSeed[] = [
       { tags: ['blade'], count: 2 },
       { tags: ['arcane'], count: 2 },
     ],
-    bonus: { atk: 8, matk: 8 },
+    bonus: { atk: 7, matk: 7 },
     grants: ['runic_blade'],
     tree: { tag: 'arcane', tag2: 'blade', stat: 'atk' },
   },
@@ -212,7 +216,7 @@ const SEEDS: ClassSeed[] = [
       { tags: ['holy'], count: 1 },
       { tags: ['blade'], count: 3 },
     ],
-    bonus: { hp: 15, atk: 5, tagPower: { holy: 15 } },
+    bonus: { hp: 15, atk: 4, tagPower: { holy: 6 } },
     tree: { tag: 'holy', tag2: 'blade', stat: 'def', skillNode: 'blade_aura' },
   },
   {
@@ -226,7 +230,7 @@ const SEEDS: ClassSeed[] = [
       { tags: ['twilight'], count: 1 },
       { tags: ['arcane'], count: 3 },
     ],
-    bonus: { matk: 10, cdr: 10, tagPower: { twilight: 10 } },
+    bonus: { matk: 4, cdr: 10, tagPower: { twilight: 3 } },
     tree: { tag: 'twilight', tag2: 'arcane', stat: 'matk' },
   },
 
@@ -239,7 +243,7 @@ const SEEDS: ClassSeed[] = [
     hint: 'Two edges that ride the wind instead of cutting through it.',
     tier: 1,
     clauses: [{ tags: ['blade', 'wind'], count: 2 }],
-    bonus: { atk: 6, speed: 6, tagPower: { wind: 12 } },
+    bonus: { atk: 4, speed: 6, tagPower: { wind: 6 } },
     grants: ['windblade_sig'],
     tree: { tag: 'wind', tag2: 'blade', stat: 'speed' },
   },
@@ -251,7 +255,7 @@ const SEEDS: ClassSeed[] = [
     hint: 'Listen to three monsters long enough, and you will start answering in their voices.',
     tier: 1,
     clauses: [{ tags: ['echo'], count: 3 }],
-    bonus: { sp: 10, tagPower: { echo: 15 } },
+    bonus: { sp: 10, tagPower: { echo: 10 } },
     grants: ['mimic_sig'],
     tree: { tag: 'echo', tag2: 'aoe', stat: 'sp' },
   },
@@ -264,7 +268,7 @@ const SEEDS: ClassSeed[] = [
     tier: 1,
     clauses: [{ tags: ['holy'], count: 1 }],
     requires: [{ type: 'mapVisited', id: 'vale.moonlit_glade' }],
-    bonus: { hp: 10, sp: 10, cdr: 5, tagPower: { holy: 15 } },
+    bonus: { hp: 10, sp: 10, cdr: 5, tagPower: { holy: 10 } },
     grants: ['moonwarden_sig'],
     tree: { tag: 'holy', tag2: 'spirit', stat: 'hp' },
     hidden: true,
@@ -280,7 +284,7 @@ const SEEDS: ClassSeed[] = [
     tier: 2,
     clauses: [{ tags: ['blade'], count: 5 }],
     parents: [{ id: 'blademaster', rank: 10 }],
-    bonus: { atk: 10, crit: 12, tagPower: { blade: 10 } },
+    bonus: { atk: 5, crit: 12, tagPower: { blade: 5 } },
     grants: ['sword_saint_sig'],
     tree: { tag: 'blade', tag2: 'melee', stat: 'crit' },
   },
@@ -297,7 +301,7 @@ const SEEDS: ClassSeed[] = [
     ],
     parents: [{ id: 'pyroblade', rank: 10 }],
     requires: [{ type: 'element', id: 'magma' }],
-    bonus: { atk: 8, hp: 15, tagPower: { fire: 8, magma: 12 } },
+    bonus: { atk: 4, hp: 15, tagPower: { fire: 3, magma: 3 } },
     grants: ['magma_knight_sig'],
     tree: { tag: 'heavy', tag2: 'fire', stat: 'hp' },
   },
@@ -310,7 +314,7 @@ const SEEDS: ClassSeed[] = [
     tier: 2,
     clauses: [{ tags: ['stealth'], count: 4 }],
     parents: [{ id: 'shadowstalker', rank: 10 }],
-    bonus: { crit: 15, speed: 8, tagPower: { stealth: 15 } },
+    bonus: { crit: 15, speed: 8, tagPower: { stealth: 10 } },
     grants: ['phantom_sig'],
     tree: { tag: 'stealth', tag2: 'dash', stat: 'crit' },
   },
@@ -323,7 +327,7 @@ const SEEDS: ClassSeed[] = [
     tier: 2,
     clauses: [{ tags: ['arcane'], count: 5 }],
     parents: [{ id: 'arcanist', rank: 10 }],
-    bonus: { matk: 12, sp: 15, cdr: 5, tagPower: { arcane: 8 } },
+    bonus: { matk: 5, sp: 15, cdr: 5, tagPower: { arcane: 2 } },
     grants: ['archmage_sig'],
     tree: { tag: 'arcane', tag2: 'aoe', stat: 'matk' },
   },
@@ -337,7 +341,7 @@ const SEEDS: ClassSeed[] = [
     clauses: [],
     distinctElements: 5,
     parents: [{ id: 'elementalist', rank: 10 }],
-    bonus: { atk: 6, matk: 10, sp: 10, tagPower: { infused: 10 } },
+    bonus: { atk: 4, matk: 4, sp: 10, tagPower: { infused: 3 } },
     grants: ['prism_sage_sig'],
     tree: { tag: 'infused', tag2: 'arcane', stat: 'matk' },
   },
@@ -350,7 +354,7 @@ const SEEDS: ClassSeed[] = [
     tier: 2,
     clauses: [{ tags: ['spin'], count: 4 }],
     parents: [{ id: 'tempest_dancer', rank: 10 }],
-    bonus: { speed: 10, tagPower: { spin: 20 } },
+    bonus: { speed: 10, tagPower: { spin: 10 } },
     grants: ['vortex_dancer_sig'],
     tree: { tag: 'spin', tag2: 'dash', stat: 'speed' },
   },
@@ -369,7 +373,7 @@ const SEEDS: ClassSeed[] = [
       { id: 'spellblade', rank: 6 },
       { id: 'earthshaper', rank: 6 },
     ],
-    bonus: { atk: 8, matk: 8, hp: 15, tagPower: { earth: 12 } },
+    bonus: { atk: 4, matk: 4, hp: 15, tagPower: { earth: 6 } },
     grants: ['runeknight_sig'],
     tree: { tag: 'earth', tag2: 'blade', stat: 'def' },
   },
@@ -388,7 +392,7 @@ const SEEDS: ClassSeed[] = [
       { id: 'stormcaller', rank: 6 },
       { id: 'tempest_dancer', rank: 6 },
     ],
-    bonus: { speed: 6, sp: 10, tagPower: { lightning: 12, spin: 8 } },
+    bonus: { speed: 6, sp: 10, tagPower: { lightning: 6, spin: 4 } },
     grants: ['stormreaver_sig'],
     tree: { tag: 'lightning', tag2: 'spin', stat: 'speed' },
   },
@@ -401,7 +405,7 @@ const SEEDS: ClassSeed[] = [
     tier: 2,
     clauses: [{ tags: ['echo'], count: 6 }],
     parents: [{ id: 'mimic', rank: 8 }],
-    bonus: { hp: 10, sp: 15, tagPower: { echo: 20 } },
+    bonus: { hp: 10, sp: 15, tagPower: { echo: 10 } },
     grants: ['echo_sovereign_sig'],
     tree: { tag: 'echo', tag2: 'aoe', stat: 'hp' },
     hidden: true,
@@ -425,7 +429,7 @@ const SEEDS: ClassSeed[] = [
       { id: 'archmage', rank: 6 },
     ],
     requires: [STORM_RELIC],
-    bonus: { atk: 10, matk: 10, crit: 10, cdr: 8, tagPower: { blade: 5, arcane: 5 } },
+    bonus: { atk: 4, matk: 7, crit: 10, cdr: 8, tagPower: { arcane: 3 } },
     grants: ['ascendant_sig'],
     tree: { tag: 'arcane', tag2: 'blade', stat: 'atk', skillNode: 'runic_blade' },
   },
@@ -446,7 +450,7 @@ const SEEDS: ClassSeed[] = [
       { id: 'prism_sage', rank: 6 },
     ],
     requires: [DUSK_RELIC],
-    bonus: { crit: 15, speed: 10, cdr: 8, tagPower: { twilight: 12, stealth: 8 } },
+    bonus: { crit: 15, speed: 10, cdr: 8, tagPower: { twilight: 6, stealth: 4 } },
     grants: ['eclipse_walker_sig'],
     tree: { tag: 'twilight', tag2: 'stealth', stat: 'crit', skillNode: 'moonwarden_sig' },
   },
