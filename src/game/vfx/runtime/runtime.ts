@@ -8,7 +8,8 @@
 // - Body pieces y-sort with ySort(anchor y ± 1, bias); rings and auras round an actor split into a back half (y - 1)
 //   and a front half (y + 1); glow twins are white, tinted family R4 and drawn in ONE shared ADD Layer (front halves
 //   only), moved above the darkness on dark maps; ground decals use MULTIPLY for scorch / ink.
-// - Rings wider than RING_WHOLE_MAX, and aim-relative arcs, are placed from baked 10 px band chunks (Blitter bobs).
+// - Rings wider than RING_WHOLE_MAX, and aim-relative arcs, are placed from baked 10 px band chunks (Blitter bobs);
+//   big solid rings (r > RING_LONG.fromR) place 20 px chunks along their gentle stretches (about half the bobs).
 // - Motes are particles on shared Blitters (closed-form motion, age-stepped frames), spawned by pattern or by
 //   distance travelled (trails). Afterimages snapshot the actor's own frame (tint-filled, stepped alpha).
 // - Quality governor: an EMA of the frame time degrades counts, chunks, trails, decals and glow before the frame rate
@@ -19,6 +20,7 @@ import { DEPTH, VFX_DEPTH, Y_BIAS, ySort } from '../../render/depths';
 import type { GhostSource, LivePt, PlayCtx, TellSpec, VfxGroup, VfxStage } from '../play';
 import { RAMPS, hexToRgb } from '../ramps';
 import {
+  RING_LONG,
   RING_WHOLE_MAX,
   smearStage,
   smearWidth,
@@ -38,6 +40,7 @@ import {
   type VfxQuality,
 } from '../types';
 import { TEMPLATES } from '../components';
+import { chunkLayout } from '../components/ring';
 import { reachBucket } from '../recipe';
 import { Atlas, type AtlasEntry, type FrameRef, type StripRef } from './atlas';
 import { Baker, bakeReq, type BakeReq } from './baker';
@@ -327,7 +330,7 @@ function frameAt(s: StripRef, use: string, t: number, loop: boolean): number {
   return n - 1;
 }
 
-/** Rings placed from 10 px band chunks (r > RING_WHOLE_MAX, aim-relative arcs). */
+/** Rings placed from 10 px band chunks (r > RING_WHOLE_MAX, aim-relative arcs); 20 px ones on big solid rims. */
 class ChunkRingInst extends Inst {
   private bobs: Phaser.GameObjects.Bob[] = [];
   private glowBobs: Phaser.GameObjects.Bob[] = [];
@@ -336,6 +339,11 @@ class ChunkRingInst extends Inst {
   private readonly reqs: Map<string, BakeReq>;
   /** Static / marching rings skip the re-layout while nothing that places them changed. */
   private laid = '';
+  /** Long 20 px chunks allowed (RING_LONG: big solid rings); the chunk angles of the last layout and their kind. */
+  private readonly long: boolean;
+  private ths: number[] = [];
+  private longAt: boolean[] = [];
+  private thsFor = '';
 
   constructor(
     rt: VfxRuntime,
@@ -347,10 +355,21 @@ class ChunkRingInst extends Inst {
   ) {
     super(rt, group, t0);
     this.reqs = rt.chunkReqMap(piece);
+    this.long = rt.longChunks(piece);
   }
 
   keys(): readonly string[] {
     return [...this.reqs.values()].map((r) => r.key);
+  }
+
+  /** Long-chunk layout of the current rim size (components/ring.ts chunkLayout), cached while the size holds. */
+  private layout(rx: number, ry: number): void {
+    const key = `${Math.round(rx)},${Math.round(ry)}`;
+    if (key === this.thsFor) return;
+    this.thsFor = key;
+    const l = chunkLayout(rx, ry);
+    this.ths = l.ths;
+    this.longAt = l.long;
   }
 
   update(now: number): void {
@@ -382,7 +401,10 @@ class ChunkRingInst extends Inst {
     const ry = rx * prm.aspect;
     const h = ((rx - ry) * (rx - ry)) / ((rx + ry) * (rx + ry));
     const per = Math.PI * (rx + ry) * (1 + (3 * h) / (10 + Math.sqrt(4 - 3 * h)));
-    const N = Math.max(8, Math.ceil(per / 10));
+    // Big solid rings: arc-length placement with long chunks where the rim is gentle (about half the bobs).
+    const useLong = this.long && rx > RING_LONG.fromR;
+    if (useLong) this.layout(rx, ry);
+    const N = useLong ? this.ths.length : Math.max(8, Math.ceil(per / 10));
     const aim = this.o.ang();
     // Chunk density: every chunk for cue rings; thin / dim bands (1 px floor bands, fading shocks) and a crowded bob
     // pool (> 60 % of the player share) place every 2nd chunk, which reads like the 50 % dither of whole dim rings.
@@ -409,7 +431,8 @@ class ChunkRingInst extends Inst {
     const smear = !!(sweepT && prm.smear);
     const crowded = step > 1;
     for (let k = 0; k < N; k += smear ? 1 : step) {
-      const th = (k / N) * TAU;
+      const th = useLong ? this.ths[k] : (k / N) * TAU;
+      const long = useLong && this.longAt[k];
       // Arc filter: aim-relative arcs (cone rims, strike previews) or screen-degree arcs.
       if (prm.arc) {
         const deg = ((th - (this.o.arcRel ? aim : 0)) * 180) / Math.PI;
@@ -458,12 +481,12 @@ class ChunkRingInst extends Inst {
           return;
         }
       }
-      const req = this.reqs.get(kKey);
+      const req = this.reqs.get(long ? `${kKey}~L` : kKey);
       const e = req && this.rt.ready(req);
       if (!e) continue;
       this.rt.touch(e, now);
       const nAng = Math.atan2(Math.sin(th) / ry, Math.cos(th) / rx);
-      const pick = pickDir(nAng, 16);
+      const pick = pickDir(nAng, long ? 32 : 16);
       const s = e.strips[pick.u];
       const f = s?.frames[0];
       if (!f?.w) continue;
@@ -476,7 +499,7 @@ class ChunkRingInst extends Inst {
       nb = this.setBob(this.bobs, nb, bl, f, x, y, pick);
       const g = s?.glow?.[0];
       // Glow twins on the front half, every 2nd chunk (the light reads as a band; half the bobs).
-      if (g?.w && this.o.glow && !back && this.rt.glowOn && k % (2 * step) === 0) {
+      if (g?.w && this.o.glow && !back && this.rt.glowOn && (long ? k % step === 0 : k % (2 * step) === 0)) {
         const gb = this.rt.bobs.sharedFor('glow', g.tex, 0, true, this.rt.profile.glowGain);
         const gx = pick.flipX ? px - (g.w - 1 - g.ox) : px - g.ox;
         const gy = pick.flipY ? py - (g.h - 1 - g.oy) : py - g.oy;
@@ -554,6 +577,8 @@ interface Particle {
   glow: boolean;
   /** Orbit / converge motes end with their group (a cancelled charge's orbiting sparks); null: free motes. */
   grp: Group | null;
+  /** Bob multiply tint (0xffffff = as baked; death chips: the hide colour). */
+  tint: number;
 }
 
 /** Emits a motes piece's particles over time (staggered waves, cadence repeats). */
@@ -574,7 +599,7 @@ class MotesInst extends Inst {
     private readonly piece: VfxPieceOf<'motes'>,
     private readonly req: BakeReq,
     private readonly where: Where,
-    private readonly o: { layer: VfxLayer; ang: () => number; rng: Rng; quota: number; to: (() => Pt | null) | null; glow: boolean },
+    private readonly o: { layer: VfxLayer; ang: () => number; rng: Rng; quota: number; to: (() => Pt | null) | null; glow: boolean; tint?: number },
   ) {
     super(rt, group, t0);
     const pl = piece.place;
@@ -617,7 +642,7 @@ class MotesInst extends Inst {
       const ang = this.o.ang();
       for (let k = 0; k < this.n; k++) {
         const l = launch(this.piece, k, this.n, ang, this.o.rng, this.life);
-        this.rt.spawnParticle(this.persistent ? this.group : null, this.req, this.piece.ramp, this.o.layer, now + l.delay, l, at, this.where, this.o.to, this.o.glow);
+        this.rt.spawnParticle(this.persistent ? this.group : null, this.req, this.piece.ramp, this.o.layer, now + l.delay, l, at, this.where, this.o.to, this.o.glow, this.o.tint);
       }
       this.emitted++;
       if (this.cadence && t + this.cadence < this.until) this.nextWave += this.cadence;
@@ -724,6 +749,96 @@ class GhostInst extends Inst {
       this.rt.pool('body').put(this.img);
     }
     this.img = null;
+  }
+}
+
+/**
+ * Blink vanish (afterimage mode 'blink': shadowstep and other stealth / arcane dashes). On the cast frame the actor's
+ * own frame turns into a family-R3 silhouette IN FRONT of the body (the vanish frame: the departure reads at once; a
+ * ghost behind the sprite stayed hidden under the body for the dash's first ~80 ms), then splits into 4 px bands that
+ * slide apart sideways by whole pixels (±1, ±2, ±3) while their alpha steps down. Low quality: the vanish frame only.
+ */
+class BlinkInst extends Inst {
+  private imgs: Phaser.GameObjects.Image[] = [];
+  private shown = -1;
+  /** The vanish frame's hold before the bands (ms) and its alpha. */
+  static readonly VANISH = { ms: 33, alpha: 0.85, band: 4 } as const;
+
+  constructor(
+    rt: VfxRuntime,
+    group: Group,
+    t0: number,
+    private readonly snap: { tex: string; frame: string | number; flipX: boolean; ox: number; oy: number; sx: number; sy: number; x: number; y: number },
+    private readonly steps: readonly number[],
+    private readonly color: number,
+    private readonly stepMs = 50,
+  ) {
+    super(rt, group, t0);
+  }
+
+  update(now: number): void {
+    const t = now - this.t0;
+    if (t < 0) return;
+    const V = BlinkInst.VANISH;
+    const k = t < V.ms ? 0 : 1 + Math.floor((t - V.ms) / this.stepMs);
+    if (k > this.steps.length) {
+      this.dead = true;
+      return;
+    }
+    if (k === this.shown) return;
+    this.shown = k;
+    if (k === 0) {
+      const img = this.image(0);
+      if (!img) {
+        this.dead = true;
+        return;
+      }
+      img.setAlpha(V.alpha);
+      return;
+    }
+    // Bands: one cropped copy of the frame per 4 px row band, alternate bands shifted left / right.
+    const first = this.image(0);
+    if (!first) {
+      this.dead = true;
+      return;
+    }
+    const n = Math.max(1, Math.ceil(first.frame.height / V.band));
+    const shift = Math.min(3, k);
+    for (let b = 0; b < n; b++) {
+      const img = this.image(b);
+      if (!img) break;
+      const dx = (b % 2 === 0 ? 1 : -1) * shift;
+      img
+        .setCrop(0, b * V.band, img.frame.width, V.band)
+        .setPosition(Math.round(this.snap.x) + dx, Math.round(this.snap.y))
+        .setAlpha(this.steps[k - 1]);
+    }
+  }
+
+  /** The b-th pooled copy of the snapshot frame (tint-filled, in front of the actor). */
+  private image(b: number): Phaser.GameObjects.Image | null {
+    const had = this.imgs[b];
+    if (had) return had;
+    const img = this.rt.pool('body').get(this.snap.tex, String(this.snap.frame));
+    if (!img) return null;
+    if (img.texture.key !== this.snap.tex || img.frame.name !== String(this.snap.frame)) img.setTexture(this.snap.tex, this.snap.frame);
+    img
+      .setOrigin(this.snap.ox, this.snap.oy)
+      .setScale(this.snap.sx, this.snap.sy)
+      .setFlipX(this.snap.flipX)
+      .setPosition(Math.round(this.snap.x), Math.round(this.snap.y))
+      .setTintFill(this.color)
+      .setDepth(ySort(this.snap.y + 1));
+    this.imgs[b] = img;
+    return img;
+  }
+
+  destroy(): void {
+    for (const img of this.imgs) {
+      img.setCrop().setOrigin(0, 0).setScale(1, 1);
+      this.rt.pool('body').put(img);
+    }
+    this.imgs = [];
   }
 }
 
@@ -887,6 +1002,8 @@ export interface VfxStats {
   split: { bake: number; insts: number; particles: number };
   frameMs: number;
   boltCanvasesBusy: number;
+  /** Cast-time bolt hops: baked, composed from the strip pool, peak / mean bake ms (QA). */
+  boltHops: { hops: number; pooled: number; peakMs: number; meanMs: number; meanFramesMs: number; poolMs: number };
   fallbacks: number;
   /** Monster telegraphs on show (peak), tell canvases, tell bytes uploaded (KB). */
   tells: { live: number; peak: number; canvases: number; uploadedKB: number };
@@ -996,7 +1113,11 @@ export class VfxRuntime implements VfxStage {
 
   /** Queues every bake variant of these pieces (the warm set); baked in idle slices, even while the scene pauses. */
   warm(pieces: readonly VfxPiece[]): void {
-    for (const p of pieces) for (const r of this.variants(p)) this.baker.request(r, false);
+    for (const p of pieces) {
+      // Cast-time bolts compose from their look's strip pool (../boltpool.ts): warm the pool, not a strip.
+      if (p.component === 'bolt' && (p.tags ?? []).includes('geometryFromEvent')) this.bolts.pool.want(p.motif, (p as VfxPieceOf<'bolt'>).params.strength);
+      for (const r of this.variants(p)) this.baker.request(r, false);
+    }
     this.kickIdle();
   }
 
@@ -1135,10 +1256,17 @@ export class VfxRuntime implements VfxStage {
     return RING_INKS.slice(base);
   }
 
-  chunkReq(p: RingPiece, ink: RingInk): BakeReq {
+  chunkReq(p: RingPiece, ink: RingInk, long = false): BakeReq {
     const q = p.params;
-    const piece: RingPiece = { ...p, params: { r: RING_WHOLE_MAX + 36, aspect: q.aspect, thick: q.thick, style: q.style, ink, anim: 'static', ms: 200 }, anchor: { ...p.anchor, half: undefined } };
+    const piece: RingPiece = { ...p, params: { r: RING_WHOLE_MAX + 36, aspect: q.aspect, thick: q.thick, style: q.style, ink, anim: 'static', ms: 200, ...(long ? { unit: 20 as const } : {}) }, anchor: { ...p.anchor, half: undefined } };
     return bakeReq(piece, this.optsFor(p));
+  }
+
+  /** A chunked ring may place long 20 px chunks (RING_LONG): big, solid-styled, not a sweep. */
+  longChunks(p: RingPiece): boolean {
+    const q = p.params;
+    const big = Math.max(q.r, q.anim === 'expand' || q.anim === 'contract' ? (q.r0 ?? 0) : 0) > RING_LONG.fromR;
+    return big && q.anim !== 'sweep' && q.style !== 'dashed' && q.style !== 'gapped';
   }
 
   /** A sweep smear's chunk for one stage: the stage's width (white-hot head) and ink. */
@@ -1153,7 +1281,9 @@ export class VfxRuntime implements VfxStage {
   /** Every chunk bake of a chunked ring: by ink, or by smear stage. */
   chunkReqMap(p: RingPiece): Map<string, BakeReq> {
     if (p.params.smear && p.params.anim === 'sweep') return new Map(([0, 1, 2, 3] as const).map((st) => [`s${st}`, this.smearReq(p, st)]));
-    return new Map(this.chunkInks(p).map((ink) => [ink, this.chunkReq(p, ink)]));
+    const m = new Map(this.chunkInks(p).map((ink) => [ink as string, this.chunkReq(p, ink)]));
+    if (this.longChunks(p)) for (const ink of this.chunkInks(p)) m.set(`${ink}~L`, this.chunkReq(p, ink, true));
+    return m;
   }
 
   /** Every bake request a piece can need (warm set): senses, halves, chunk inks. */
@@ -1287,6 +1417,7 @@ export class VfxRuntime implements VfxStage {
           quota,
           to: toPt ? () => ({ x: toPt.x, y: toPt.y - 20 }) : null,
           glow: layer === 'body',
+          ...(ctx.chipTint !== undefined && (p as VfxPieceOf<'motes'>).params.kind === 'chip' ? { tint: ctx.chipTint } : {}),
         }),
       );
       return;
@@ -1421,10 +1552,13 @@ export class VfxRuntime implements VfxStage {
 
   private spawnGhosts(g: Group, p: VfxPieceOf<'afterimage'>, t0: number): void {
     const src = g.ctx.ghostOf;
-    if (!src || this.canvasTier || !this.glowOn) return;
+    // The blink vanish is the dash's departure tell: it plays at every quality (its bands only above 0.25).
+    const blink = p.params.mode === 'blink';
+    if (!src || this.canvasTier || (!blink && !this.glowOn)) return;
     const snap = this.snapshot(src, p.anchor.dy);
     if (!snap) return;
-    g.insts.push(new GhostInst(this, g, t0, snap, p.params.steps, colorOf(p.ramp, 3)));
+    if (blink) g.insts.push(new BlinkInst(this, g, t0, snap, this.glowOn ? p.params.steps : [], colorOf(p.ramp, 3)));
+    else g.insts.push(new GhostInst(this, g, t0, snap, p.params.steps, colorOf(p.ramp, 3)));
   }
 
   private snapshot(src: GhostSource, dy = 0): ConstructorParameters<typeof GhostInst>[3] | null {
@@ -1596,13 +1730,13 @@ export class VfxRuntime implements VfxStage {
 
   // ---------------------------------------------------------------- particles
 
-  spawnParticle(grp: Group | null, req: BakeReq, ramp: RampId, layer: VfxLayer, born: number, l: Launch, at: Pt, where: Where | null, to: (() => Pt | null) | null, glow: boolean): void {
+  spawnParticle(grp: Group | null, req: BakeReq, ramp: RampId, layer: VfxLayer, born: number, l: Launch, at: Pt, where: Where | null, to: (() => Pt | null) | null, glow: boolean, tint = 0xffffff): void {
     if (this.particles.length >= VFX_BUDGET.particles) return;
     const slot = layer === 'ground' ? 'gmotes' : layer === 'preview' ? 'pmotes' : layer === 'glow' || layer === 'light' ? 'glow' : 'motes';
     const depth = slot === 'gmotes' ? DEPTH.FX_GROUND : slot === 'pmotes' ? DEPTH.AIM_PREVIEW : MOTE_DEPTH;
     const live = l.mode !== 'free' && where ? () => where.pos(this.clock - born) : null;
     const dirAng = l.mode === 'free' ? Math.atan2(l.vy, l.vx) : 0;
-    this.particles.push({ req, ramp, slot, depth, born, l, ox: at.x, oy: at.y, anchor: live, to, dirAng, bob: null, glowBob: null, glow: glow && this.glowOn, grp });
+    this.particles.push({ req, ramp, slot, depth, born, l, ox: at.x, oy: at.y, anchor: live, to, dirAng, bob: null, glowBob: null, glow: glow && this.glowOn, grp, tint });
     if (this.particles.length > this.stats0.peakParticles) this.stats0.peakParticles = this.particles.length;
   }
 
@@ -1686,6 +1820,7 @@ export class VfxRuntime implements VfxStage {
       if (!pt.bob || pt.bob.parent !== bl) {
         this.bobs.freeBob(pt.bob);
         pt.bob = this.bobs.bob(bl, f.name, bx, by);
+        if (pt.bob && pt.tint !== 0xffffff) pt.bob.tint = pt.tint;
       } else pt.bob.reset(bx, by, f.name);
       pt.bob?.setFlip(pick.flipX, pick.flipY);
       const gf = pt.glow ? s.glow?.[Math.min(n - 1, Math.floor(u * n))] : undefined;
@@ -1816,10 +1951,20 @@ export class VfxRuntime implements VfxStage {
     const ric = (globalThis as { requestIdleCallback?: (cb: (d: { timeRemaining(): number }) => void, o?: { timeout: number }) => number }).requestIdleCallback;
     const run = (d?: { timeRemaining(): number }) => {
       this.idle = null;
-      if (this.destroyed || !this.baker.pending) return;
+      if (this.destroyed || (!this.baker.pending && !this.bolts.pool.pending)) return;
       const budget = d ? Math.min(8, Math.max(1, d.timeRemaining() - 1)) : 6;
-      this.baker.pump(budget, true);
-      this.atlas.flush(VFX_BUDGET.uploadBytesPerFrame);
+      // Bolt strip pools first (small: a look is ~50-100 ms of work in all), at most 3 ms of a slice while strips
+      // wait too — a busy fight always has strips queued, and a hop without its pool paints the slow way.
+      let left = budget;
+      if (this.bolts.pool.pending) {
+        const t0 = performance.now();
+        this.bolts.pool.step(this.baker.pending ? Math.min(3, budget) : budget, () => performance.now());
+        left -= performance.now() - t0;
+      }
+      if (this.baker.pending && left > 0.5) {
+        this.baker.pump(left, true);
+        this.atlas.flush(VFX_BUDGET.uploadBytesPerFrame);
+      }
       this.idleSchedule(run, ric);
     };
     this.idleSchedule(run, ric);
@@ -1879,6 +2024,10 @@ export class VfxRuntime implements VfxStage {
       peakUpdateMs: Math.round(this.stats0.peakUpdateMs * 100) / 100,
       frameMs: Math.round(this.ema * 10) / 10,
       boltCanvasesBusy: this.bolts.busy,
+      boltHops: (() => {
+        const h = this.bolts.hopStats;
+        return { hops: h.hops, pooled: h.pooled, peakMs: Math.round(h.peakMs * 100) / 100, meanMs: h.hops ? Math.round((h.totalMs / h.hops) * 100) / 100 : 0, meanFramesMs: h.hops ? Math.round((h.frameMs / h.hops) * 100) / 100 : 0, poolMs: Math.round(this.bolts.pool.bakedMs) };
+      })(),
       fallbacks: this.stats0.fallbacks,
       tells: { live: this.telegraphs.live, peak: this.telegraphs.peak, canvases: sharedFor(this.scene).tells.count, uploadedKB: Math.round(sharedFor(this.scene).tells.bytes / 1024) },
     };
@@ -1893,6 +2042,7 @@ export class VfxRuntime implements VfxStage {
     this.stats0.peakParticles = this.particles.length;
     this.stats0.peakUpdateMs = 0;
     this.telegraphs.peak = this.telegraphs.live;
+    this.bolts.hopStats.peakMs = 0;
   }
 
   /** Pins a quality tier (QA); null returns control to the governor. */

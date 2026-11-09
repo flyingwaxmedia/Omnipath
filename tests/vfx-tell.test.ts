@@ -9,7 +9,7 @@
 import { describe, expect, it } from 'vitest';
 import { GAME_DATA } from '../src/data';
 import type { TellShape } from '../src/game/events';
-import { PLAYER_R, inCone, inLane, inRange, inZone } from '../src/game/systems/tellhit';
+import { PLAYER_R, inCone, inLane, inRange, inZone, shotHits, shotReach } from '../src/game/systems/tellhit';
 import { fairTellMs, GROUND_TRUTH } from '../src/game/vfx/recipe';
 import { TellRaster, localTell, rimTint, sdLocal, type LocalTell } from '../src/game/vfx/tellraster';
 
@@ -186,6 +186,40 @@ describe('monster telegraphs match the hit tests', () => {
       }
       expect(any).toBe(true);
     }
+  });
+});
+
+describe('monster shots (puddlewisp water spit and every projectile technique)', () => {
+  it('hits a player on the shooter\'s ground row at any frame length (swept, not a point test per frame)', () => {
+    // A 300 px/s spit (size 10) at a player 100 px east on the same ground row, stepped at 16.7 ms .. 200 ms frames.
+    for (const dt of [1 / 60, 0.05, 0.12, 0.2]) {
+      const p = { x: 200, y: 100 };
+      let x = 100;
+      let hit = false;
+      for (let t = 0; t < 1 && !hit && x < 100 + 220; t += dt) {
+        const nx = Math.min(100 + 220, x + 300 * dt);
+        hit = shotHits(p, x, 100, nx, 100, 10);
+        x = nx;
+      }
+      expect(hit).toBe(true);
+    }
+    // The old point test per frame stepped straight past the same player at 133 ms frames (40 px steps over 34 px of
+    // hit width: 180 and 220 are both 20 px away).
+    const pointHit = [0, 1, 2, 3, 4, 5].some((k) => Math.hypot(200 - (100 + k * 40), 0) <= PLAYER_R + 5);
+    expect(pointHit).toBe(false);
+    expect([0, 1, 2, 3, 4].some((k) => shotHits({ x: 200, y: 100 }, 100 + k * 40, 100, 140 + k * 40, 100, 10))).toBe(true);
+    // Off the line by more than the body + half the shot: no hit.
+    expect(shotHits({ x: 200, y: 118 }, 100, 100, 300, 100, 10)).toBe(false);
+    expect(shotHits({ x: 200, y: 116 }, 100, 100, 300, 100, 10)).toBe(true);
+  });
+
+  it('draws each aim line only as far as its shot can fly (it dies in the first blocked tile)', () => {
+    // A wall from x = 160 on: the shot's centre enters it at 160; its line ends there, not at the player behind it.
+    const blocked = (x: number) => x >= 160;
+    expect(shotReach(blocked, 100, 100, 0, 200)).toBe(56);
+    expect(shotReach(() => false, 100, 100, 0, 200)).toBe(200);
+    const { local } = localTell({ kind: 'aim', x: 100, y: 80, angs: [0, 0.3], len: 200, lens: [56, 200] });
+    expect(local).toMatchObject({ kind: 'aim', lens: [56, 200] });
   });
 });
 

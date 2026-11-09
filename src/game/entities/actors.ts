@@ -13,7 +13,7 @@ import { DEPTH, ySort } from '../render/depths';
 import { type WorldLabel, worldLabel } from '../render/text';
 import type { MapScene } from '../scenes/MapScene';
 import { type QuestMarkerKind, opaqueTop, questMarkerKey } from './actorArt';
-import { lookPreviewKey, outfitPreviewUrl } from './looks';
+import { lookPreviewKey, outfitPreviewUrl, prebakeLooks } from './looks';
 import type { Monster } from './Monster';
 import { bob, isChasing, monsterAnimKey } from './rules';
 
@@ -111,6 +111,10 @@ export function createActors(scene: MapScene): Actors {
   const scope = sceneScope(scene);
   const player = scene.player;
   player.setLook(scene.book.state.worn);
+  // Every discovered class's outfit is drawn in the background (one frame per idle slice): Become is instant.
+  const known = (): string[] => Object.keys(scene.book.state.classes ?? {});
+  prebakeLooks(scene, player.weapon, known());
+  const offDiscovered = scene.book.events.on('classDiscovered', (e) => prebakeLooks(scene, player.weapon, [e.cls.id], true));
 
   // ---- quest markers
   const markers: Marker[] = scene.npcs.map((n, i) => {
@@ -160,6 +164,8 @@ export function createActors(scene: MapScene): Actors {
     .on('classChanged', (e) => {
       player.setLook(e.classId);
       dirty = true;
+      // a weapon change since load: the other outfits follow for the weapon now shown
+      prebakeLooks(scene, player.weapon, known());
     })
     .on('mapEnter', markDirty)
     .on('talk', markDirty)
@@ -222,6 +228,7 @@ export function createActors(scene: MapScene): Actors {
     },
     destroy() {
       scope.clear();
+      offDiscovered();
       for (const m of markers) m.img.destroy();
       for (const c of chevrons) c.destroy();
       markers.length = 0;

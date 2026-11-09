@@ -24,7 +24,7 @@ export type LocalTell =
   | { kind: 'zone' | 'aura'; rx: number; ry: number }
   | { kind: 'cone'; r: number; ang: number; arc: number }
   | { kind: 'lane'; dx: number; dy: number; width: number }
-  | { kind: 'aim'; angs: readonly number[]; len: number }
+  | { kind: 'aim'; angs: readonly number[]; len: number; lens?: readonly number[] }
   | { kind: 'range'; r: number };
 
 /** Splits a world telegraph into its anchor and anchor-relative shape, plus a key that changes only when the
@@ -39,9 +39,16 @@ export function localTell(g: TellGeometry): { anchor: Pt; local: LocalTell; key:
       return { anchor: { x: g.x, y: g.y }, local: { kind: 'cone', r: g.r, ang: g.ang, arc: g.arc }, key: `cone|${q(g.r, 2)}|${q(g.ang, 200)}|${q(g.arc, 200)}` };
     case 'lane':
       return { anchor: { x: g.x0, y: g.y0 }, local: { kind: 'lane', dx: g.x1 - g.x0, dy: g.y1 - g.y0, width: g.width }, key: `lane|${q(g.x1 - g.x0)}|${q(g.y1 - g.y0)}|${q(g.width)}` };
-    case 'aim':
+    case 'aim': {
       // Aim lines follow the player every frame: quantised (1 degree, 4 px) so they re-rasterise only on a real move.
-      return { anchor: { x: g.x, y: g.y }, local: { kind: 'aim', angs: g.angs.map((a) => Math.round((a * 180) / Math.PI) * (Math.PI / 180)), len: Math.round(g.len / 4) * 4 }, key: `aim|${g.angs.map((a) => q((a * 180) / Math.PI)).join(',')}|${q(g.len / 4)}` };
+      // Each shot's line ends where that shot would stop (`lens`: the first blocked tile), as MonsterSkills flies it.
+      const lens = g.lens ? g.lens.map((l) => Math.round(Math.min(l, g.len) / 4) * 4) : undefined;
+      return {
+        anchor: { x: g.x, y: g.y },
+        local: { kind: 'aim', angs: g.angs.map((a) => Math.round((a * 180) / Math.PI) * (Math.PI / 180)), len: Math.round(g.len / 4) * 4, ...(lens ? { lens } : {}) },
+        key: `aim|${g.angs.map((a) => q((a * 180) / Math.PI)).join(',')}|${q(g.len / 4)}${lens ? `|${lens.join(',')}` : ''}`,
+      };
+    }
     case 'range':
       return { anchor: { x: g.x, y: g.y }, local: { kind: 'range', r: g.r }, key: `range|${q(g.r, 2)}` };
   }
@@ -160,7 +167,7 @@ export class TellRaster {
   private tick = -1;
   private frontPx = 0;
   private readonly c: { R1: number; R2: number; R3: number; R4: number; famR2: number; famR3: number; famR4: number; white: number; outline: number };
-  private readonly aimLines: { angs: readonly number[]; len: number } | null;
+  private readonly aimLines: { angs: readonly number[]; len: number; lens?: readonly number[] } | null;
 
   constructor(
     readonly shape: LocalTell,
@@ -215,8 +222,8 @@ export class TellRaster {
         break;
       }
       case 'aim': {
-        const xs = [0, ...shape.angs.map((a) => Math.cos(a) * shape.len)];
-        const ys = [0, ...shape.angs.map((a) => Math.sin(a) * shape.len)];
+        const xs = [0, ...shape.angs.map((a, i) => Math.cos(a) * (shape.lens?.[i] ?? shape.len))];
+        const ys = [0, ...shape.angs.map((a, i) => Math.sin(a) * (shape.lens?.[i] ?? shape.len))];
         x0 = Math.min(...xs);
         x1 = Math.max(...xs);
         y0 = Math.min(...ys);
@@ -231,7 +238,7 @@ export class TellRaster {
     this.w = this.ox + Math.ceil(x1) + M + 1;
     this.h = this.oy + Math.ceil(y1) + M + 1;
     this.perimeter = per;
-    this.aimLines = shape.kind === 'aim' ? { angs: shape.angs, len: shape.len } : null;
+    this.aimLines = shape.kind === 'aim' ? { angs: shape.angs, len: shape.len, ...(shape.lens ? { lens: shape.lens } : {}) } : null;
     const hasFill = shape.kind === 'zone' || shape.kind === 'cone' || shape.kind === 'lane';
     this.fill = hasFill ? new Uint32Array(this.w * this.h) : null;
     this.rim = new Uint32Array(this.w * this.h);
@@ -537,12 +544,14 @@ export class TellRaster {
     const c = this.c;
     const W = this.w,
       H = this.h;
-    const { angs, len } = this.aimLines!;
+    const { angs, len, lens } = this.aimLines!;
     const body: number[] = [];
-    for (const a of angs) {
+    for (let ai = 0; ai < angs.length; ai++) {
+      const a = angs[ai];
       const ca = Math.cos(a),
         sa = Math.sin(a);
-      for (let s = 8; s <= len; s += 0.5) {
+      const end = lens?.[ai] ?? len;
+      for (let s = 8; s <= end; s += 0.5) {
         const ph = (((s - march) % 12) + 12) % 12;
         if (ph >= 7) continue;
         const px = Math.floor(this.ox + ca * s),

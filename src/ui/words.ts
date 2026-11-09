@@ -168,8 +168,13 @@ const TAG_WORD: Record<string, string> = {
   aoe: 'area',
   area: 'area',
   pierce: 'piercing',
+  spin: 'spinning',
   projectile: 'ranged',
   execute: 'finishing',
+  infused: 'fused',
+  melee: 'close-range',
+  buff: 'boost',
+  dot: 'lingering',
 };
 
 function capital(s: string): string {

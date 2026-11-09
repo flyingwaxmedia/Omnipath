@@ -254,6 +254,7 @@ function paramProblems(p: VfxPiece): string[] {
       need(q.arc === undefined || (q.arc[0] < q.arc[1] && q.arc[1] - q.arc[0] <= 360 && isInt(q.arc[0]) && isInt(q.arc[1])), 'ring.arc');
       need(q.heads === undefined || isIn(q.heads, [1, 2, 3]), 'ring.heads');
       need(q.smear === undefined || (isIn(q.smear, [4, 6, 8]) && (q.anim === 'sweep' || q.anim === 'static')), 'ring.smear');
+      need(q.unit === undefined || isIn(q.unit, [10, 20]), 'ring.unit');
       need(isVsyncTotal(q.ms), `ring.ms ${q.ms}`);
       break;
     }

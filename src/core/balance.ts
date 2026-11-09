@@ -67,7 +67,9 @@ export const CLASS_POWER_BUDGET = 25;
 
 /**
  * Templated class tree: 4 passive nodes (3 ranks each) + optional skill node + capstone, and the
- * class imprint. Returns the nodes and the PassiveDefs they reference (ids `cls_<classId>_<n>`,
+ * class imprint. Player-facing names are plain (docs/UX-SIMPLE.md): "<Tag> Power" (damage), "<Tag>
+ * Thrift" (SP cost), "<Tag2> Haste" (cooldown), "<Class> Training" (stat), "True <Class>" (capstone)
+ * and "<Class> Keepsake" (the imprint); tags read through perkWord(). Returns the nodes and the PassiveDefs they reference (ids `cls_<classId>_<n>`,
  * imprint `imprint_<classId>`). Register the passives in src/data/passives.ts via CLASS_PASSIVES.
  * Damage values come from CLASS_TREE_POWER[tier]; SP economy, tempo and non-damage stats scale with
  * tier (×1 / ×1.25 / ×1.5). The template signature and passive ids are stable (the client codes
@@ -92,11 +94,11 @@ export function classTreeTemplate(spec: ClassTreeSpec): { nodes: ClassNode[]; pa
   const st = spec.stat === 'atk' || spec.stat === 'matk' ? dmg.damageStat : Math.round(3 * scale);
   const cap = dmg.capstone;
   const passives: PassiveDef[] = [
-    p(1, `${cap1(spec.tag)} Focus`, `+${pw}% ${spec.tag} damage per rank.`, { kind: 'power', tag: spec.tag, pct: pw }),
-    p(2, `${cap1(spec.tag)} Economy`, `-${sp}% SP cost for ${spec.tag} skills per rank.`, { kind: 'spCost', tag: spec.tag, pct: -sp }),
-    p(3, `${cap1(t2)} Tempo`, `-${cd}% cooldown for ${t2} skills per rank.`, { kind: 'cooldown', tag: t2, pct: -cd }),
+    p(1, `${perkWord(spec.tag)} Power`, `+${pw}% ${spec.tag} damage per rank.`, { kind: 'power', tag: spec.tag, pct: pw }),
+    p(2, `${perkWord(spec.tag)} Thrift`, `-${sp}% SP cost for ${spec.tag} skills per rank.`, { kind: 'spCost', tag: spec.tag, pct: -sp }),
+    p(3, `${perkWord(t2)} Haste`, `-${cd}% cooldown for ${t2} skills per rank.`, { kind: 'cooldown', tag: t2, pct: -cd }),
     p(4, `${spec.className} Training`, `+${st}% ${spec.stat.toUpperCase()} per rank.`, { kind: 'stat', stat: spec.stat, pct: st }),
-    p(5, `${spec.className} Mastery`, `+${cap}% damage with every skill.`, { kind: 'power', pct: cap }, 1),
+    p(5, `True ${spec.className}`, `+${cap}% damage with every skill.`, { kind: 'power', pct: cap }, 1),
   ];
   const nodes: ClassNode[] = [
     { id: 'n1', kind: 'passive', ref: passives[0].id, cost: 1, maxRank: 3 },
@@ -108,7 +110,7 @@ export function classTreeTemplate(spec: ClassTreeSpec): { nodes: ClassNode[]; pa
   nodes.push({ id: 'cap', kind: 'capstone', ref: passives[4].id, cost: 3, maxRank: 1, minSpent: 6 });
   const imprint: PassiveDef = {
     id: `imprint_${spec.classId}`,
-    name: `${spec.className} Imprint`,
+    name: `${spec.className} Keepsake`,
     icon: spec.icon,
     desc: `+${dmg.imprint}% ${spec.tag} damage, even while wearing another class.`,
     source: 'imprint',
@@ -120,4 +122,26 @@ export function classTreeTemplate(spec: ClassTreeSpec): { nodes: ClassNode[]; pa
 
 function cap1(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+/**
+ * Tags as they read in a perk's name (docs/UX-SIMPLE.md rules 2 and 8: names only, ids and tags unchanged) — "Area
+ * Power", not "Aoe Focus"; "Fused Power", not "Infused Focus". Other tags are plain words already ("Fire", "Blade").
+ */
+const PERK_WORDS: Readonly<Record<string, string>> = {
+  aoe: 'Area',
+  projectile: 'Ranged',
+  pierce: 'Piercing',
+  execute: 'Finisher',
+  infused: 'Fused',
+  melee: 'Close-range',
+  buff: 'Boost',
+  dot: 'Lingering',
+  cc: 'Control',
+  basic: 'Attack',
+};
+
+/** A tag as a perk-name word ("Area", "Fused", "Blade"). */
+export function perkWord(tag: string): string {
+  return PERK_WORDS[tag] ?? cap1(tag);
 }

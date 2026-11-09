@@ -7,17 +7,24 @@
 //
 // Units: everything here is in art px (the backbuffer is art px; render/config.ts upscales it by an integer factor).
 // HUD insets arrive in CSS px (StageHost.safeInsets()) and are converted with the current pixel scale.
+//
+// Light lane (docs/QUALITY-PLAN.md §10–11): dark and night maps get the pixel-banded light map (render/lighting.ts)
+// instead of the flat fx_darkness overlay (kept as the Canvas / Low-quality fallback), every map gets OmniGrade
+// (render/grade.ts) on the world camera; both follow their quality hooks live. The camera rig's flash rectangle is
+// handed to the grade's soft flash channel while the grade runs. Props are flipped and jittered per tile.
 import Phaser from 'phaser';
 import { STRUCTURE_FOOTPRINT } from '../../core/world/compile';
-import type { CompiledMap, MapDef } from '../../core/world/types';
+import type { CompiledMap, MapDef, PropKind } from '../../core/world/types';
 import { PROP_VARIANTS } from '../art/world';
 import { TILE } from '../world/runtime';
 import { cellHash } from './autotile';
-import { CameraRig } from './camera';
+import { CameraRig, type RigScene } from './camera';
 import { currentScale } from './config';
 import { DEPTH, Y_BIAS, ySort } from './depths';
 import { type DressingItem, placeDressing, planDressing } from './dressing';
+import { Grade, gradeEnabled, gradeSupported, onGradeChange } from './grade';
 import { type BakedGround, bakeGround } from './ground';
+import { LightMap, lightMapSupported, lightProfile, lightingEnabled, onLightingChange, staticLights } from './lighting';
 import { clampScroll, cssToArt } from './pixelscale';
 import { vfxSettings } from '../vfx/runtime/settings';
 
@@ -63,6 +70,11 @@ export interface Stage {
   readonly trauma: number;
   /** The camera rig (render/camera.ts): trauma, kicks, governed flashes, the warden intro pan and the lead. */
   readonly rig: CameraRig;
+  /** How this map is lit right now: the light map, the flat overlay (fallback) or daylight (debug / QA). */
+  readonly lighting: 'lightmap' | 'overlay' | 'day';
+  /** The light map and the grade while they run (debug / QA: stats, uniforms). */
+  readonly lightMap: LightMap | null;
+  readonly grade: Grade | null;
   destroy(): void;
 }
 
@@ -77,6 +89,54 @@ const DARK_RIM = 0.8;
 const DARK_REACH = 4096;
 /** Camera smoothing time constant (s): v2's lerp 0.12 per 60 fps frame. */
 const FOLLOW_TAU = 0.13;
+/** Prop jitter (polish audit): ±PROP_JX px across, PROP_JY_UP px up to PROP_JY_DOWN px down, per tile. */
+export const PROP_JX = 4;
+export const PROP_JY_UP = 4;
+export const PROP_JY_DOWN = 2;
+/**
+ * Props never mirrored: their art carries a clear lit face and shadow face (docs/ART-DIRECTION.md §1: light from the
+ * top-left; art/world.ts draws their look variants instead of mirroring). A flipped rock, crystal, spire, tombstone or
+ * two-tone pine would be lit from the right next to its unflipped neighbour. Organic props (trees, bushes, dead trees,
+ * mushrooms, willows, reeds) keep the flip: their scattered cluster highlights read as another plant, not another sun.
+ */
+export const PROP_NO_FLIP: ReadonlySet<PropKind> = new Set<PropKind>(['rock', 'boulder', 'crystal', 'stalagmite', 'tombstone', 'basalt_spire', 'pine', 'frostpine']);
+
+/**
+ * Where a map prop stands and whether it is mirrored (pure, deterministic per tile and map seed): a look variant,
+ * a whole-pixel jitter of ±4 px across and -4..+2 px down from the tile's bottom-centre, and a horizontal flip on
+ * about half the tiles (never for PROP_NO_FLIP kinds) — so repeated props (forests, rock fields) stop reading as one
+ * stamp on a grid.
+ */
+export function propPlacement(tx: number, ty: number, seed: number, kind: PropKind, looks: number): { x: number; y: number; flip: boolean; look: number } {
+  const h = cellHash(tx, ty, seed, 0x9a0b);
+  const h2 = cellHash(tx, ty, seed, 0x51f7);
+  const x = tx * TILE + TILE / 2 + ((h >>> 8) % (2 * PROP_JX + 1)) - PROP_JX;
+  const y = (ty + 1) * TILE + ((h2 >>> 4) % (PROP_JY_UP + PROP_JY_DOWN + 1)) - PROP_JY_UP;
+  const flip = !PROP_NO_FLIP.has(kind) && ((h2 >>> 12) & 1) === 1;
+  return { x, y, flip, look: h % Math.max(1, looks) };
+}
+
+/** The player's HP share for the grade's low-HP desaturation, read structurally from the map scene (MapScene keeps
+ *  `session.player.hp` and `stats().maxHp`); null when the host has neither. maxHp is re-read every 500 ms. */
+function hpReader(host: StageHost): () => number | null {
+  const h = host as unknown as { session?: { player?: { hp?: number } }; stats?: () => { maxHp?: number } };
+  let max = 0;
+  let at = -1e9;
+  return () => {
+    const hp = h.session?.player?.hp;
+    if (typeof hp !== 'number' || typeof h.stats !== 'function') return null;
+    const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    if (now - at > 500) {
+      at = now;
+      try {
+        max = h.stats().maxHp ?? 0;
+      } catch {
+        max = 0;
+      }
+    }
+    return max > 0 ? hp / max : null;
+  };
+}
 
 /** Dressing plans are pure per map: plan each map once per run. */
 const dressingPlans = new Map<string, readonly DressingItem[]>();
@@ -161,6 +221,14 @@ class PixelStage implements Stage {
   private props: Culler;
   private decor: Culler;
   private dark: Phaser.GameObjects.Container | null = null;
+  /** Light lane: the light map (dark / night maps, WebGL, lighting on) and OmniGrade (WebGL, grade on). */
+  private light: LightMap | null = null;
+  private graded: Grade | null = null;
+  /** The camera rig's flash rectangle (created lazily by the rig through rigScene()). */
+  private flashRect: Phaser.GameObjects.Rectangle | null = null;
+  private dressingPlan: readonly DressingItem[] = [];
+  private readonly hp: () => number | null;
+  private readonly unsub: (() => void)[] = [];
   private target: FollowTarget | null = null;
   /** Smoothed camera centre (float, art px). */
   private cx = 0;
@@ -188,8 +256,9 @@ class PixelStage implements Stage {
     cam.setZoom(1);
     cam.setRoundPixels(true);
     cam.removeBounds();
-    this.rig = new CameraRig(scene, () => vfxSettings.reduceFlash);
+    this.rig = new CameraRig(this.rigScene(), () => vfxSettings.reduceFlash);
     this.rig.install(cam);
+    this.hp = hpReader(host);
     const cols = Math.ceil(cm.w / CHUNK);
     const rows = Math.ceil(cm.h / CHUNK);
     this.props = new Culler(cols, rows, TILE * 3);
@@ -198,9 +267,86 @@ class PixelStage implements Stage {
     this.buildDressing();
     this.buildProps();
     this.buildStructures();
-    if (def.flags?.includes('dark')) this.dark = this.buildDarkness();
+    this.applyLighting();
+    this.applyGrade();
+    this.unsub.push(
+      onLightingChange(() => this.applyLighting()),
+      onGradeChange(() => this.applyGrade()),
+    );
     scene.scale.on('resize', this.onResize);
     scene.events.on(Phaser.Scenes.Events.PAUSE, this.onPause);
+  }
+
+  get lighting(): 'lightmap' | 'overlay' | 'day' {
+    return this.light ? 'lightmap' : this.dark ? 'overlay' : 'day';
+  }
+
+  get lightMap(): LightMap | null {
+    return this.light;
+  }
+
+  get grade(): Grade | null {
+    return this.graded;
+  }
+
+  /** The scene as the camera rig sees it: the same cameras, but its flash rectangle is kept for the grade. */
+  private rigScene(): RigScene {
+    const scene = this.scene;
+    return {
+      cameras: scene.cameras,
+      add: {
+        rectangle: (x: number, y: number, w: number, h: number, color: number, alpha: number) => {
+          const r = scene.add.rectangle(x, y, w, h, color, alpha);
+          this.flashRect = r;
+          return r;
+        },
+      },
+    };
+  }
+
+  /**
+   * Light map, flat overlay or daylight: the light map on dark / night maps when lighting is on and the renderer is
+   * WebGL; the old banded overlay on dark maps otherwise (Canvas, Low quality); nothing on day maps.
+   */
+  private applyLighting(): void {
+    this.light?.destroy();
+    this.light = null;
+    this.dark?.destroy();
+    this.dark = null;
+    const { def, cm } = this.host;
+    const profile = lightProfile(def);
+    if (profile && lightingEnabled() && lightMapSupported(this.scene)) {
+      const sources = staticLights(cm, def, this.dressingPlan);
+      this.light = new LightMap(this.scene, profile, sources, { focus: () => this.target });
+    } else if (def.flags?.includes('dark')) {
+      this.dark = this.buildDarkness();
+      if (this.target) this.dark.setPosition(Math.round(this.target.x), Math.round(this.target.y - 16));
+    }
+  }
+
+  /** OmniGrade on the world camera (WebGL, grade on); the camera rig's flash goes through its soft flash channel. */
+  private applyGrade(): void {
+    this.graded?.destroy();
+    this.graded = null;
+    if (!gradeEnabled() || !gradeSupported(this.scene)) return;
+    try {
+      this.graded = new Grade(this.scene, Phaser.Renderer.WebGL.Pipelines.PostFXPipeline, {
+        biome: this.host.def.biome,
+        hp: this.hp,
+        flash: () => {
+          const r = this.flashRect;
+          if (!r || !r.active || !r.visible || r.alpha <= 0) return null;
+          const out = { color: r.fillColor, alpha: r.alpha };
+          // The grade draws it (softly) instead; the rig sets the alpha again on its next frame step.
+          r.setAlpha(0);
+          return out;
+        },
+      });
+    } catch (err) {
+      // A driver that cannot compile the pass keeps the ungraded look (and the old flash rectangle).
+      console.warn('[omnipath] OmniGrade disabled:', err);
+      this.graded = null;
+    }
   }
 
   get visibleProps(): number {
@@ -285,8 +431,14 @@ class PixelStage implements Stage {
     this.dressing = null;
     this.props.clear();
     this.decor.clear();
+    for (const u of this.unsub.splice(0)) u();
+    this.light?.destroy();
+    this.light = null;
+    this.graded?.destroy();
+    this.graded = null;
     this.dark = null;
     this.target = null;
+    this.flashRect = null;
     this.rig.destroy();
   }
 
@@ -402,26 +554,27 @@ class PixelStage implements Stage {
       plan = planDressing(this.host.cm);
       dressingPlans.set(id, plan);
     }
+    this.dressingPlan = plan;
     const handle = placeDressing(this.scene, plan);
     for (const img of handle.images) this.decor.add(img);
     this.dressing = handle;
   }
 
   /**
-   * Props on their tiles. Kinds with look variants (trees, pines) pick one per tile and every prop gets a small
-   * deterministic nudge, so dense forests and rock fields stop reading as a grid of one stamp. Visual only: collision
-   * stays on the tile.
+   * Props on their tiles (propPlacement): kinds with look variants (trees, pines) pick one per tile, every prop gets
+   * a whole-pixel jitter (±4 px) and about half of the organic ones are mirrored (lit-face props never are), so dense
+   * forests and rock fields stop reading as a grid of one stamp. Visual only: collision stays on the tile. Mirroring
+   * is flipX (never a fractional scale).
    */
   private buildProps(): void {
     const seed = this.host.def.seed ?? 0;
     for (const pr of this.host.cm.props) {
       if (!this.scene.textures.exists(pr.kind)) continue;
-      const h = cellHash(pr.tx, pr.ty, seed, 0x9a0b);
       const looks = [pr.kind, ...(PROP_VARIANTS[pr.kind] ?? []).filter((k) => this.scene.textures.exists(k))];
-      const key = looks[h % looks.length];
-      const x = pr.tx * TILE + TILE / 2 + (((h >>> 8) % 5) - 2);
-      const y = (pr.ty + 1) * TILE + ((h >>> 12) % 2);
-      this.props.add(this.scene.add.image(x, y, key).setOrigin(0.5, 1).setDepth(ySort(y, Y_BIAS.PROP)));
+      const at = propPlacement(pr.tx, pr.ty, seed, pr.kind, looks.length);
+      const img = this.scene.add.image(at.x, at.y, looks[at.look]).setOrigin(0.5, 1).setDepth(ySort(at.y, Y_BIAS.PROP));
+      if (at.flip) img.setFlipX(true);
+      this.props.add(img);
     }
   }
 

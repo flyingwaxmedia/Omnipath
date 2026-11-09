@@ -15,8 +15,9 @@
 //   dash                 monster dash cast, ghost trail (its own sprite), landing
 //   buffApplied          monster buff activation + aura loop until it ends; the player's hex ward is tracked
 //   playerHurt           the technique's impact on the player, or the auto-attack (claws / lash / sting / slam /
-//                        spark by monster family) from the attacker; hit-stop (halved), white -> red flash, squash,
-//                        recoil, a kick along the blow, trauma 0.35 on heavy blows; the ward flares on a hit
+//                        spark by monster family) from the attacker; hit-stop (halved), a 1-frame white flash
+//                        (the juice rig's per-victim flash gate), squash, recoil, a kick along the blow, trauma 0.35
+//                        on heavy blows; the ward flares on a hit
 //   statusApplied        the player's status overlays (<= 2 loops by priority, never starved), immune glint
 //   death                monster: white frames, then the pop (nova blast in the killer's family + chips + puff);
 //                        player: a danger puff, overlays end
@@ -48,6 +49,21 @@ export interface WorldHost {
   juice: JuiceHooks | null;
   /** The worn class's Tier III aura, or null (art/classLooks auraColor). */
   classAura(): { motif: AuraMotif; family: FamilyId } | null;
+  /** A monster's hide colour (art/monsters.ts monsterHideColor, once the actors lane exports it), or null. */
+  hideColor?(m: Monster): number | null;
+}
+
+/** Dust ramp R3 (the chips' bake stop that should land on the hide colour). */
+const CHIP_R3 = hexToRgb(RAMPS.dust.R[3]);
+
+/**
+ * Bob multiply tint that turns the dust-ramp death chips into the monster's hide colour: each channel is the hide
+ * channel over the dust R3 channel (capped at 255), so the chips' mid stop lands on the hide colour and the ramp's
+ * lighter / darker stops keep their shading.
+ */
+export function chipTint(hide: number): number {
+  const ch = (v: number, base: number) => Math.min(255, Math.round((v * 255) / Math.max(1, base)));
+  return (ch((hide >> 16) & 255, CHIP_R3[0]) << 16) | (ch((hide >> 8) & 255, CHIP_R3[1]) << 8) | ch(hide & 255, CHIP_R3[2]);
 }
 
 const DANGER: Ink = { ramp: 'danger', motif: 'danger', lut: 'base' };
@@ -584,9 +600,11 @@ export class WorldBridge {
       }
     }
     // White frames on the real sprite (Combat hides it a beat later), then the pop.
-    this.host.juice?.impact(m, 0xffffff, 0, 0);
+    this.host.juice?.pop(m);
     const pop = deathPieces(bodyOf(m), killer, 'monster').map((p) => ({ ...p, delayMs: (p.delayMs ?? 0) + 33 }) as VfxPiece);
-    this.stage.play(pop, { owner: 'player', body: { x: e.x, y: e.y }, target: { x: e.x, y: e.y }, ang: 0, seed: this.seed('death', m.def.id) });
+    // Chips in the hide colour when the art exports it (else the dust ramp they bake in).
+    const hide = this.host.hideColor?.(m) ?? null;
+    this.stage.play(pop, { owner: 'player', body: { x: e.x, y: e.y }, target: { x: e.x, y: e.y }, ang: 0, seed: this.seed('death', m.def.id), ...(hide !== null ? { chipTint: chipTint(hide) } : {}) });
     this.auras.delete(m);
   }
 
@@ -602,7 +620,7 @@ export class WorldBridge {
 
   monsterSpawn(e: GameEvents['monsterSpawn']): void {
     const m = e.monster;
-    this.host.juice?.impact(m, 0xffffff, 0, 0);
+    this.host.juice?.pop(m);
     this.stage.play(this.spawnPieces(bodyOf(m)), { owner: 'monster', body: { x: e.x, y: e.y }, ang: 0, seed: this.seed('spawn', m.def.id) });
   }
 

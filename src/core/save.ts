@@ -161,14 +161,26 @@ function readQuests(v: unknown): QuestState {
   return { active, done: counts(q.done), cooldown, tracked };
 }
 
+/**
+ * The worn class. A v2 book stores `worn`, and `worn: null` is an explicit "No class" (SkillBook.unwear): kept, so a
+ * reload never puts a class back on (its class slots would overwrite the player's own picks). A v1 book stores
+ * `activeClass` instead; v1 could not wear nothing, so a null or missing one there only means "not set yet". Any
+ * other book with discovered classes but no valid choice (a missing `worn`, an unknown or undiscovered id) wears the
+ * first discovered class.
+ */
+function readWorn(r: Raw, classes: Readonly<Record<string, ClassProgress>>): string | null {
+  const first = Object.keys(classes)[0] ?? null;
+  const pick = (id: unknown): string | null => (typeof id === 'string' && Object.hasOwn(classes, id) ? id : first);
+  if (typeof r.worn === 'string') return pick(r.worn);
+  if (r.worn === null && r.version !== 1) return null;
+  return pick(r.activeClass);
+}
+
 /** Structural read of any object; no registry needed. */
 function readState(r: Raw): SkillBookState {
   const skills = readSkills(r.skills);
   const classes = readClasses(r.classes);
-  const wantWorn = typeof r.worn === 'string' ? r.worn : typeof r.activeClass === 'string' ? r.activeClass : null;
-  // v2 never un-wears: a book with discovered classes always wears one (the first, if none is set).
-  const worn =
-    wantWorn !== null && Object.hasOwn(classes, wantWorn) ? wantWorn : (Object.keys(classes)[0] ?? null);
+  const worn = readWorn(r, classes);
   const flags = numbers(r.flags);
   if (worn !== null) flags[BOOK_FLAGS.classWorn] = Math.max(1, flags[BOOK_FLAGS.classWorn] ?? 0);
   return {
@@ -263,8 +275,9 @@ function settle(state: SkillBookState, reg: Registry): void {
  * - v2: any missing or malformed field is filled with its emptyState() default (a save from before
  *   quests gets emptyQuestState()); malformed entries (non-numeric ranks, negative counts, non-string
  *   ids) are repaired or dropped.
- * - Both: a book with discovered classes always wears one (the saved one when valid, else the
- *   first), `class_worn` is set while a class is worn, charges are capped at MASTERY.maxCharges, and
+ * - Worn class (readWorn): the saved one when it is discovered; an explicit v2 `worn: null` stays
+ *   "No class"; otherwise (v1 without an active class, a missing or unknown id) the first discovered
+ *   class. `class_worn` is set while a class is worn, charges are capped at MASTERY.maxCharges, and
  *   the copy shares no objects with `raw`.
  * - With `reg`: ranks and XP are clamped to the v2 curves and quest counters to their objectives (see
  *   settle above). The SkillBook

@@ -1,9 +1,10 @@
 // Player looks (actors lane; docs/CLIENT-v3.md §5): which textures and animations show the player for a weapon and
 // a worn class. Class looks are generated lazily — the idle frame alone for previews (Class screen, discovery card,
-// HUD portrait), the whole frame set + animations the first time the player wears it.
+// HUD portrait), the whole frame set + animations the first time the player wears it — and pre-baked one frame per
+// idle slice for every discovered class (prebakeLooks), so Become does not stall a frame.
 import type Phaser from 'phaser';
 import type { WeaponType } from '../../core/types';
-import { drawPlayerLook, lookAnimDefs } from '../art/characters';
+import { LOOK_FRAMES, drawPlayerLook, drawPlayerLookFrame, lookAnimDefs, lookFrameKey } from '../art/characters';
 import { classOutfit, lookAnims, lookBase, lookFrames } from '../art/classLooks';
 import { textureDataUrl } from '../art/pixel';
 
@@ -67,4 +68,95 @@ export function playerAnims(scene: Phaser.Scene, base: string): { idle: string |
  */
 export function outfitPreviewUrl(scene: Phaser.Scene, weapon: WeaponType, classId: string | null): string {
   return textureDataUrl(scene, lookPreviewKey(scene, weapon, classId));
+}
+
+// ---------------------------------------------------------------- time-sliced pre-bake
+
+interface BakeJob {
+  scene: Phaser.Scene;
+  base: string;
+  weapon: WeaponType;
+  classId: string;
+}
+
+const queue: BakeJob[] = [];
+let pending = false;
+/** Budget per idle slice (ms): one ~10 ms frame always fits, a second only with real idle time left. */
+const SLICE_MS = 8;
+/** Without requestIdleCallback: one frame per this many ms (a short task between game frames, never a burst). */
+const FALLBACK_MS = 100;
+/** A busy game loop leaves little idle time: run a slice at least this often anyway (one frame, ~10 ms). */
+const IDLE_TIMEOUT_MS = 150;
+
+type IdleDeadline = { timeRemaining(): number };
+const idle = (fn: (d?: IdleDeadline) => void): void => {
+  const w = globalThis as unknown as { requestIdleCallback?: (cb: (d: IdleDeadline) => void, o?: { timeout: number }) => number };
+  if (typeof w.requestIdleCallback === 'function') w.requestIdleCallback(fn, { timeout: IDLE_TIMEOUT_MS });
+  else setTimeout(() => fn(), FALLBACK_MS); // Safari (iPad) has no requestIdleCallback: a frame now and then
+};
+
+/** The frames of a job still missing (in draw order). */
+function missing(j: BakeJob): number[] {
+  const out: number[] = [];
+  for (let i = 0; i < LOOK_FRAMES; i++) if (!j.scene.textures.exists(lookFrameKey(j.base, i))) out.push(i);
+  return out;
+}
+
+function slice(d?: IdleDeadline): void {
+  pending = false;
+  const t0 = performance.now();
+  while (queue.length) {
+    const j = queue[0];
+    const outfit = classOutfit(j.classId);
+    const todo = !j.scene.sys?.game || !outfit ? [] : missing(j);
+    if (!todo.length) {
+      queue.shift();
+      continue;
+    }
+    try {
+      drawPlayerLookFrame(j.scene, j.base, j.weapon, outfit!, todo[0]);
+    } catch (e) {
+      console.error(`[omnipath] pre-bake ${j.base} failed`, e);
+      dropLook(j.scene, j.base);
+      queue.shift();
+      continue;
+    }
+    if (todo.length === 1) {
+      queue.shift();
+      ensurePlayerLook(j.scene, j.weapon, j.classId); // all frames exist: just registers the animations
+    }
+    const left = d ? d.timeRemaining() : SLICE_MS - (performance.now() - t0);
+    if (left < SLICE_MS) break;
+  }
+  if (queue.length) schedule();
+}
+
+function schedule(): void {
+  if (pending) return;
+  pending = true;
+  idle(slice);
+}
+
+/**
+ * Draws the full frame sets of these class looks for a weapon in the background, one frame per idle slice (load: every
+ * discovered class; a class discovery: that class). Wearing one afterwards is instant. Skips looks already drawn.
+ */
+export function prebakeLooks(scene: Phaser.Scene, weapon: WeaponType, classIds: readonly string[], urgent = false): void {
+  for (const classId of classIds) {
+    if (!classOutfit(classId)) continue;
+    const base = lookBase(weapon, classId);
+    const at = queue.findIndex((j) => j.base === base);
+    if (at >= 0 && !urgent) continue;
+    const job = at >= 0 ? queue.splice(at, 1)[0] : { scene, base, weapon, classId };
+    if (!missing(job).length) continue;
+    // a class just discovered goes first: its Become button is one tap away
+    if (urgent) queue.unshift(job);
+    else queue.push(job);
+  }
+  if (queue.length) schedule();
+}
+
+/** Looks still waiting to be pre-baked (tests / debug). */
+export function prebakePending(): string[] {
+  return queue.map((j) => j.base);
 }

@@ -9,12 +9,12 @@ import { IDX, type BoltParams, type FamilyId, type Template } from '../types';
 import { midpoint, type Painter } from '../painter';
 import { Strip, mkKey, seedOf, type Rng, type TemplateOptions } from './kit';
 
-type BoltStyle = 'violet' | 'inverted' | 'plain';
+export type BoltStyle = 'violet' | 'inverted' | 'plain';
 
 /** Largest pooled live-bolt texture side (VFX_BUDGET.boltCanvases). */
 const BOLT_TEX = 512;
 
-const styleOf = (motif: FamilyId): BoltStyle => (motif === 'lightning' ? 'violet' : motif === 'shadow' || motif === 'twilight' ? 'inverted' : 'plain');
+export const styleOf = (motif: FamilyId): BoltStyle => (motif === 'lightning' ? 'violet' : motif === 'shadow' || motif === 'twilight' ? 'inverted' : 'plain');
 
 function keyOf(p: BoltParams, motif: FamilyId, opts: TemplateOptions): string {
   return mkKey(
@@ -64,8 +64,8 @@ function makePath(p: BoltParams, rnd: Rng): Path {
   return { trunk, forks };
 }
 
-/** Stamp a polyline every 0.5 px with a disc brush (max-wins). */
-function stampLine(p: Painter, pts: number[], r: number, ink: number): void {
+/** Stamp a polyline every 0.5 px with a disc brush (max-wins). Shared with the hop-time bolt pool (../boltpool.ts). */
+export function stampLine(p: Painter, pts: number[], r: number, ink: number): void {
   for (let k = 0; k < pts.length / 2 - 1; k++) {
     const x0 = pts[k * 2],
       y0 = pts[k * 2 + 1],
@@ -79,6 +79,27 @@ function stampLine(p: Painter, pts: number[], r: number, ink: number): void {
       else p.stamp(x, y, r, ink, 1, true);
     }
   }
+}
+
+/** Trunk and fork inks per mode (the pool bakes its strips with exactly these). */
+export function boltInks(style: BoltStyle, strength: number, mode: 'bolt' | 'white' | 'remnant'): { trunk: readonly (readonly [number, number])[]; fork: readonly (readonly [number, number])[] } {
+  if (mode === 'remnant') return { trunk: [[0.5, IDX.R2]], fork: [] };
+  const inv = style === 'inverted';
+  const white = mode === 'white';
+  const halo = inv ? IDX.R4 : style === 'violet' ? IDX.S1 : IDX.R1;
+  const body = inv ? IDX.R1 : white ? IDX.WHITE : IDX.R4;
+  const core = inv ? IDX.R0 : white ? IDX.WHITE : IDX.R5;
+  return {
+    trunk: [
+      [1.6 * strength, white && !inv ? IDX.R4 : halo],
+      [1.0 * strength, white ? body : inv ? IDX.R1 : IDX.R4],
+      [0.5, core],
+    ],
+    fork: [
+      [1.0, halo],
+      [0.5, strength >= 1 ? IDX.R3 : IDX.R2],
+    ],
+  };
 }
 
 function inkBolt(p: Painter, path: Path, prm: BoltParams, style: BoltStyle, mode: 'bolt' | 'white' | 'remnant'): void {

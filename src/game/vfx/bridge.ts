@@ -18,7 +18,8 @@
 //   statusApplied    status units on monsters (<= 2 loops per target by priority; one-shots exempt)
 //   combo / spark / levelUp   combo pieces, the spark star, the level-up pillar
 //                    + the hit feel through the juice rig (host.juice): coalesced victim-local hit-stop scaled by the damage,
-//                    white -> element impact frames, squash, recoil, a camera kick on heavy casts
+//                    a 1-frame white impact frame on the cast's first hit per monster (the rig's flash gate: later
+//                    ticks spark-only, <= 1 flash per 220 ms / 8 frames), squash, recoil, a camera kick on heavy casts
 // Monster techniques, auto-attacks, telegraphs, player statuses, deaths, spawns and world moments are world.ts's.
 import type { ComboId } from '../../core/combat';
 import { hashSeed } from '../../core/rng';
@@ -546,7 +547,8 @@ export class VfxBridge {
     const hold = juice ? juice.hold(m, want) : want;
     if (juice && !e.resisted) {
       const el = (r.imbue ?? r.family) as keyof typeof RAMPS;
-      juice.impact(m, parseInt((RAMPS[el] ?? RAMPS.steel).R[4].slice(1), 16), e.ang, e.reprise ? 0 : RECOIL[r.weight]);
+      // The flash gate keys the cast record: only its first hit on this monster may flash the body (docs/VFX.md §6.6).
+      juice.impact(m, parseInt((RAMPS[el] ?? RAMPS.steel).R[4].slice(1), 16), e.ang, e.reprise ? 0 : RECOIL[r.weight], c);
       if (first && !e.reprise && KICK[r.weight]) juice.kick(e.ang, KICK[r.weight]);
     }
     const target = hitPoint(m);

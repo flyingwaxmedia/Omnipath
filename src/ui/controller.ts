@@ -354,6 +354,11 @@ export interface GameController {
   /** BFS over discovered portals + auto-walk, resumes after warps. */
   navigateTo(mapId: string): Outcome;
   setPaused(paused: boolean): void;
+  /**
+   * The world's pause state for the UI's modal watchdog: 'paused' (a panel paused the scene), 'running', or 'between'
+   * (a map change is in progress, so neither pausing nor resuming applies yet).
+   */
+  pauseState?(): 'paused' | 'running' | 'between';
   newGame(): void;
   /** Fighting right now (dealt or took damage in the last few seconds). Discovery cards wait until it is false. */
   inCombat?(): boolean;

@@ -204,7 +204,7 @@ const TAG_WORD: Record<string, string> = {
   pierce: 'Piercing',
   arcane: 'Arcane',
   spin: 'Spinning',
-  projectile: 'Thrown',
+  projectile: 'Ranged',
   dash: 'Dash',
   aoe: 'Area',
   stealth: 'Stealth',
@@ -219,6 +219,11 @@ const TAG_WORD: Record<string, string> = {
   lightning: 'Lightning',
   shadow: 'Shadow',
   holy: 'Holy',
+  twilight: 'Twilight',
+  infused: 'Fused',
+  execute: 'Finishing',
+  buff: 'Boost',
+  dot: 'Lingering',
 };
 const STAT_LINE: Record<string, string> = {
   hp: 'More health.',

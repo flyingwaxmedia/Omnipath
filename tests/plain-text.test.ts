@@ -2,13 +2,15 @@
 // objective labels and flavour (src/data/quests.ts), class names, lines and hints (src/data/classes.ts) and NPC lines
 // (src/data/npcs.ts) never show internal terms, and every quest dialog beat is short — at most 160 characters and 3
 // sentences (the authoring target is 2 sentences, about 140 characters; flavour goes behind "More": QUEST_LORE).
-// Ids, tags and code are not checked, only text a player reads. (Class tree passives are named by the core template in
-// src/core/balance.ts and are not covered here.)
+// Ids, tags and code are not checked, only text a player reads. Class tree perks and Keepsakes (named by the core
+// template in src/core/balance.ts) are covered too: their names and the one line the panels show for them.
 import { describe, expect, it } from 'vitest';
-import { CLASSES } from '../src/data/classes';
+import { perkWord } from '../src/core/balance';
+import { CLASSES, CLASS_PASSIVES } from '../src/data/classes';
 import { NPCS } from '../src/data/npcs';
 import { QUESTS, QUEST_LORE } from '../src/data/quests';
-import { objectiveWords } from '../src/ui/words';
+import { passiveLine } from '../src/ui/panels/skills';
+import { effectLine, objectiveWords } from '../src/ui/words';
 
 /** Internal term → what the player sees instead (UX-SIMPLE §1.2 / §1.8). */
 const INTERNAL: [RegExp, string][] = [
@@ -60,6 +62,34 @@ function npcTexts(): Text[] {
   ]);
 }
 
+/** Class tree perks + Keepsakes: names, and the lines the class screen (effectLine) and Passives tab show. */
+function perkTexts(): Text[] {
+  return CLASS_PASSIVES.flatMap((p) => [
+    { where: `${p.id}.name`, text: p.name },
+    { where: `${p.id}.effectLine`, text: effectLine(p.desc) },
+    { where: `${p.id}.passiveLine`, text: passiveLine(p) },
+  ]);
+}
+
+/** Raw skill tags and template words a perk must never show (UX-SIMPLE rules 2 and 8): tag ids and manual words. */
+const PERK_JARGON: [RegExp, string][] = [
+  [/\baoe\b/i, 'Area'],
+  [/\binfused\b/i, 'Fused'],
+  [/\bexecute\b/i, 'Finisher'],
+  [/\bprojectile\b/i, 'Ranged'],
+  [/\bmelee\b/i, 'Close-range'],
+  [/\b(buff|dot|cc|basic)\b/i, 'say it plainly'],
+  [/\b(focus|economy|tempo)\b/i, 'Power / Thrift / Haste'],
+  [/\bmastery\b/i, '"Mastery" is the Mastery bar and Mastery bonus: say "True <Class>"'],
+  [/\d|%|per rank/i, 'no numbers in perk names and lines: stars show the rank'],
+];
+
+function jargon(texts: Text[]): string[] {
+  const bad: string[] = [];
+  for (const { where, text } of texts) for (const [re, say] of PERK_JARGON) if (re.test(text)) bad.push(`${where}: "${text}" (say: ${say})`);
+  return bad;
+}
+
 function internalWords(texts: Text[]): string[] {
   const bad: string[] = [];
   for (const { where, text } of texts)
@@ -75,6 +105,26 @@ describe('player-facing data text uses player words', () => {
   });
   it('classes and NPCs: no internal terms in names, lines or hints', () => {
     expect(internalWords([...classTexts(), ...npcTexts()])).toEqual([]);
+  });
+  it('class perks and Keepsakes: plain names and lines, no tags, template words or numbers', () => {
+    const texts = perkTexts();
+    expect(texts.length).toBeGreaterThan(CLASSES.length * 5);
+    expect(internalWords(texts)).toEqual([]);
+    expect(jargon(texts)).toEqual([]);
+    // Short: a perk name fits its tile (one line, ideally under 24 characters).
+    expect(CLASS_PASSIVES.filter((p) => p.name.length > 24).map((p) => p.name)).toEqual([]);
+    // Every perk line says what it does in words (never the raw description).
+    expect(CLASS_PASSIVES.filter((p) => effectLine(p.desc) === p.desc).map((p) => p.id)).toEqual([]);
+  });
+  it('perk tag words: plain for the tags trees use; ids unchanged', () => {
+    expect(['aoe', 'infused', 'execute', 'projectile', 'blade'].map(perkWord)).toEqual(['Area', 'Fused', 'Finisher', 'Ranged', 'Blade']);
+    const ids = CLASS_PASSIVES.map((p) => p.id);
+    expect(ids.every((id) => /^(cls_[a-z_]+_[1-5]|imprint_[a-z_]+)$/.test(id))).toBe(true);
+    expect(CLASS_PASSIVES.find((p) => p.id === 'cls_elementalist_1')?.name).toBe('Fused Power');
+    expect(CLASS_PASSIVES.find((p) => p.id === 'imprint_blademaster')?.name).toBe('Blademaster Keepsake');
+    // The perk lint catches the old template names.
+    const old = ['Infused Focus', 'Aoe Tempo', 'Execute Economy', 'Blademaster Mastery', 'Blademaster Imprint', '+2% blade damage per rank.'];
+    expect(old.map((text) => jargon([{ where: 'x', text }]).length + internalWords([{ where: 'x', text }]).length > 0)).toEqual(old.map(() => true));
   });
   it('the lint catches every listed term', () => {
     const samples = ['Class Rank 5', 'an Imprint', '3 witness marks', 'Wear a calling', 'Hone four', 'Attune fire', 'Infuse it', 'First Tier', 'a morph', 'a variant', 'a Spark', 'overmastery', 'your hotbar'];

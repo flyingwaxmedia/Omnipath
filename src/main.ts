@@ -5,6 +5,9 @@ import { mapById } from './data/world';
 import { gameBus } from './game/events';
 import { initAudio } from './game/audio';
 import { createGame } from './game/render/config';
+import { type ContextLossHandle, installContextLoss } from './game/render/contextloss';
+import { type PerfHandle, installPerf } from './game/render/perf';
+import { type QualityDebug, installQuality, persistStorageOnce } from './game/render/quality';
 import { BootScene } from './game/scenes/BootScene';
 import { MapScene } from './game/scenes/MapScene';
 import { wireQuestHooks } from './game/quests';
@@ -36,10 +39,18 @@ interface OmnipathHandle {
   scene?: MapScene;
   ui?: UI;
   debug?: Record<string, (...args: never[]) => unknown>;
+  /** Quality lane: tiers + battery saver, the ?perf overlay, WebGL context-loss re-bake (QA hooks). */
+  quality?: QualityDebug;
+  perf?: PerfHandle;
+  context?: ContextLossHandle;
 }
 const handle: OmnipathHandle = { game, reg };
 (window as unknown as { omnipath: OmnipathHandle }).omnipath = handle;
 initAudio(handle); // sound: unlock on the first tap, suspend when hidden / muted / idle; omnipath.debug.audio hooks
+// Quality tiers / battery saver (☰ menu), WebGL context-loss re-bake, and the ?perf overlay (src/game/render/*).
+handle.quality = installQuality(game);
+handle.context = installContextLoss(game);
+handle.perf = installPerf(game);
 
 game.events.once('omnipath:ready', async () => {
   const uiRoot = document.getElementById('ui')!;
@@ -70,6 +81,8 @@ game.events.once('omnipath:ready', async () => {
   handle.session = session;
   handle.scene = scene;
   handle.ui = ui;
+  // A save exists now (new game: just written; continue: loaded): ask once to keep the site's storage.
+  void persistStorageOnce();
   // Dev / test hooks (harmless in production: they only do what the game could already do).
   handle.debug = {
     warp: (mapId: string, portalId?: string) => scene.debugWarp(mapId, portalId),
@@ -226,6 +239,10 @@ game.events.once('omnipath:ready', async () => {
       scene.interactions.act(v);
       return true;
     },
+    /** Quality lane: the ?perf overlay on / off (toggles without an argument); returns whether it shows. */
+    perf: (on?: boolean) => handle.perf?.toggle(on) ?? false,
+    /** Quality lane: picks a quality tier ('low' | 'medium' | 'high', null = automatic); returns the state. */
+    quality: (tier?: 'low' | 'medium' | 'high' | null) => (tier === undefined ? handle.quality?.state() : handle.quality?.set(tier)),
     /** The rest button (sit and recover until you move, cast or are hit). */
     rest: () => scene.useQuick('rest'),
     /** Counts game-bus events by name until called again with false (sound / VFX / quest hook checks). */

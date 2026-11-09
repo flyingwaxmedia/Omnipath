@@ -163,7 +163,19 @@
   }
 }
 
+/* The rays layer fills the card and clips the spinning fan inside it. The fan used to sit on the card itself (inset
+   -50%), and the card scrolls (overflow-y: auto): the turning fan doubled its scroll height, so a swipe scrolled the
+   OK button out of view and left an empty glowing card (and the content jittered as the fan turned). */
 .discovery .rays {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  border-radius: inherit;
+  pointer-events: none;
+}
+
+.discovery .rays::before {
+  content: '';
   position: absolute;
   inset: -50%;
   background: repeating-conic-gradient(
@@ -172,7 +184,6 @@
     transparent 10deg 24deg
   );
   animation: spin 12s linear infinite;
-  pointer-events: none;
 }
 
 @keyframes spin {

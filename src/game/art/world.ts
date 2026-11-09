@@ -2,6 +2,7 @@ import type Phaser from 'phaser';
 import { type Ctx, canvasTex, rgba, scratch, shade } from './common';
 import { PAL, artRng, disc, keySeed, line as seg, outline, px } from './pixel';
 import { drawTiles } from './tiles';
+import { type IdleAnim, SWAY_CELLS, stripTex, swayLean } from './dressing';
 
 // World art (the tile atlases live in art/tiles.ts): props, structures, objects, gather nodes, portals and hidden-portal blockers.
 // Every texture key here is a contract with the client (see docs/SPEC-v2.md §7 and src/core/world/types.ts).
@@ -222,16 +223,22 @@ const BROAD_LAYOUTS: readonly (readonly (readonly [number, number, number, numbe
   ],
 ];
 
+/**
+ * Wind-sway strips (render/ambient.ts steps them in travelling gusts): cell 1 is the same tree with its crown a pixel
+ * downwind (same RNG draws, so only the crown moves), cell 2 the same lean mirrored for flipped trees (art/dressing.ts
+ * SWAY_CELLS). One texture.
+ */
 function broadTree(scene: Phaser.Scene, key: string, leaf: Ramp, bark: Ramp, extra?: (b: Ctx, rnd: () => number) => void, v = 0): void {
   const L = BROAD_LAYOUTS[v % BROAD_LAYOUTS.length];
-  canvasTex(scene, key, 48, 64, (c) => {
+  stripTex(scene, key, 48, 64, SWAY_CELLS, (c, cell) => {
+    const f = swayLean(cell);
     const rnd = artRng(keySeed(key));
     shadow(c, 24, 60, 18, 4);
     sprite(c, 48, 64, (b) => {
       trunkPx(b, 24, 30, 61, 8, bark, rnd);
       brush(b, [22, 42, 15 + (v === 2 ? -1 : 0), 33], 2, bark[3]);
       brush(b, [26, 40, 33 + (v === 1 ? 1 : 0), 31], 2, bark[2]);
-      leafMass(b, L[0][0], L[0][1], L[0][2], L[0][3], leaf, rnd, false);
+      leafMass(b, L[0][0] + f, L[0][1], L[0][2], L[0][3], leaf, rnd, false);
       for (let i = 1; i < L.length; i++) leafMass(b, L[i][0], L[i][1], L[i][2], L[i][3], leaf, rnd);
       extra?.(b, rnd);
     });
@@ -294,7 +301,9 @@ function pineTree(scene: Phaser.Scene, key: string, ramp: Ramp, snow: boolean, v
           [15, 37, 13],
           [3, 24, 9],
         ] as const);
-  canvasTex(scene, key, 40, 64, (c) => {
+  // frame 1: the top tier and the tip a pixel downwind (sway strip, see broadTree; pines are never mirrored by
+  // render/stage.ts PROP_NO_FLIP, so they need no mirrored cell)
+  stripTex(scene, key, 40, 64, 2, (c, f) => {
     shadow(c, 20, 60, 14, 4);
     if (snow) disc(c, 20, 60, 12, 3, 'rgba(238,244,250,0.75)');
     sprite(c, 40, 64, (b) => {
@@ -302,8 +311,8 @@ function pineTree(scene: Phaser.Scene, key: string, ramp: Ramp, snow: boolean, v
       box(b, 17, 48, 2, 13, DEAD_BARK[4]);
       box(b, 21, 48, 2, 13, DEAD_BARK[2]);
       box(b, 16, 59, 8, 2, DEAD_BARK[2]);
-      tiers.forEach(([top, bottom, hw], i) => pineTier(b, 20, top, bottom, hw, ramp, snow, i < 2));
-      box(b, 19, tiers[2][0] - 2, 2, 3, snow ? SNOW[3] : ramp[4]);
+      tiers.forEach(([top, bottom, hw], i) => pineTier(b, 20 + (i === 2 ? f : 0), top, bottom, hw, ramp, snow, i < 2));
+      box(b, 19 + f, tiers[2][0] - 2, 2, 3, snow ? SNOW[3] : ramp[4]);
     });
   });
 }
@@ -716,7 +725,9 @@ function drawProps(scene: Phaser.Scene): void {
     });
   });
 
-  canvasTex(scene, 'duskwillow', 56, 72, (c) => {
+  // sway strip: cell 1 moves the crown and the strands' lower halves a pixel downwind (cell 2: mirrored lean)
+  stripTex(scene, 'duskwillow', 56, 72, SWAY_CELLS, (c, cell) => {
+    const f = swayLean(cell);
     const rnd = artRng(keySeed('duskwillow'));
     shadow(c, 28, 68, 21, 4.5);
     halo(c, 13, 47, 9, '#ffb0e8', 0.35);
@@ -725,7 +736,7 @@ function drawProps(scene: Phaser.Scene): void {
       trunkPx(b, 28, 34, 69, 9, DUSK_BARK, rnd);
       brush(b, [26, 42, 18, 31], 3, DUSK_BARK[3]);
       brush(b, [31, 40, 39, 30], 3, DUSK_BARK[2]);
-      leafMass(b, 28, 14, 19, 12, LEAF_DUSK, rnd, false);
+      leafMass(b, 28 + f, 14, 19, 12, LEAF_DUSK, rnd, false);
       leafMass(b, 14, 26, 11, 8, LEAF_DUSK, rnd);
       leafMass(b, 42, 25, 11, 8, LEAF_DUSK, rnd);
       // weeping strands
@@ -736,9 +747,9 @@ function drawProps(scene: Phaser.Scene): void {
         const col = LEAF_DUSK[2 + (i % 3)];
         const dx = i < 8 ? -1 : 1;
         box(b, x, top, 1, Math.round(len * 0.6), col);
-        box(b, x + dx, top + Math.round(len * 0.6), 1, len - Math.round(len * 0.6), col);
+        box(b, x + dx + f, top + Math.round(len * 0.6), 1, len - Math.round(len * 0.6), col);
         px(b, x, top + 2, LEAF_DUSK[5]);
-        if (i % 4 === 1) box(b, x + dx, top + len, 1, 2, i % 8 === 1 ? '#f0a0d8' : '#a8e0ff');
+        if (i % 4 === 1) box(b, x + dx + f, top + len, 1, 2, i % 8 === 1 ? '#f0a0d8' : '#a8e0ff');
       }
       // glowing blossom lanterns
       disc(b, 13, 47, 2.5, 3, '#f8b8e8');
@@ -775,7 +786,9 @@ function drawProps(scene: Phaser.Scene): void {
     });
   });
 
-  canvasTex(scene, 'reeds', 28, 34, (c) => {
+  // sway strip: cell 1 bends the upper blades and the cattails a pixel downwind (cell 2: mirrored lean)
+  stripTex(scene, 'reeds', 28, 34, SWAY_CELLS, (c, cell) => {
+    const f = swayLean(cell);
     shadow(c, 14, 31, 10, 2.5);
     sprite(c, 28, 34, (b) => {
       const blades: [number, number, number, number][] = [
@@ -791,18 +804,19 @@ function drawProps(scene: Phaser.Scene): void {
       for (const [x, base, lean, tone] of blades) {
         const tipY = base - 16 - ((x * 3) % 7);
         seg(b, x, base, x + Math.round(lean * 0.4), base - 9, R.grass[tone]);
-        seg(b, x + Math.round(lean * 0.4), base - 9, x + lean, tipY, R.grass[Math.min(4, tone + 1)]);
+        seg(b, x + Math.round(lean * 0.4), base - 9, x + lean + f, tipY, R.grass[Math.min(4, tone + 1)]);
         px(b, x + 1, base - 1, R.grass[tone - 1 < 0 ? 0 : tone - 1]);
       }
       for (const [x, top] of [
         [13, 5],
         [18, 3],
       ]) {
-        box(b, x, top + 7, 1, 31 - top - 7, R.grass[1]);
-        box(b, x - 1, top, 3, 7, R.bark[2]);
-        box(b, x - 1, top, 1, 7, R.bark[4]);
-        box(b, x + 1, top + 1, 1, 6, R.bark[1]);
-        px(b, x, top - 1, R.grass[3]);
+        if (f) seg(b, x, 30, x + f, top + 7, R.grass[1]);
+        else box(b, x, top + 7, 1, 31 - top - 7, R.grass[1]);
+        box(b, x - 1 + f, top, 3, 7, R.bark[2]);
+        box(b, x - 1 + f, top, 1, 7, R.bark[4]);
+        box(b, x + 1 + f, top + 1, 1, 6, R.bark[1]);
+        px(b, x + f, top - 1, R.grass[3]);
       }
     });
   });
@@ -1025,13 +1039,21 @@ function chimneyPx(b: Ctx, x: number, y: number, w: number, h: number): void {
   box(b, x, y - 2, w, 1, '#1a120c');
 }
 
-/** Pixel smoke puffs (translucent, drawn outside the sprite so they get no outline). */
-function smokePx(c: Ctx, x: number, y: number): void {
-  disc(c, x, y, 3, 2.5, 'rgba(214,208,200,0.55)');
-  disc(c, x + 3, y - 6, 4, 3, 'rgba(214,208,200,0.42)');
-  disc(c, x + 1, y - 13, 5, 3.5, 'rgba(214,208,200,0.28)');
-  px(c, x - 1, y - 1, 'rgba(255,255,255,0.6)');
-}
+/**
+ * Chimney mouths per structure texture (px from the texture's top-left): render/ambient.ts rises animated pixel smoke
+ * from them (the textures carry no baked smoke). 'dark' = forge smoke.
+ */
+export const STRUCTURE_SMOKE: Readonly<Record<string, readonly (readonly [x: number, y: number, dark?: boolean])[]>> = {
+  struct_house: [[23, 4]],
+  struct_hut: [[48, 3]],
+  struct_smithy: [[99, 4, true]],
+  struct_hall: [
+    [36, 10],
+    [156, 6],
+  ],
+  smithy: [[99, 4, true]],
+  hut: [[48, 3]],
+};
 
 /** Omnipath emblem: a gold four-point waystar over a ring, on a cloth field (used by banners and the hall). */
 function waystar(b: Ctx, cx: number, cy: number, s: number, gold: Ramp = R.gold): void {
@@ -1117,7 +1139,6 @@ function drawStructures(scene: Phaser.Scene): void {
       px(b, 106, 109, PAL.water[3]);
     });
     halo(c, 99, 6, 8, '#ff9a3a', 0.45);
-    smokePx(c, 100, 2);
   });
 
   // ---- chapel 4x4: front gable, slate planes going back, rose window, bell cote with the waystar finial
@@ -1222,7 +1243,6 @@ function drawStructures(scene: Phaser.Scene): void {
       box(b, 44, 4, 8, 4, T[1]);
       box(b, 45, 4, 6, 2, '#1a120c');
     });
-    smokePx(c, 48, 2);
   });
 
   // ---- hall 6x4: timber guild hall, slate roof, central gable porch, waystar banners and lanterns
@@ -1260,7 +1280,6 @@ function drawStructures(scene: Phaser.Scene): void {
     });
     halo(c, 85, 127, 7, '#ffcf6a', 0.5);
     halo(c, 107, 127, 7, '#ffcf6a', 0.5);
-    smokePx(c, 37, 8);
   });
 
   // ---- house 3x3: timber frame cottage, tiled roof, flower box
@@ -1282,7 +1301,6 @@ function drawStructures(scene: Phaser.Scene): void {
       box(b, 10, 67, 76, 2, 'rgba(36,24,15,0.4)');
       chimneyPx(b, 18, 8, 10, 24);
     });
-    smokePx(c, 23, 3);
   });
 
   // ---- tent 3x2: striped canvas, open flap, pennant, guy ropes
@@ -1748,9 +1766,35 @@ function statue(c: Ctx): void {
   });
 }
 
-function campfire(c: Ctx): void {
+/** Campfire flame per idle frame [dx, h]: frame 0 the still look, then a lower lick left and a taller lick right. */
+const CAMPFIRE_FLAME: readonly (readonly [number, number])[] = [
+  [0, 17],
+  [-1, 15],
+  [1, 18],
+];
+/** Spark pixels above the fire per frame ([x, y, ramp index]). */
+const CAMPFIRE_SPARKS: readonly (readonly (readonly [number, number, number])[])[] = [
+  [
+    [11, 4, 3],
+    [21, 2, 2],
+    [18, 6, 4],
+  ],
+  [
+    [12, 2, 2],
+    [20, 5, 3],
+    [14, 7, 4],
+  ],
+  [
+    [10, 6, 3],
+    [19, 1, 2],
+    [22, 7, 4],
+  ],
+];
+
+function campfire(c: Ctx, frame = 0): void {
+  const [dx, fh] = CAMPFIRE_FLAME[frame];
   shadow(c, 16, 27, 13, 3, 0.25);
-  halo(c, 16, 20, 17, '#ff9a3a', 0.5);
+  halo(c, 16, 20, [17, 16, 18][frame], '#ff9a3a', 0.5);
   sprite(c, 32, 32, (b) => {
     for (let i = 0; i < 9; i++) {
       const a = (i / 9) * Math.PI * 2;
@@ -1766,17 +1810,16 @@ function campfire(c: Ctx): void {
     disc(b, 8, 25, 1.5, 1.5, R.cream[2]);
     disc(b, 24, 25, 1.5, 1.5, R.cream[2]);
     box(b, 12, 21, 8, 2, R.flame[0]);
-    flamePx(b, 16, 23, 17);
+    flamePx(b, 16 + dx, 23, fh);
   });
-  px(c, 11, 4, R.flame[3]);
-  px(c, 21, 2, R.flame[2]);
-  px(c, 18, 6, R.flame[4]);
+  for (const [x, y, k] of CAMPFIRE_SPARKS[frame]) px(c, x, y, R.flame[k]);
 }
 
 function drawObjects(scene: Phaser.Scene): void {
   canvasTex(scene, 'obj_waystone', 32, 56, waystone(false));
   canvasTex(scene, 'obj_waystone_lit', 32, 56, waystone(true));
-  canvasTex(scene, 'obj_altar', 48, 44, (c) => {
+  // idle strip: the two candle flames flicker out of step (frame 0 the still look)
+  stripTex(scene, 'obj_altar', 48, 44, 3, (c, f) => {
     shadow(c, 24, 40, 21, 3.5);
     halo(c, 11, 10, 8, '#ffcf6a', 0.4);
     halo(c, 37, 10, 8, '#ffcf6a', 0.4);
@@ -1809,7 +1852,7 @@ function drawObjects(scene: Phaser.Scene): void {
         box(b, x - 2, 9, 1, 8, R.cream[4]);
         box(b, x + 1, 9, 1, 8, R.cream[1]);
         px(b, x, 8, R.iron[1]);
-        flamePx(b, x, 8, 6);
+        flamePx(b, x, 8, 6 + (f === 0 ? 0 : (x < 24) === (f === 1) ? 1 : -1));
       }
     });
   });
@@ -1819,7 +1862,7 @@ function drawObjects(scene: Phaser.Scene): void {
   canvasTex(scene, 'obj_chest', 32, 28, chest(false));
   canvasTex(scene, 'obj_chest_open', 32, 32, chest(true));
   canvasTex(scene, 'obj_statue', 40, 68, statue);
-  canvasTex(scene, 'obj_campfire', 32, 32, campfire);
+  stripTex(scene, 'obj_campfire', 32, 32, 3, campfire);
   canvasTex(scene, 'bobber', 12, 12, (c) =>
     sprite(c, 12, 12, (b) => {
       disc(b, 6, 6, 4.5, 4.5, R.crimson[2]);
@@ -2144,7 +2187,8 @@ function drawPortals(scene: Phaser.Scene): void {
   });
 
   // Dungeon entrance carved into a rock face, timber-framed, with two torches (origin bottom-centre).
-  canvasTex(scene, 'portal_door', 64, 64, (c) => {
+  // idle strip: the two torches flicker out of step (frame 0 the still look)
+  stripTex(scene, 'portal_door', 64, 64, 3, (c, f) => {
     const S = R.warmStone;
     shadow(c, 32, 60, 30, 4);
     sprite(c, 64, 64, (b) => {
@@ -2187,8 +2231,9 @@ function drawPortals(scene: Phaser.Scene): void {
       }
     });
     for (const x of [9, 55]) {
-      halo(c, x, 32, 10, '#ffb050', 0.5);
-      flamePx(c, x, 37, 8);
+      const d = f === 0 ? 0 : (x < 32) === (f === 1) ? 1 : -1;
+      halo(c, x, 32, 10 + d, '#ffb050', 0.5);
+      flamePx(c, x, 37, 8 + d);
     }
   });
 
@@ -2428,6 +2473,18 @@ function drawPortals(scene: Phaser.Scene): void {
 }
 
 export { drawProps, drawStructures, drawObjects, drawNodes, drawPortals };
+
+/** World textures drawn as idle strips (frame 0 = the still look; art/dressing.ts stripTex, render/ambient.ts). */
+export const WORLD_IDLE: Readonly<Record<string, IdleAnim>> = {
+  // broad trees, willows and reeds may be mirrored (render/stage.ts): their strips carry the mirrored lean too
+  ...Object.fromEntries(
+    ['tree', 'tree~1', 'tree~2', 'darktree', 'darktree~1', 'darktree~2', 'duskwillow', 'reeds'].map((k) => [k, { frames: 2, kind: 'sway', mirror: 2 } as IdleAnim]),
+  ),
+  ...Object.fromEntries(['pine', 'pine~1', 'frostpine', 'frostpine~1'].map((k) => [k, { frames: 2, kind: 'sway' } as IdleAnim])),
+  obj_campfire: { frames: 3, kind: 'flame' },
+  obj_altar: { frames: 3, kind: 'flicker' },
+  portal_door: { frames: 3, kind: 'flicker' },
+};
 
 /** Extra look variants per prop kind (same size and anchor as the base key); render/stage.ts picks one per tile. */
 export const PROP_VARIANTS: Readonly<Record<string, readonly string[]>> = {

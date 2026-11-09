@@ -44,3 +44,23 @@ export function inLane(g: TellShape, p: P): boolean {
   const l = g as Shape<'lane'>;
   return distToSegment(p.x, p.y, l.x0, l.y0, l.x1, l.y1) <= l.width / 2 + PLAYER_R;
 }
+
+/**
+ * How far a shot flies along `ang` from its ground point before its centre enters a blocked tile (it dies there, as
+ * MonsterSkills.update tests it), capped at `max`: the length of its aim line.
+ */
+export function shotReach(blocked: (x: number, y: number) => boolean, x: number, y: number, ang: number, max: number, step = 4): number {
+  const ca = Math.cos(ang),
+    sa = Math.sin(ang);
+  for (let d = step; d <= max; d += step) if (blocked(x + ca * d, y + sa * d)) return Math.max(0, d - step);
+  return max;
+}
+
+/**
+ * A monster shot hits the player when the player's body touches the segment the shot swept this frame (from where it
+ * was to where it is): the capsule its aim line shows, so a long frame (a hitch, a slow device) never steps a shot
+ * through the player (a point test every frame could miss at > ~113 ms frames: 34 px of hit width vs 300 px/s shots).
+ */
+export function shotHits(p: P, x0: number, y0: number, x1: number, y1: number, size: number): boolean {
+  return distToSegment(p.x, p.y, x0, y0, x1, y1) <= PLAYER_R + size / 2;
+}

@@ -5,8 +5,13 @@
 //   budget of VFX_BUDGET.hitStop.budgetMsPerSecond (150 ms) per second, each hold <= localMaxMs (100 ms). So a
 //   flurry of hits reads as a few crisp beats, never as a stalled body. The global freeze stays the spark's alone
 //   (MapScene.hitStop(150), docs/VFX.md §13 item 2).
-// - Impact frames: white for one frame, then the hit's colour for one frame (reduce-flash: the colour frame only),
-//   a 1-frame squash and a whole-pixel recoil along the blow (never a fractional tween).
+// - Impact frame: ONE rendered frame of white (reduce-flash: the hit's colour), a 1-frame squash and a whole-pixel
+//   recoil along the blow (never a fractional tween). Body flashes are gated per victim (BODY_FLASH): only the first
+//   hit of a cast on a victim may flash; later ticks of that cast within 150 ms are spark-only (no flash, squash or
+//   recoil), later beats of it recoil without a flash; and a victim flashes at most once per 220 ms AND per 8 rendered
+//   frames, so a full-body silhouette covers <= 12.5 % of the frames even in a busy fight at a low frame rate (it was
+//   a solid silhouette in most frames under multi-hit skills). DoT ticks share the gate (tick()); deaths and spawns
+//   (pop()) are not gated.
 // - Camera: kicks and flashes go to the camera rig (render/camera.ts), which applies reduce-motion and the flash
 //   governor; trauma goes through VfxStage.trauma.
 // Phaser-free: the actors and the camera are structural views (tests/vfx-world.test.ts drives it with fakes).
@@ -37,6 +42,31 @@ export interface JuiceHost {
   /** The actor behind a victim key ('player' or a Monster), or null when it is gone. */
   actor(victim: object | 'player'): JuiceActor | null;
   camera(): JuiceCamera | null;
+  /** Rendered-frame counter (game.loop.frame): the flash cooldown also counts frames. Absent: time only. */
+  frame?(): number;
+}
+
+/** Body-flash gate per victim (docs/VFX.md §6.6). */
+export const BODY_FLASH = {
+  /** A later hit of the same cast on the same victim inside this gap is spark-only (no flash, squash or recoil). */
+  sameCastQuietMs: 150,
+  /** At least this long between two body flashes of one victim (ms)... */
+  cooldownMs: 220,
+  /** ...and at least this many rendered frames: a 1-frame flash then covers <= 1 / 8 of the frames at any rate. */
+  cooldownFrames: 8,
+  /** Casts remembered per victim (their first hit already landed); older than this they are forgotten (ms). */
+  castMemoryMs: 3000,
+} as const;
+
+/** What a juice impact did to the victim's body (QA / tests). */
+export type ImpactOutcome = 'flash' | 'cooled' | 'beat' | 'quiet' | 'gone';
+
+interface FlashState {
+  /** Last body flash: scene time and rendered frame. */
+  at: number;
+  frame: number;
+  /** Cast key -> scene time of its latest hit on this victim. */
+  casts: Map<unknown, number>;
 }
 
 interface HoldState {
@@ -51,9 +81,12 @@ const PLAYER_KEY = {};
 
 export class JuiceRig implements JuiceHooks {
   private holds = new WeakMap<object, HoldState>();
+  private flashState = new WeakMap<object, FlashState>();
   /** Stats (QA): holds granted / trimmed by the budget. */
   granted = 0;
   trimmed = 0;
+  /** Stats (QA): body flashes shown, and hits that stayed spark-only / beat-only / cooled by the gate. */
+  readonly flashes = { shown: 0, quiet: 0, beat: 0, cooled: 0 };
 
   constructor(private readonly host: JuiceHost) {}
 
@@ -80,12 +113,84 @@ export class JuiceRig implements JuiceHooks {
     return total;
   }
 
-  impact(victim: object | 'player', color: number, ang: number, recoilPx: number): void {
+  /**
+   * A blow on the victim's body, through the flash gate (BODY_FLASH). `cast` keys the blow's cast (any stable per-cast value):
+   * its first hit on this victim may flash (one frame: white, or `color` under reduce-flash) + squash + recoil, unless
+   * the victim flashed within the cooldown (then only the recoil); later hits of the same cast within 150 ms are
+   * spark-only, later beats of it only recoil. Without a cast every blow counts as a first hit.
+   */
+  impact(victim: object | 'player', color: number, ang: number, recoilPx: number, cast?: unknown): ImpactOutcome {
     const a = this.host.actor(victim);
-    if (!a) return;
-    a.impactFlash(this.host.reduceFlash() ? [color] : [WHITE, color]);
+    if (!a) return 'gone';
+    const now = this.host.now();
+    const st = this.flashOf(victim);
+    if (cast !== undefined) {
+      const prev = st.casts.get(cast);
+      st.casts.set(cast, now);
+      if (st.casts.size > 12) for (const [k, t] of st.casts) if (now - t > BODY_FLASH.castMemoryMs) st.casts.delete(k);
+      if (prev !== undefined) {
+        if (now - prev < BODY_FLASH.sameCastQuietMs) {
+          this.flashes.quiet++;
+          return 'quiet';
+        }
+        this.flashes.beat++;
+        if (recoilPx > 0) a.recoil(ang, Math.round(recoilPx));
+        return 'beat';
+      }
+    }
+    if (!this.flashReady(st, now)) {
+      this.flashes.cooled++;
+      if (recoilPx > 0) a.recoil(ang, Math.round(recoilPx));
+      return 'cooled';
+    }
+    this.markFlash(st, now);
+    a.impactFlash([this.host.reduceFlash() ? color : WHITE]);
     a.squash();
     if (recoilPx > 0) a.recoil(ang, Math.round(recoilPx));
+    return 'flash';
+  }
+
+  /** A damage-over-time tick: one frame of `color` on the body when the victim's flash gate allows it. */
+  tick(victim: object | 'player', color: number): boolean {
+    const a = this.host.actor(victim);
+    if (!a) return false;
+    const now = this.host.now();
+    const st = this.flashOf(victim);
+    if (!this.flashReady(st, now)) {
+      this.flashes.cooled++;
+      return false;
+    }
+    this.markFlash(st, now);
+    a.impactFlash([color]);
+    return true;
+  }
+
+  /** Death / spawn pop: two white frames (one under reduce-flash) and a squash; never gated, it restarts the gate. */
+  pop(victim: object | 'player'): void {
+    const a = this.host.actor(victim);
+    if (!a) return;
+    this.markFlash(this.flashOf(victim), this.host.now());
+    a.impactFlash(this.host.reduceFlash() ? [WHITE] : [WHITE, WHITE]);
+    a.squash();
+  }
+
+  private flashOf(victim: object | 'player'): FlashState {
+    const key = victim === 'player' ? PLAYER_KEY : victim;
+    let st = this.flashState.get(key);
+    if (!st) this.flashState.set(key, (st = { at: -1e9, frame: -1e9, casts: new Map() }));
+    return st;
+  }
+
+  private flashReady(st: FlashState, now: number): boolean {
+    if (now - st.at < BODY_FLASH.cooldownMs) return false;
+    const f = this.host.frame?.();
+    return f === undefined || f - st.frame >= BODY_FLASH.cooldownFrames;
+  }
+
+  private markFlash(st: FlashState, now: number): void {
+    st.at = now;
+    st.frame = this.host.frame?.() ?? st.frame;
+    this.flashes.shown++;
   }
 
   kick(ang: number, px: number): void {

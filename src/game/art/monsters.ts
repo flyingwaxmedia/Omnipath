@@ -1,4 +1,6 @@
 import type Phaser from 'phaser';
+import type { MonsterDef } from '../../core/types';
+import { MONSTERS } from '../../data/monsters';
 import { PAL, outline, pixelTex } from './pixel';
 
 // =====================================================================================================
@@ -19,6 +21,10 @@ import { PAL, outline, pixelTex } from './pixel';
 //   texture can look it up with their own `texture` field.
 // - Commons that elites tint (jellop, puddlewisp, gustling, cragling, gloomcap, cairn_wraith, emberkit,
 //   voltcalf) keep mid-to-light bodies so a multiply tint still shows.
+// - Elites (`base` + `scale` + `tint` in src/data/monsters.ts) get their own `mon_<eliteId>` / `_1` frames painted
+//   NATIVELY at round(size x scale) with the tint baked in (MONSTER_VARIANTS, monsterTexture): shapes re-rasterised at
+//   the real size, 1 px outline added at that size — the game never scales a monster sprite (docs/QUALITY-PLAN.md §1).
+// - monsterHideColor(id) is each monster's body tone (the VFX death pop tints its chips with it).
 // - Deterministic: no Math.random, every texture <= 2048 px.
 // =====================================================================================================
 
@@ -129,33 +135,65 @@ class Pix {
   /**
    * `w` x `h` is the real buffer; (ox, oy) offsets every drawing call, so a species drawn in its logical
    * coordinates can get a few pixels of margin (outline room) without touching its drawing code.
+   * `k` > 1 paints the species natively bigger (elites, docs/QUALITY-PLAN.md §1): shapes are re-rasterised at the real
+   * resolution (pixel centres sampled in logical coordinates), single pixels / lines / rects cover their logical cell
+   * ([floor(i·k), floor((i+1)·k))), and the 1 px outline is added afterwards at the real size — no sprite scaling.
+   * k = 1 paints exactly as before.
    */
   constructor(
     readonly w: number,
     readonly h: number,
     readonly ox = 0,
     readonly oy = 0,
+    readonly k = 1,
   ) {
     this.d = new Uint8ClampedArray(w * h * 4);
   }
 
+  /** Real start of logical cell `i` along an axis with offset `off`. */
+  private at(i: number, off: number): number {
+    return this.k === 1 ? i + off : Math.floor((i + off) * this.k);
+  }
+
   ok(x: number, y: number): boolean {
-    x += this.ox;
-    y += this.oy;
-    return x >= 0 && y >= 0 && x < this.w && y < this.h;
+    const X = this.at(x, this.ox);
+    const Y = this.at(y, this.oy);
+    return X >= 0 && Y >= 0 && X < this.w && Y < this.h;
+  }
+
+  /** Real-pixel opacity test. */
+  private rsolid(X: number, Y: number): boolean {
+    return X >= 0 && Y >= 0 && X < this.w && Y < this.h && this.d[(Y * this.w + X) * 4 + 3] >= 128;
   }
 
   solid(x: number, y: number): boolean {
-    return this.ok(x, y) && this.d[((y + this.oy) * this.w + x + this.ox) * 4 + 3] >= 128;
+    if (this.k === 1) return this.rsolid(x + this.ox, y + this.oy);
+    return this.rsolid(Math.floor((x + this.ox + 0.5) * this.k), Math.floor((y + this.oy + 0.5) * this.k));
+  }
+
+  /** Calls `fn` for every real pixel of logical cell (x, y) (one pixel when k = 1). */
+  private cell(x: number, y: number, fn: (X: number, Y: number) => void): void {
+    const X0 = this.at(x, this.ox);
+    const Y0 = this.at(y, this.oy);
+    if (this.k === 1) {
+      fn(X0, Y0);
+      return;
+    }
+    const X1 = this.at(x + 1, this.ox);
+    const Y1 = this.at(y + 1, this.oy);
+    for (let Y = Y0; Y < Y1; Y++) for (let X = X0; X < X1; X++) fn(X, Y);
   }
 
   /** One pixel; `a` < 1 composites over what is there. */
   px(x: number, y: number, col: string, a = 1): void {
-    x = Math.round(x);
-    y = Math.round(y);
-    if (!this.ok(x, y)) return;
+    this.cell(Math.round(x), Math.round(y), (X, Y) => this.rpx(X, Y, col, a));
+  }
+
+  /** One real pixel of the buffer. */
+  private rpx(X: number, Y: number, col: string, a = 1): void {
+    if (X < 0 || Y < 0 || X >= this.w || Y >= this.h) return;
     const [r, g, b, ca] = rgbaOf(col);
-    const k = ((y + this.oy) * this.w + x + this.ox) * 4;
+    const k = (Y * this.w + X) * 4;
     const d = this.d;
     const al = (a * ca) / 255;
     if (al >= 0.999) {
@@ -176,13 +214,15 @@ class Pix {
 
   /** Only paints over pixels that are already opaque (details on a body). */
   on(x: number, y: number, col: string): void {
-    if (this.solid(Math.round(x), Math.round(y))) this.px(x, y, col);
+    this.cell(Math.round(x), Math.round(y), (X, Y) => {
+      if (this.rsolid(X, Y)) this.rpx(X, Y, col);
+    });
   }
 
   clear(x: number, y: number): void {
-    x = Math.round(x);
-    y = Math.round(y);
-    if (this.ok(x, y)) this.d[((y + this.oy) * this.w + x + this.ox) * 4 + 3] = 0;
+    this.cell(Math.round(x), Math.round(y), (X, Y) => {
+      if (X >= 0 && Y >= 0 && X < this.w && Y < this.h) this.d[(Y * this.w + X) * 4 + 3] = 0;
+    });
   }
 
   rect(x: number, y: number, w: number, h: number, col: string, a = 1): void {
@@ -227,10 +267,15 @@ class Pix {
 
   /** Masked shape filled from a ramp (dark -> light). Pixel centres are sampled, so params may be fractional. */
   shape(bx0: number, by0: number, bx1: number, by1: number, inside: (x: number, y: number) => boolean, fill: Ramp | string, o: ShapeOpts = {}): void {
-    const X0 = Math.max(-this.ox, Math.floor(bx0));
-    const Y0 = Math.max(-this.oy, Math.floor(by0));
-    const X1 = Math.min(this.w - 1 - this.ox, Math.ceil(bx1));
-    const Y1 = Math.min(this.h - 1 - this.oy, Math.ceil(by1));
+    // Works on REAL pixels (x, y below); `lx` / `ly` map a real pixel centre back to logical coordinates.
+    const k = this.k;
+    const { ox, oy } = this;
+    const lx = (x: number) => (x + 0.5) / k - ox;
+    const ly = (y: number) => (y + 0.5) / k - oy;
+    const X0 = Math.max(0, Math.floor((bx0 + ox) * k));
+    const Y0 = Math.max(0, Math.floor((by0 + oy) * k));
+    const X1 = Math.min(this.w - 1, Math.ceil((bx1 + ox + 1) * k) - 1);
+    const Y1 = Math.min(this.h - 1, Math.ceil((by1 + oy + 1) * k) - 1);
     const mw = X1 - X0 + 1;
     const mh = Y1 - Y0 + 1;
     if (mw <= 0 || mh <= 0) return;
@@ -241,7 +286,7 @@ class Pix {
     let ay1 = -Infinity;
     for (let y = Y0; y <= Y1; y++)
       for (let x = X0; x <= X1; x++)
-        if (inside(x + 0.5, y + 0.5)) {
+        if (inside(lx(x), ly(y))) {
           m[(y - Y0) * mw + x - X0] = 1;
           if (x < ax0) ax0 = x;
           if (y < ay0) ay0 = y;
@@ -253,10 +298,11 @@ class Pix {
     const n = R.length;
     const base = R[n >= 3 ? n - 2 : n - 1];
     const mode: Mode = o.mode ?? (n >= 3 ? 'ball' : 'flat');
-    const ecx = (ax0 + ax1 + 1) / 2;
-    const ecy = (ay0 + ay1 + 1) / 2;
-    const erx = (ax1 - ax0 + 1) / 2;
-    const ery = (ay1 - ay0 + 1) / 2;
+    // ellipse fitted to the mask, in logical units
+    const ecx = (ax0 + ax1 + 1) / 2 / k - ox;
+    const ecy = (ay0 + ay1 + 1) / 2 / k - oy;
+    const erx = (ax1 - ax0 + 1) / 2 / k;
+    const ery = (ay1 - ay0 + 1) / 2 / k;
     const norm: Normal =
       o.norm ??
       ((x, y) => {
@@ -281,7 +327,7 @@ class Pix {
         const lf = !inM(x - 1, y);
         const rt = !inM(x + 1, y);
         let col: string;
-        if (o.edge && ((up && this.solid(x, y - 1)) || (dn && this.solid(x, y + 1)) || (lf && this.solid(x - 1, y)) || (rt && this.solid(x + 1, y)))) col = o.edge;
+        if (o.edge && ((up && this.rsolid(x, y - 1)) || (dn && this.rsolid(x, y + 1)) || (lf && this.rsolid(x - 1, y)) || (rt && this.rsolid(x + 1, y)))) col = o.edge;
         else if (mode === 'flat') col = base;
         else if (mode === 'bevel') {
           const lit = up || lf;
@@ -291,7 +337,7 @@ class Pix {
           const t = (y - ay0 + 0.5) / (ay1 - ay0 + 1);
           col = R[Math.max(0, Math.min(n - 1, n - 1 - Math.floor(t * n)))];
         } else {
-          const [nx, ny, nz] = norm(x + 0.5, y + 0.5);
+          const [nx, ny, nz] = norm(lx(x), ly(y));
           const l = (nx * LX + ny * LY + nz * LZ) / LN + lift;
           let i = 0;
           while (i < th.length && l >= th[i]) i++;
@@ -299,7 +345,7 @@ class Pix {
         }
         out.push([x, y, col]);
       }
-    for (const [x, y, col] of out) this.px(x, y, col);
+    for (const [x, y, col] of out) this.rpx(x, y, col);
   }
 
   ell(cx: number, cy: number, rx: number, ry: number, fill: Ramp | string, o: ShapeOpts = {}): void {
@@ -2351,23 +2397,90 @@ const SPECIES: Record<string, Mon> = {
   thunderhoof,
 };
 
-/** Every monster's 2-frame loop, keyed by its frame-0 texture key (also what tinted elites use). */
-export const MONSTER_ANIMS: Record<string, { frames: string[]; fps: number }> = Object.fromEntries(
-  Object.entries(SPECIES).map(([id, m]) => [`mon_${id}`, { frames: [`mon_${id}`, `mon_${id}_1`], fps: m.fps }]),
-);
-
-/** Real texture size of a species (logical size + pad). */
-function texSize(m: Mon): [number, number] {
-  const [x, top] = m.pad ?? [0, 0];
-  return [m.w + 2 * x, m.h + top];
+/**
+ * Monsters drawn natively bigger and/or recoloured from a common species (elites: `base` + `scale` + `tint` in
+ * src/data/monsters.ts). Each gets its own `mon_<id>` / `mon_<id>_1` frames painted at the real size (docs/QUALITY-PLAN.md
+ * §1: no fractional sprite scale) with the multiply tint baked into the pixels (no runtime tint state, Canvas-safe).
+ */
+export interface MonsterVariant {
+  /** Frame-0 texture key (`mon_<id>`); frame 1 is `<key>_1`. */
+  key: string;
+  /** The species painted (`SPECIES` id). */
+  species: string;
+  /** Native paint scale (1 = the species' own size). */
+  k: number;
+  /** Multiply tint baked into the pixels (0xRRGGBB) or null. */
+  tint: number | null;
 }
 
-function paint(scene: Phaser.Scene, key: string, m: Mon, f: number): void {
-  const [w, h] = texSize(m);
+/** Species id behind a texture key `mon_<species>` (null when the key is not a species frame-0 key). */
+function speciesOfKey(key: string | undefined): string | null {
+  if (!key?.startsWith('mon_')) return null;
+  const id = key.slice(4);
+  return SPECIES[id] ? id : null;
+}
+
+/** The baked variant a monster def needs, or null when it shows its species texture as is. */
+export function monsterVariant(def: Pick<MonsterDef, 'id' | 'base' | 'texture' | 'tint' | 'scale'>): MonsterVariant | null {
+  const k = def.scale ?? 1;
+  const tint = def.tint ?? null;
+  if (k === 1 && tint === null) return null;
+  const species = speciesOfKey(def.texture) ?? (def.base && SPECIES[def.base] ? def.base : SPECIES[def.id] ? def.id : null);
+  if (!species) return null;
+  return { key: `mon_${def.id}`, species, k, tint };
+}
+
+/** Every baked variant in the manifest (elites), by frame-0 key. */
+export const MONSTER_VARIANTS: Readonly<Record<string, MonsterVariant>> = Object.fromEntries(
+  MONSTERS.map((d) => monsterVariant(d))
+    .filter((v): v is MonsterVariant => !!v && !SPECIES[v.key.slice(4)])
+    .map((v) => [v.key, v]),
+);
+
+/** Every monster's 2-frame loop, keyed by its frame-0 texture key (species and baked elite variants). */
+export const MONSTER_ANIMS: Record<string, { frames: string[]; fps: number }> = Object.fromEntries(
+  [
+    ...Object.entries(SPECIES).map(([id, m]): [string, number] => [`mon_${id}`, m.fps]),
+    ...Object.values(MONSTER_VARIANTS).map((v): [string, number] => [v.key, SPECIES[v.species].fps]),
+  ].map(([key, fps]) => [key, { frames: [key, `${key}_1`], fps }]),
+);
+
+/** Real texture size of a species (logical size + pad) painted at scale `k`. */
+function texSize(m: Mon, k = 1): [number, number] {
   const [x, top] = m.pad ?? [0, 0];
+  return [Math.round((m.w + 2 * x) * k), Math.round((m.h + top) * k)];
+}
+
+/** Paints one frame into a fresh buffer (no outline, no post): what tests and colour sampling read. */
+function body(m: Mon, f: number, k = 1): Pix {
+  const [w, h] = texSize(m, k);
+  const [x, top] = m.pad ?? [0, 0];
+  const p = new Pix(w, h, x, top, k);
+  m.draw(p, f);
+  return p;
+}
+
+/** Multiplies every pixel but the outline by `tint` (what a WebGL multiply tint did at run time). */
+function bakeTint(c: CanvasRenderingContext2D, w: number, h: number, tint: number): void {
+  const img = c.getImageData(0, 0, w, h);
+  const d = img.data;
+  const [or, og, ob] = rgbaOf(O);
+  const tr = (tint >> 16) & 255;
+  const tg = (tint >> 8) & 255;
+  const tb = tint & 255;
+  for (let i = 0; i < d.length; i += 4) {
+    if (!d[i + 3] || (d[i] === or && d[i + 1] === og && d[i + 2] === ob)) continue;
+    d[i] = Math.round((d[i] * tr) / 255);
+    d[i + 1] = Math.round((d[i + 1] * tg) / 255);
+    d[i + 2] = Math.round((d[i + 2] * tb) / 255);
+  }
+  c.putImageData(img, 0, 0);
+}
+
+function paint(scene: Phaser.Scene, key: string, m: Mon, f: number, k = 1, tint: number | null = null): void {
+  const [w, h] = texSize(m, k);
   pixelTex(scene, key, w, h, (c) => {
-    const p = new Pix(w, h, x, top);
-    m.draw(p, f);
+    const p = body(m, f, k);
     p.put(c);
     outline(c, w, h, O);
     if (m.post) {
@@ -2375,13 +2488,122 @@ function paint(scene: Phaser.Scene, key: string, m: Mon, f: number): void {
       m.post(p, f);
       p.put(c);
     }
+    if (tint !== null) bakeTint(c, w, h, tint);
   });
 }
 
-/** Draws every `mon_<species>` texture plus its `_1` frame (skips keys that already exist). */
+/** Paints (once) a baked variant's two frames; returns its frame-0 key. */
+function paintVariant(scene: Phaser.Scene, v: MonsterVariant): string {
+  const m = SPECIES[v.species];
+  paint(scene, v.key, m, 0, v.k, v.tint);
+  paint(scene, `${v.key}_1`, m, 1, v.k, v.tint);
+  return v.key;
+}
+
+/**
+ * Texture to show for a monster: its baked variant (painted on first use if boot has not), its own species texture,
+ * or the base species. `species` is the species key behind it (hover / flyer rules key on it); `baked` = the size and
+ * tint are in the pixels (show it at scale 1, no tint).
+ */
+export function monsterTexture(scene: Phaser.Scene, def: MonsterDef): { key: string; species: string; baked: boolean } {
+  const v = monsterVariant(def);
+  if (v) {
+    try {
+      return { key: paintVariant(scene, v), species: `mon_${v.species}`, baked: true };
+    } catch (e) {
+      console.error(`[omnipath] monster variant ${v.key} failed`, e);
+      if (scene.textures.exists(v.key)) scene.textures.remove(v.key);
+      if (scene.textures.exists(`${v.key}_1`)) scene.textures.remove(`${v.key}_1`);
+    }
+  }
+  let tex = def.texture ?? `mon_${def.id}`;
+  if (!scene.textures.exists(tex)) tex = def.base && scene.textures.exists(`mon_${def.base}`) ? `mon_${def.base}` : 'mon_jellop';
+  return { key: tex, species: tex, baked: false };
+}
+
+/** Draws every `mon_<species>` texture plus its `_1` frame, then the baked elite variants (skips existing keys). */
 export function drawMonsters(scene: Phaser.Scene): void {
   for (const [id, m] of Object.entries(SPECIES)) {
     paint(scene, `mon_${id}`, m, 0);
     paint(scene, `mon_${id}_1`, m, 1);
   }
+  for (const v of Object.values(MONSTER_VARIANTS)) paintVariant(scene, v);
+}
+
+// ------------------------------------------------------------------ hide colours (death chips)
+
+const HIDE = new Map<string, number>();
+
+/** Colours that are never a hide: the outline, eye ink, white shine. */
+const NOT_HIDE = new Set([O, EYE, WHITE]);
+
+/** Species whose biggest colour family is not what reads as their hide (a cap over a pale stem, a robe's shadow). */
+const HIDE_OF: Readonly<Record<string, string>> = {
+  gloomcap: '#9a6cc4',
+  pipsprout: '#c8925a',
+  dusk_sovereign: '#8a6cb8',
+  hollow_regent: '#4e3a78',
+};
+
+/**
+ * Body tone of a species' frame 0, as 0xRRGGBB: opaque pixels are grouped into colour families (30° hue sectors, greys
+ * by lightness), the biggest family wins (a shaded body spreads over 4-5 ramp tones), and its most common tone is the
+ * hide. The outline, eye ink and white shine never count.
+ */
+function speciesHide(species: string): number {
+  const hit = HIDE.get(species);
+  if (hit !== undefined) return hit;
+  const m = SPECIES[species];
+  let best = 0x8a7c62;
+  if (HIDE_OF[species]) best = parseInt(HIDE_OF[species].slice(1), 16);
+  else if (m) {
+    const { d } = body(m, 0);
+    const skip = new Set([...NOT_HIDE].map((c) => parseInt(c.slice(1, 7), 16)));
+    const fams = new Map<number, Map<number, number>>();
+    const famN = new Map<number, number>();
+    for (let i = 0; i < d.length; i += 4) {
+      if (d[i + 3] < 128) continue;
+      const c = (d[i] << 16) | (d[i + 1] << 8) | d[i + 2];
+      if (skip.has(c)) continue;
+      const [h, sat, l] = toHsl(`#${c.toString(16).padStart(6, '0')}`);
+      const fam = sat < 0.12 || l > 0.92 ? 100 + Math.min(3, Math.floor(l * 4)) : Math.floor(h / 30);
+      let tones = fams.get(fam);
+      if (!tones) fams.set(fam, (tones = new Map()));
+      tones.set(c, (tones.get(c) ?? 0) + 1);
+      famN.set(fam, (famN.get(fam) ?? 0) + 1);
+    }
+    let top = -1;
+    let n = 0;
+    for (const [f, v] of famN) if (v > n) [top, n] = [f, v];
+    n = 0;
+    for (const [c, v] of fams.get(top) ?? []) if (v > n) [best, n] = [c, v];
+  }
+  HIDE.set(species, best);
+  return best;
+}
+
+/**
+ * Hide / body colour of a monster (0xRRGGBB) for the VFX death pop chips: the species' dominant body tone, with an
+ * elite's baked tint applied. Takes a monster id (`boulderback`), its def, or a texture key (`mon_cragling`,
+ * `mon_boulderback_1`). The VFX death pop tints its chips with it (vfx/runtime/index.ts hideColorOf).
+ */
+export function monsterHideColor(idOrKey: string | { id: string }): number {
+  const raw = typeof idOrKey === 'string' ? idOrKey : idOrKey.id;
+  const id = raw.replace(/^mon_/, '').replace(/_1$/, '');
+  const def = MONSTERS.find((d) => d.id === id);
+  const v = def ? monsterVariant(def) : null;
+  const species = v?.species ?? (SPECIES[id] ? id : (def?.base ?? speciesOfKey(def?.texture) ?? id));
+  const hide = speciesHide(species);
+  const tint = v?.tint ?? (def && !v ? (def.tint ?? null) : null);
+  if (tint === null) return hide;
+  const mul = (sh: number) => Math.round((((hide >> sh) & 255) * ((tint >> sh) & 255)) / 255) << sh;
+  return mul(16) | mul(8) | mul(0);
+}
+
+/** Test seam: a species frame painted at scale `k` (no outline) — size and RGBA pixels. */
+export function monsterPixels(species: string, f = 0, k = 1): { w: number; h: number; data: Uint8ClampedArray } | null {
+  const m = SPECIES[species];
+  if (!m) return null;
+  const p = body(m, f, k);
+  return { w: p.w, h: p.h, data: p.d };
 }

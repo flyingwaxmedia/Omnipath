@@ -9,12 +9,37 @@
 //
 // The content registry rides in the game's data registry (`REGISTRY_KEY`) so BootScene can draw the icons
 // (`drawIcons(this, bootRegistry(this)!)`) without main.ts and the render lane sharing a file.
+//
+// Quality hook (light lane): setRenderFeatures({ lighting, grade }) turns the pixel-banded light map
+// (render/lighting.ts; off = the flat darkness overlay) and OmniGrade (render/grade.ts) on or off, live. The settings
+// UI (quality lane) calls it for Low / Medium / High; both are off by themselves on the Canvas renderer.
 import Phaser from 'phaser';
 import type { Registry } from '../../core/registry';
 import { gameBus } from '../events';
 import './fonts';
 import '../../ui/styles/render.css';
+import { applyLut, bakeLut, GRADE_LOOKS, type GradeLookId, gradeSettings, setGradeEnabled, setGradeStrength } from './grade';
+import { lightSettings, setLightingEnabled } from './lighting';
 import { type PixelScale, pixelScale } from './pixelscale';
+
+/** World render features the quality settings switch (light lane). */
+export interface RenderFeatures {
+  /** Pixel-banded light map on dark / night maps (false: the flat overlay on dark maps, nothing on night maps). */
+  lighting: boolean;
+  /** OmniGrade colour grade on the world camera. */
+  grade: boolean;
+}
+
+/** Quality hook: turns world lighting and / or the grade on or off (applies to the running map at once). */
+export function setRenderFeatures(f: Partial<RenderFeatures>): void {
+  if (typeof f.lighting === 'boolean') setLightingEnabled(f.lighting);
+  if (typeof f.grade === 'boolean') setGradeEnabled(f.grade);
+}
+
+/** The requested features (a Canvas renderer runs neither, whatever these say). */
+export function renderFeatures(): RenderFeatures {
+  return { lighting: lightSettings.enabled, grade: gradeSettings.enabled };
+}
 
 /** Key of the content Registry in `game.registry` (read it in any scene: `this.registry.get(REGISTRY_KEY)`). */
 export const REGISTRY_KEY = 'omnipath.reg';
@@ -145,9 +170,48 @@ export function createGame(scenes: Phaser.Types.Scenes.SceneType[], reg?: Regist
 
 /** `window.omnipath.render`: the pixel scale, and `check()` — every pixel-perfect invariant, with the failures. */
 function installDebug(game: Phaser.Game, scale: () => PixelScale, asleep: () => boolean): void {
+  /** The running map's stage (light map / grade stats), read structurally. */
+  const stage = () => {
+    const sc = game.scene.getScenes(false).find((x) => x.sys.settings.key === 'Map') as
+      | { stage?: { lighting: string; lightMap: { stats: object; profile: object } | null; grade: { stats: object; uniforms: object | null } | null } }
+      | undefined;
+    return sc?.stage;
+  };
+  const luts: Partial<Record<GradeLookId, Uint8ClampedArray>> = {};
   const api = {
     scale: () => ({ ...scale() }),
     asleep,
+    /** Light lane: requested features, and setFeatures({ lighting, grade }) (the quality hook). */
+    features: renderFeatures,
+    setFeatures: (f: Partial<RenderFeatures>) => {
+      setRenderFeatures(f);
+      return renderFeatures();
+    },
+    /** QA: the grade's LUT mix multiplier (0 = identity, 1 = tuned). */
+    gradeStrength: (k?: number) => {
+      if (typeof k === 'number') setGradeStrength(k);
+      return gradeSettings.strength;
+    },
+    /** QA: what the grade should make of an sRGB colour (0..255) at the running look and strength, before the
+     *  vignette / dither (the CPU reference of the shader's LUT lookup; compare with renderer.snapshot pixels). */
+    gradeExpect: (r: number, g: number, b: number) => {
+      const gr = stage()?.grade as { stats: { look: GradeLookId; strength: number } } | null | undefined;
+      if (!gr) return [r, g, b];
+      const lut = (luts[gr.stats.look] ??= bakeLut(GRADE_LOOKS[gr.stats.look]));
+      return applyLut(lut, gr.stats.strength, r / 255, g / 255, b / 255).map((v) => Math.round(v * 255));
+    },
+    /** How the running map is lit, with the light map's and the grade's stats. */
+    light: () => {
+      const st = stage();
+      if (!st) return null;
+      return {
+        mode: st.lighting,
+        renderer: game.renderer?.type === Phaser.WEBGL ? 'webgl' : 'canvas',
+        cameras: game.scene.getScenes(false).find((x) => x.sys.settings.key === 'Map')?.cameras?.cameras.length ?? 0,
+        lightMap: st.lightMap ? { ...st.lightMap.stats, profile: st.lightMap.profile } : null,
+        grade: st.grade ? { ...st.grade.stats, uniforms: st.grade.uniforms } : null,
+      };
+    },
     check: () => {
       const ps = scale();
       const problems: string[] = [];

@@ -6,12 +6,12 @@ import { describe, expect, it } from 'vitest';
 import { createRegistry } from '../src/data';
 import { EventBus, type GameEvents, type TellPhase, type TellShape } from '../src/game/events';
 import type { Monster } from '../src/game/entities/Monster';
-import { CameraRig, FLASH } from '../src/game/render/camera';
+import { CameraRig, FLASH, IntroWatch } from '../src/game/render/camera';
 import { JuiceRig, holdFor, type JuiceActor } from '../src/game/vfx/juice';
 import type { JuiceHooks, PlayCtx, TellSpec, VfxGroup, VfxStage } from '../src/game/vfx/play';
 import { deriveVfx } from '../src/game/vfx/recipe';
 import { VFX_BUDGET, type VfxPiece } from '../src/game/vfx/types';
-import { WorldBridge, familyOfColor, type WorldPlayer } from '../src/game/vfx/world';
+import { WorldBridge, chipTint, familyOfColor, type WorldPlayer } from '../src/game/vfx/world';
 
 const reg = createRegistry();
 const skill = (id: string) => reg.skill(id)!;
@@ -96,6 +96,7 @@ function spyJuice() {
       return ms;
     },
     impact: (v, c, _a, px) => void calls.push(`impact ${v === 'player' ? 'player' : 'monster'} ${c.toString(16)} ${px}`),
+    pop: (v) => void calls.push(`pop ${v === 'player' ? 'player' : 'monster'}`),
     kick: (_a, px) => void calls.push(`kick ${px}`),
     flash: () => true,
   };
@@ -242,10 +243,12 @@ describe('world bridge: deaths, spawns, enrage, sparkles, auras', () => {
     const t = setup(j);
     const m = monster('jellop');
     t.bus.emit('death', { target: m, rank: 'common', x: m.x, y: m.y, killer: ref('firebolt') });
-    expect(calls).toContain('impact monster ffffff 0');
+    expect(calls).toContain('pop monster');
     const pop = t.plays[0].pieces;
     expect(pop.some((p) => p.component === 'nova' && p.ramp === 'fire')).toBe(true);
     expect(pop.every((p) => (p.delayMs ?? 0) >= 33)).toBe(true);
+    // No hide colour from the art (the export is the actors lane's): the chips keep their dust bake.
+    expect(t.plays[0].ctx.chipTint).toBeUndefined();
     t.bus.emit('monsterSpawn', { monster: m, rank: 'common', x: m.x, y: m.y });
     expect(t.plays[1].pieces.some((p) => p.component === 'puff')).toBe(true);
   });
@@ -333,13 +336,120 @@ describe('juice rig', () => {
     expect(holdFor(67, false, 400, 1000, false)).toBe(0);
   });
 
-  it('flashes white then the hit colour (the colour only under reduce-flash), squashes and recoils whole pixels', () => {
+  it('flashes ONE white frame (the hit colour under reduce-flash), squashes and recoils whole pixels', () => {
     const a = rig();
-    a.j.impact({}, 0xff8020, 0, 2.4);
-    expect(a.log).toEqual(['flash ffffff,ff8020', 'squash', 'recoil 2']);
+    expect(a.j.impact({}, 0xff8020, 0, 2.4)).toBe('flash');
+    expect(a.log).toEqual(['flash ffffff', 'squash', 'recoil 2']);
     const b = rig(true);
     b.j.impact({}, 0xff8020, 0, 2);
     expect(b.log[0]).toBe('flash ff8020');
+  });
+
+  it('gates body flashes: first hit of a cast only, same-cast ticks spark-only, a per-victim cooldown', () => {
+    const { j, log, advance } = rig();
+    const v = {};
+    const castA = {};
+    const castB = {};
+    expect(j.impact(v, 0xffd040, 0, 1, castA)).toBe('flash');
+    advance(60);
+    // A tick of the same cast 60 ms later: spark only (no flash, squash or recoil).
+    expect(j.impact(v, 0xffd040, 0, 1, castA)).toBe('quiet');
+    advance(200);
+    // A later beat of the same cast: a recoil, never a second flash.
+    expect(j.impact(v, 0xffd040, 0, 1, castA)).toBe('beat');
+    // Another cast's first hit 260 ms after the flash (past the 220 ms cooldown; this rig has no frame counter, so
+    // time only) flashes; a third cast's first hit 100 ms later is cooled.
+    expect(j.impact(v, 0xffd040, 0, 1, castB)).toBe('flash');
+    advance(100);
+    expect(j.impact(v, 0xffd040, 0, 1, {})).toBe('cooled');
+    expect(log.filter((l) => l.startsWith('flash'))).toEqual(['flash ffffff', 'flash ffffff']);
+    // Other victims have their own gate; DoT ticks share it (one frame of the tick colour).
+    expect(j.impact({}, 0xffd040, 0, 1, castA)).toBe('flash');
+    expect(j.tick(v, 0x80ff40)).toBe(false);
+    advance(220);
+    expect(j.tick(v, 0x80ff40)).toBe(true);
+    expect(log.at(-1)).toBe('flash 80ff40');
+    // Death / spawn pops are never gated: two white frames.
+    j.pop(v);
+    expect(log.slice(-2)).toEqual(['flash ffffff,ffffff', 'squash']);
+  });
+
+  it('keeps a full-body flash under 15 % of the frames in a busy fight at any frame rate', () => {
+    for (const fps of [60, 30, 20, 12]) {
+      let now = 0;
+      let frame = 0;
+      let lit = 0;
+      let queued: number[] = [];
+      const actor: JuiceActor = { hold: () => {}, impactFlash: (f) => void (queued = [...f]), squash: () => {}, recoil: () => {} };
+      const j = new JuiceRig({ now: () => now, reduceFlash: () => false, actor: () => actor, camera: () => null, frame: () => frame });
+      const v = {};
+      // 6 casts landing every 40 ms (multi-hit spins, chains, storms, DoT ticks) for 10 s.
+      let next = 0;
+      let castN = 0;
+      const frames = fps * 10;
+      for (; frame < frames; frame++, now += 1000 / fps) {
+        while (next <= now) {
+          if (castN % 5 === 4) j.tick(v, 0xff8020);
+          else j.impact(v, 0xffd040, 0, 1, Math.floor(castN / 3));
+          castN++;
+          next += 40;
+        }
+        // The actor shows one queued frame per rendered frame.
+        if (queued.length) {
+          queued.shift();
+          lit++;
+        }
+      }
+      expect(lit / frames).toBeLessThanOrEqual(0.15);
+      expect(lit).toBeGreaterThan(0);
+    }
+  });
+});
+
+describe('death chips in the hide colour', () => {
+  it('tints the chips so the dust mid stop lands on the hide colour, when the art has one', () => {
+    // Dust R3 x tint / 255 = the hide colour (channels that would need > 255 cap there).
+    const t = chipTint(0x5a8a3c);
+    const r3 = [0xa8, 0x90, 0x6c];
+    const hide = [0x5a, 0x8a, 0x3c];
+    const ch = [(t >> 16) & 255, (t >> 8) & 255, t & 255];
+    ch.forEach((c, i) => expect(Math.abs(Math.round((r3[i] * c) / 255) - hide[i])).toBeLessThanOrEqual(1));
+    expect(chipTint(0xffffff)).toBe(0xffffff);
+    // The bridge passes it to the death pop when the host knows the colour.
+    const f = setup();
+    const w = new WorldBridge(f.stage, { player: () => player, sceneNow: () => 0, juice: null, classAura: () => null, hideColor: () => 0x5a8a3c });
+    const bus = new EventBus<GameEvents>();
+    w.attachBus(bus);
+    const m = monster('jellop');
+    bus.emit('death', { target: m, rank: 'common', x: m.x, y: m.y });
+    const play = f.plays.at(-1)!;
+    expect(play.ctx.chipTint).toBe(t);
+    expect(play.pieces.some((p) => p.component === 'motes' && (p.params as { kind: string }).kind === 'chip')).toBe(true);
+  });
+});
+
+describe('warden intro pan trigger', () => {
+  it('pans once per warden per visit on first sight or aggro, never on the arrival', () => {
+    // Arriving in the warden's arena with it in view (Stormbreak: 288 px away): no pan during the arrival beat, none
+    // after it while the warden only paces; the pan starts when it turns on the player (aggro), and only once.
+    const w = new IntroWatch<object>();
+    const hoof = {};
+    expect(w.due(hoof, { arriving: true, inView: true, aggro: false })).toBe(false);
+    expect(w.due(hoof, { arriving: false, inView: true, aggro: false })).toBe(false);
+    expect(w.due(hoof, { arriving: false, inView: true, aggro: true })).toBe(true);
+    expect(w.due(hoof, { arriving: false, inView: true, aggro: true })).toBe(false);
+    // A warden out of view at arrival pans on first sight (or on aggro from off-screen), once.
+    const regent = {};
+    expect(w.due(regent, { arriving: true, inView: false, aggro: false })).toBe(false);
+    expect(w.due(regent, { arriving: false, inView: false, aggro: false })).toBe(false);
+    expect(w.due(regent, { arriving: false, inView: true, aggro: false })).toBe(true);
+    expect(w.due(regent, { arriving: false, inView: true, aggro: true })).toBe(false);
+    const far = {};
+    expect(w.due(far, { arriving: false, inView: false, aggro: true })).toBe(true);
+    // Aggro is never read during the arrival beat (spawn protection): a new visit is a new watch.
+    const again = new IntroWatch<object>();
+    expect(again.due(hoof, { arriving: true, inView: true, aggro: true })).toBe(false);
+    expect(again.due(hoof, { arriving: false, inView: true, aggro: true })).toBe(true);
   });
 });
 

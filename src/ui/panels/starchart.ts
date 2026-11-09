@@ -103,8 +103,14 @@ function chipsHtml(data: StarChartData): string {
   }
   return CONSTELLATIONS.map(
     (c) =>
-      `<button class="sc-chip ${lit.has(c.id) ? '' : 'dim'}" data-c="${c.id}" style="--t:${TINT[c.id]}"><i class="sc-dot" aria-hidden="true"></i>${c.name}${ready.has(c.id) ? '<em class="sc-ready" aria-label="Ready to transform">✨</em>' : ''}</button>`,
+      `<button class="sc-chip ${lit.has(c.id) ? '' : 'dim'}" data-c="${c.id}" style="--t:${TINT[c.id]}" aria-label="${c.name}"><i class="sc-dot" aria-hidden="true"></i>${chipName(c.name)}${ready.has(c.id) ? '<em class="sc-ready" aria-label="Ready to transform">✨</em>' : ''}</button>`,
   ).join('');
+}
+
+/** "The Lantern" with its "The" in a span: beside a docked card the chips drop it to fit (starchart.css). */
+function chipName(name: string): string {
+  const m = /^(The )(.+)$/.exec(name);
+  return m ? `<span class="sc-the">${m[1]}</span>${m[2]}` : name;
 }
 
 /** The selected star's card model (null when nothing is selected or the id is gone). */

@@ -209,19 +209,6 @@ function readWorld(raw: unknown): WorldState {
   };
 }
 
-/**
- * Keeps "No class" across a reload: core's migration (run again by the SkillBook constructor) wears the first
- * discovered class when none is set (v2 never took a class off), so a save written after SkillBook.unwear()
- * (`worn: null` with classes) would come back wearing one — and its class slots would overwrite the player's own
- * picks. The auto-picked class also gets its Keepsake slot back.
- */
-function keepNoClass(book: SkillBook, raw: unknown): void {
-  if (!isRec(raw) || raw.worn !== null || book.state.worn === null) return;
-  const auto = book.state.worn;
-  if (Array.isArray(raw.imprints) && raw.imprints.includes(auto) && !book.state.imprints.includes(auto)) book.state.imprints.push(auto);
-  book.unwear();
-}
-
 /** v1 save -> v2 (player at the Hearthvale spawn, bag {ore, fish} kept, book migrated). */
 function migrateV1(raw: Raw, reg: Registry): SaveData {
   const p = isRec(raw.player) ? raw.player : {};
@@ -319,8 +306,8 @@ export class Session {
       if (raw2) {
         const data = JSON.parse(raw2) as unknown;
         if (isRec(data) && data.v === 2) {
+          // core's migration keeps an explicit "No class" (worn: null), so a reload never re-wears a class.
           const s = new Session(reg, readPlayer(data.player), readWorld(data.world), migrateBookState(data.book, reg));
-          keepNoClass(s.book, data.book);
           s.ensureBasic();
           s.repairBar(barLength(data.player));
           return s;

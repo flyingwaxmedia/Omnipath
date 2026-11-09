@@ -1,7 +1,7 @@
-// VFX settings (docs/VFX.md §8.6 item 5): "Reduce shake & flashes". The UI toggle comes later; the runtime reads this
-// object, so flipping it applies to every effect played afterwards (reduce-flash bakes: no contrast / blank / white
-// frames; camera trauma x0.3; no screen flash). Persisted per device (localStorage, guarded: private windows and
-// blocked storage fall back to the default).
+// VFX settings (docs/VFX.md §8.6 item 5): "Reduce shake & flashes" (the ☰ menu's toggle, src/ui/hud/settings.ts,
+// calls setReduceFlash). The runtime reads this object, so flipping it applies to every effect played afterwards
+// (reduce-flash bakes: no contrast / blank / white frames; camera trauma x0.3; no screen flash). Persisted per device
+// (localStorage, guarded: private windows and blocked storage fall back to the default).
 const KEY = 'omnipath.vfx.reduceFlash';
 
 function load(): boolean {

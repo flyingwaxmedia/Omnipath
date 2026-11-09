@@ -7,11 +7,12 @@
 // - Screen flash: a full-view rectangle stepped down over 3 frames (never tweened), alpha ≤ 0.35, ≥ 333 ms apart,
 //   ≤ 3 per rolling second; none under "Reduce shake & flashes".
 // - Look: the warden intro pan (ease to a point between the player and the warden, hold, ease back; the player stays
-//   in view) and a gentle lead toward a warden / elite target in manual play.
+//   in view) and a gentle lead toward a warden / elite target in manual play. IntroWatch decides when a warden gets
+//   its pan: once per warden per visit, on first sight or aggro, never on the arrival itself.
 // - Reduce shake & flashes: trauma and kicks × 0.3, no flashes, no pans.
 // Legacy direct calls (cameras.main.shake / flash) are routed into the rig by install(), so every shake obeys the same
 // rules (QUALITY-PLAN "Do not": no default cam.flash alpha 1, no rotation).
-// Phaser is used through types only: the rig is unit-tested headlessly (tests/vfx-juice.test.ts).
+// Phaser is used through types only: the rig and IntroWatch are unit-tested headlessly (tests/vfx-world.test.ts).
 import type Phaser from 'phaser';
 import { DEPTH } from './depths';
 
@@ -57,6 +58,39 @@ export interface RigScene {
 interface Pan {
   at: () => Pt | null;
   t: number;
+}
+
+/** What IntroWatch reads about a warden each check. */
+export interface IntroSight {
+  /** The arrival beat (spawn protection after a map entry): nothing pans yet. */
+  arriving: boolean;
+  /** The warden stands inside the view. */
+  inView: boolean;
+  /** The warden is engaging the player (provoked, or aggressive with the player inside its aggro radius). */
+  aggro: boolean;
+}
+
+/**
+ * Warden intro pan trigger (docs/VFX.md §8.9): once per warden per visit (one watch per map entry), on FIRST SIGHT —
+ * the warden comes into view after the arrival beat — or on AGGRO, whichever comes first. A warden already in view
+ * while the player arrives is not a sighting (arriving in its arena next to it used to pan at once, during the fade):
+ * it pans when it turns on the player.
+ */
+export class IntroWatch<T extends object> {
+  private done = new WeakSet<T>();
+  private seenOnArrival = new WeakSet<T>();
+
+  /** True exactly once per warden: the moment its intro pan should start. */
+  due(w: T, s: IntroSight): boolean {
+    if (this.done.has(w)) return false;
+    if (s.arriving) {
+      if (s.inView) this.seenOnArrival.add(w);
+      return false;
+    }
+    if (!s.aggro && !(s.inView && !this.seenOnArrival.has(w))) return false;
+    this.done.add(w);
+    return true;
+  }
 }
 
 export class CameraRig {

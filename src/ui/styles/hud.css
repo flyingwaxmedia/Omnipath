@@ -720,8 +720,9 @@
   display: none;
 }
 
-/* Portrait: the plate names the place on arrival, then fades (the minimap stays); the strip stays on the map. */
-:where(.hud-port) .hud-layer .zone-banner.faded {
+/* Portrait and short landscapes: the plate names the place on arrival, then fades (the minimap stays), so the middle
+   band where the player stands stays clear; portrait drops the strip altogether (the map shows it). */
+:where(.hud-port, .hud-short) .hud-layer .zone-banner.faded {
   opacity: 0;
   visibility: hidden;
   transition:
@@ -730,7 +731,7 @@
 }
 
 /* …then it leaves the column (Hud.armZoneFade): the target plate takes its place in the top band. */
-:where(.hud-port) .hud-layer .zone-banner.faded.gone {
+:where(.hud-port, .hud-short) .hud-layer .zone-banner.faded.gone {
   display: none;
 }
 
@@ -1624,7 +1625,8 @@
 
 .hud-layer .log {
   position: absolute;
-  left: calc(var(--m) + var(--safe-l));
+  /* --log-left: right of the quick column when the stacked log would run under it (Hud.layout). */
+  left: var(--log-left, calc(var(--m) + var(--safe-l)));
   bottom: calc(var(--exp-h) + var(--m) + calc(2 * var(--px)) + var(--safe-b));
   width: var(--log-w, calc(260 * var(--px)));
   display: flex;

@@ -40,6 +40,8 @@ const ARC_RADIUS = 120;
 /** Pack animals: hitting one pulls same-species neighbours within ASSIST_RADIUS. */
 const PACK_FAMILIES: ReadonlySet<Family> = new Set<Family>(['beast', 'swarm', 'fiend']);
 const ASSIST_RADIUS = 110;
+/** Aggressive monsters engage a player inside this radius (px). */
+const AGGRO_R = { warden: 220, elite: 170, common: 140 } as const;
 /** Gaps (ms) beyond a normal frame that count as the world being frozen. */
 const FREEZE_GAP = 120;
 
@@ -269,6 +271,20 @@ export class Combat implements CombatHost {
 
   inCombat(now = this.scene.time.now): boolean {
     return now - Math.max(this.lastHurt, this.lastDealt) < COMBAT_WINDOW;
+  }
+
+  /**
+   * The monster is engaging the player now: provoked, or aggressive with the player inside its aggro radius — never
+   * while the player is dead or spawn-protected (the arrival beat). Read by the AI and the VFX warden intro pan.
+   */
+  hostile(m: Monster, now = this.scene.time.now): boolean {
+    const p = this.player;
+    return !!p && this.hostileAt(m, Math.hypot(m.x - p.x, m.y - p.y), now);
+  }
+
+  private hostileAt(m: Monster, dp: number, now: number): boolean {
+    if (this.dead || now < this.protectUntil) return false;
+    return m.provoked || (!!m.def.aggressive && dp < (m.warden ? AGGRO_R.warden : m.elite ? AGGRO_R.elite : AGGRO_R.common));
   }
 
   /** Highest threat among engaged (provoked) monsters, for buff use XP. */
@@ -809,7 +825,10 @@ export class Combat implements CombatHost {
 
   private damageMonsterRaw(m: Monster, amount: number, color: number): void {
     m.hp -= amount;
-    m.flash(color);
+    // One frame of the tick's colour through the juice rig's per-victim flash gate (no flash spam under DoTs).
+    const juice = this.scene.vfx?.juice;
+    if (juice) juice.tick(m, color);
+    else m.flash(color);
     this.scene.floatText(m.x, m.y - m.sprite.displayHeight, `${amount}`, hex(color), 11);
     if (m.hp <= 0) this.kill(m);
   }
@@ -914,7 +933,9 @@ export class Combat implements CombatHost {
     const pl = s.session.player;
     pl.hp -= dmg;
     this.lastHurt = now;
-    this.player.hurt();
+    // The body flash is the VFX juice rig's (playerHurt: one gated white frame, squash, recoil); the plain red flash
+    // only plays without the runtime (it stacked a second flash under every rig flash).
+    if (!s.vfx?.juice) this.player.hurt();
     gameBus.emit('playerHurt', {
       damage: dmg,
       hp: pl.hp,
@@ -1167,10 +1188,7 @@ export class Combat implements CombatHost {
       return;
     }
     const dp = Math.hypot(m.x - p.x, m.y - p.y);
-    const protectedNow = now < this.protectUntil;
-    const aggroR = m.warden ? 220 : m.elite ? 170 : 140;
-    const hostile = !this.dead && !protectedNow && (m.provoked || (m.def.aggressive && dp < aggroR));
-    if (hostile) {
+    if (this.hostileAt(m, dp, now)) {
       if (s.monsterSkills.tryStart(m, now, dp)) return;
       if (dp > m.def.attackRange + 8) this.chase(m, speed * 1.15, dt, now);
       else if (now >= m.nextAttack) {

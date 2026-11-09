@@ -203,9 +203,9 @@ export const ANCHOR_DY = {
 } as const;
 
 /** Directions a template bakes: 1 (radial or spinning), 8 (3 unique angles + flips) or 16 (5 unique + flips). */
-export type DirCount = 1 | 8 | 16;
+export type DirCount = 1 | 8 | 16 | 32;
 /** Unique bakes per DirCount. */
-export const UNIQUE_DIRS: Readonly<Record<DirCount, number>> = { 1: 1, 8: 3, 16: 5 };
+export const UNIQUE_DIRS: Readonly<Record<DirCount, number>> = { 1: 1, 8: 3, 16: 5, 32: 9 };
 
 /** How a baked heading is shown: unique bake index `u` plus flips. */
 export interface DirPick {
@@ -417,9 +417,22 @@ export interface RingParams {
    * a turn (docs/VFX.md §5 ring).
    */
   smear?: 4 | 6 | 8;
+  /**
+   * Chunked rings only (the runtime's chunk bakes): chunk length along the rim. 10 px (16 headings) by default; 20 px
+   * long chunks (32 headings: the same <= 1 px end error) where a big ring's rim curves gently (RING_LONG).
+   */
+  unit?: 10 | 20;
   /** Total animation time (ms). */
   ms: number;
 }
+
+/**
+ * Long ring chunks (docs/VFX.md §8.12): rings wider than `fromR` place 20 px chunks wherever the rim's radius of
+ * curvature is at least `minCurve` (a 20 px chord then strays <= 0.5 px from the ellipse), halving their bobs; tighter
+ * stretches (the ends of a wide 0.65 ellipse) keep 10 px chunks. Solid styles only (dashes and gaps are 10 px units)
+ * and never sweeps (a smear's stages step per chunk).
+ */
+export const RING_LONG = { fromR: 128, minCurve: 100 } as const;
 
 /** Share of a full turn a sweep smear's tail covers behind each head. */
 export const SMEAR_TAIL = 0.32;
@@ -981,14 +994,14 @@ export type TellGeometry =
   | { kind: 'zone'; x: number; y: number; rx: number; ry: number }
   | { kind: 'cone'; x: number; y: number; r: number; ang: number; arc: number }
   | { kind: 'lane'; x0: number; y0: number; x1: number; y1: number; width: number }
-  | { kind: 'aim'; x: number; y: number; angs: readonly number[]; len: number }
+  | { kind: 'aim'; x: number; y: number; angs: readonly number[]; len: number; /** Per-shot length (shots stop at walls). */ lens?: readonly number[] }
   | { kind: 'range'; x: number; y: number; r: number }
   | { kind: 'aura'; x: number; y: number; rx: number; ry: number };
 
 /**
- * The normalized stream the VFX runtime consumes. `runtime/bridge.ts` (later step) subscribes to the game bus
- * (src/game/events.ts GameEvents) and emits these, deriving what the bus does not carry yet (docs/VFX.md §8.2 maps
- * every field). Times are scene (gameplay) ms.
+ * The normalized stream of the design contract (docs/VFX.md §8.2 maps every field). As built, the bridges
+ * (`../vfx/bridge.ts`, `../vfx/world.ts`) read the game bus (src/game/events.ts GameEvents) directly and play recipes;
+ * this map remains the field-by-field reference. Times are scene (gameplay) ms.
  */
 export interface VfxEvents {
   /** GameEvents.castStart. */

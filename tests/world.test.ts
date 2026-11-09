@@ -101,7 +101,7 @@ interface Content {
 
 // SPEC §7.4.
 const CONTENT: Record<string, Content> = {
-  'vale.hearthvale': { npcs: ['brann', 'alba', 'mirelle', 'tamsin'], objects: ['waystone', 'altar', 'signpost'] },
+  'vale.hearthvale': { npcs: ['brann', 'alba', 'mirelle', 'tamsin'], objects: ['waystone', 'altar', 'statue', 'signpost'] },
   'vale.greenmeadow': { npcs: ['hale', 'child_lio'], nodes: { herb: 6 }, objects: ['signpost'], spawns: ['jellop', 'pipsprout', 'jellop_monarch'] },
   'vale.mirror_lake': { npcs: ['pell'], nodes: { fishing: 4, herb: 3 }, spawns: ['puddlewisp', 'jellop', 'brinewisp'] },
   'vale.lake_islet': { nodes: { fishing: 2, sun_spring: 1 }, objects: ['chest'], spawns: ['puddlewisp'], counts: { puddlewisp: 3 } },
@@ -124,7 +124,7 @@ const CONTENT: Record<string, Content> = {
   'vale.stormbreak_approach': { nodes: { storm_tree: 4 }, objects: ['waystone'], spawns: ['sparkbug', 'voltcalf', 'voltmane'] },
   'vale.stormbreak': { spawns: ['thunderhoof'] },
   'rift.riftgate_road': { npcs: ['korrin'], nodes: { storm_tree: 3, herb: 3 }, objects: ['waystone'], spawns: ['riftling', 'rift_stalker'] },
-  'rift.riftmarch': { npcs: ['ione', 'dask'], objects: ['waystone', 'altar', 'signpost'], spawns: [] },
+  'rift.riftmarch': { npcs: ['ione', 'dask'], objects: ['waystone', 'statue', 'altar', 'signpost'], spawns: [] },
   'rift.frost_shelf': { nodes: { frost_crystal: 6, fishing: 3 }, spawns: ['frostling', 'rimefang', 'glacier_matron'] },
   'rift.basalt_steps': { nodes: { ember_vent: 5, ore: 4 }, spawns: ['basalt_crawler', 'cinder_toad', 'magma_brute'] },
   'rift.thunderhead_ridge': { nodes: { storm_tree: 5, wind_chime: 3 }, spawns: ['cloudray', 'thunderwing', 'tempest_drake'] },

@@ -920,7 +920,7 @@ describe('classes', () => {
     expect(book.activeBonus()).toEqual({ atk: 10 });
     expect(book.buyNode('blademaster', 'n4')).toMatchObject({ ok: false });
     expect(book.buyNode('pyroblade', 'n1')).toEqual({ ok: false, message: 'You have not discovered that class.' });
-    expect(book.buyNode('blademaster', 'n1')).toEqual({ ok: true, message: 'Blade Focus rank 1.' });
+    expect(book.buyNode('blademaster', 'n1')).toEqual({ ok: true, message: 'Blade Power rank 1.' });
     expect(book.tagPowerFor(reg.skill('slash')!)).toBe(10 + CLASS_TREE_POWER[1].power);
     expect(book.buyNode('blademaster', 'n2')).toEqual({ ok: false, message: 'Needs 1 point (0 available).' });
     expect(book.respec('blademaster').ok).toBe(true);

@@ -2,6 +2,11 @@ import type { MapDef } from '../../../core/world/types';
 
 // Hearthvale — the vale hub. A wooded ring with four roads meeting at a round cobbled plaza:
 // Tamsin's hall (NW), Alba's chapel (NE), Brann's smithy (W), cottages (SW) and the duck pond (SE).
+// The plaza's centrepiece is the Hearth Fountain: a basin ringed by the plaza's cobble curb (the plaza-rim dressing
+// sets barrels, crates and lanterns along it) with the old Hearthkeeper statue standing in its north end, at the
+// head of the north road.
+// The Hearth Waystone (NW) and the Fusion Altar (NE) flank it; two striped market tents stand on the south side,
+// either side of the road to Gloomwood.
 const map: MapDef = {
   id: 'vale.hearthvale',
   name: 'Hearthvale',
@@ -12,7 +17,7 @@ const map: MapDef = {
   levelBand: null,
   safety: 'safe',
   worldCell: { x: 2, y: 2 },
-  landmark: 'The Hearth Waystone hums at the centre of a round cobbled plaza where all four vale roads meet.',
+  landmark: 'A fountain and an old statue mark the round plaza where all four vale roads meet.',
   layout: [
     'TTTTTTTTT..TTTTTTTTT',
     'TTTtt,.......,.ttTTT',
@@ -21,8 +26,8 @@ const map: MapDef = {
     'T,................,T',
     'Tt......++++......tT',
     'T,.....++++++.....,T',
-    '.......++++++.......',
-    '.......++++++.......',
+    '.......++--++.......',
+    '.......++--++.......',
     'Tt.....++++++.....tT',
     'T,......++++....,.tT',
     'Tt.............--.tT',
@@ -56,6 +61,9 @@ const map: MapDef = {
     { kind: 'house', tx: 4, ty: 25 },
     { kind: 'house', tx: 24, ty: 21 },
     { kind: 'well', tx: 6, ty: 23 },
+    // market tents on the plaza's south side, either side of the south road
+    { kind: 'tent', tx: 15, ty: 19 },
+    { kind: 'tent', tx: 22, ty: 19 },
   ],
   portals: [
     { id: 'west', tx: 0, ty: 14, w: 2, h: 4, facing: 'w', kind: 'edge', to: { map: 'vale.greenmeadow', portal: 'east' } },
@@ -68,16 +76,17 @@ const map: MapDef = {
     { npc: 'brann', tx: 8, ty: 21 },
     { npc: 'tamsin', tx: 8, ty: 9 },
     { npc: 'alba', tx: 29, ty: 9 },
-    { npc: 'mirelle', tx: 21, ty: 15 },
+    { npc: 'mirelle', tx: 17, ty: 13 },
   ],
   objects: [
-    { id: 'waystone', kind: 'waystone', tx: 19, ty: 15 },
+    { id: 'waystone', kind: 'waystone', tx: 16, ty: 12 },
     { id: 'altar', kind: 'altar', tx: 23, ty: 12 },
+    { id: 'hearthkeeper', kind: 'statue', tx: 20, ty: 14, text: 'The Hearthkeeper. Travellers toss a coin in her fountain for luck.' },
     {
       id: 'signpost',
       kind: 'signpost',
-      tx: 16,
-      ty: 18,
+      tx: 18,
+      ty: 20,
       text: 'Hearthvale — West: Greenmeadow · North: Mirror Lake · East: Greystone Quarry · South: Gloomwood',
     },
   ],

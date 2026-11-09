@@ -384,11 +384,25 @@
     max-height: calc(100% - 70px);
   }
 
-  /* Beside the docked card the chips scroll sideways: fade the cut edge so the row reads as "more this way". */
+  /* Beside the docked card the chips get smaller and wrap (never cut off under the card): "The" drops, the row
+     breaks into a second one when it must. The sky's top inset follows the chips' real height (panels/starchart.ts). */
   .sheet.starchart .sc-stage.has-card .sc-chips {
     right: calc(min(380px, 46%) + 10px);
-    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 36px), transparent);
-    mask-image: linear-gradient(to right, #000 calc(100% - 36px), transparent);
+    flex-wrap: wrap;
+    overflow: visible;
+    gap: 5px;
+    padding-bottom: 0;
+  }
+
+  /* Narrower (smaller type, tighter padding), never shorter: every chip stays a 44 px touch target. */
+  .sheet.starchart .sc-stage.has-card .sc-chip {
+    gap: 6px;
+    padding: 0 10px 0 9px;
+    font-size: 13px;
+  }
+
+  .sheet.starchart .sc-stage.has-card .sc-the {
+    display: none;
   }
 
   @keyframes sc-up {

@@ -6,10 +6,11 @@ item is fixed below; §2.1 says where.
 
 - Shared contract: `src/game/vfx/types.ts`. It is frozen for both work packages; change it only through this document.
 - Work package **P** (pixels) and work package **R** (recipes) are built in parallel and share no other file (§10).
-- Runtime wiring into SkillSystem / MonsterSkills / Combat is a later step (§8). It is not part of P or R. It is
-  built: the player half (§8.8: `src/game/vfx/runtime/**`, `src/game/vfx/bridge.ts`), the world lane (§8.9: monster
-  techniques, auto-attacks, telegraphs, statuses, deaths, hit feel, camera) and an in-game QA pass over every skill
-  and technique (§8.10); open items in §13.
+- Runtime wiring into SkillSystem / MonsterSkills / Combat (§8) is not part of P or R. It is built: the player half
+  (§8.8: `src/game/vfx/runtime/**`, `src/game/vfx/bridge.ts`), the world lane (§8.9: monster techniques,
+  auto-attacks, telegraphs, statuses, deaths, hit feel, camera), an in-game QA pass over every skill and technique
+  (§8.10), its adversarial review (§8.11) and the polish pass (§8.12: body-flash gate, warden pan trigger, cone and
+  blink reads, bolt strip pool, long ring chunks, monster shots); open items in §13.
 - 15-minute path: §2, §5, §6.1–6.3, §7 and §10. The rest is reference for the package that needs it.
 
 Counts in this document come from the data at the time of writing: 160 authored `SkillDef`s in `SKILLS` (10
@@ -760,8 +761,9 @@ VFX consequences:
 ### 8.2 Events: game bus → VFX stream
 
 The game bus is `src/game/events.ts` (`gameBus`, `GameEvents`; it landed during this work). The VFX runtime does not
-read it directly. A small bridge (`src/game/vfx/runtime/bridge.ts`, a later step) subscribes through
-`sceneScope(scene)` and emits the normalized `VfxEvents` from `types.ts`. Recipes and pieces never see the bus.
+read it directly: the bridges (`src/game/vfx/bridge.ts` for player skills, `src/game/vfx/world.ts` for the world)
+subscribe through `sceneScope(scene)` and play recipes; the table maps every field the way the normalized `VfxEvents`
+(`types.ts`) describes it. Recipes and pieces never see the bus.
 
 | VfxEvents | from GameEvents | bridge derivation until the bus carries the field | VFX phase |
 |---|---|---|---|
@@ -950,7 +952,8 @@ Files: `src/game/vfx/play.ts` (the play contract, Phaser-free), `src/game/vfx/br
   shared Blitters (closed-form drag + gravity, age-stepped frames, directional kinds by velocity); mote blitters
   sit at `VFX_DEPTH.FX_MOTES` (89000, over the y-sorted band). Glow twins: one ADD Layer at `FX_GLOW`
   (`LIGHT` on dark maps), tinted family R4 at the biome gain. Afterimages snapshot the actor's frame
-  (tint-fill R3, stepped alpha). Bolts bake per hop into pooled 256² / 512² canvases (bead line when none is free).
+  (tint-fill R3, stepped alpha). Bolts compose per hop from their look's pre-baked strip pool (§8.12) into pooled
+  256² / 512² canvases (bead line when none is free).
 - **Simplifications.** A slash bakes one sweep sense; flipped headings are not mirror-corrected (a left-facing swing
   sweeps the other way round); multi-hit strikes also warm sense −1 for their back-swings. Far-half erupt units
   keep the base LUT. The screen flash for ultimate novas is not drawn (trauma only).
@@ -1030,16 +1033,18 @@ that found nothing in reach.
   running; the sprite catches up over ~3 frames after); requests coalesce (only the part past the current hold costs
   budget), each ≤ 100 ms and ≤ 150 ms per victim per rolling second. The hold = the recipe weight's (light 0, normal 33,
   heavy 67, ultimate 100; crit +17) × 0.5..1.2 by the share of the victim's HP the blow took; later hits of a cast hold
-  0; hits on the player hold half. The impact spark holds its hero frame exactly as long. Impact frames: white for one
-  rendered frame, then the element's R4 (reduce-flash: the colour only), a 1-frame 2 px squash and a whole-pixel recoil
-  along the blow (1 / 1 / 2 / 3 px by weight; 2-3 px on the player). Kicks: the player's heavy / ultimate casts 2 / 3 px
+  0; hits on the player hold half. The impact spark holds its hero frame exactly as long. Impact frame: ONE rendered
+  frame of white (reduce-flash: the element's R4), a 1-frame 2 px squash and a whole-pixel recoil along the blow (1 / 1 /
+  2 / 3 px by weight; 2-3 px on the player), through the per-victim **body-flash gate** (§8.12): only a cast's first hit
+  on a victim flashes, later ticks of it within 150 ms are spark-only, a victim flashes at most once per 220 ms and per
+  8 rendered frames; DoT ticks share the gate (one frame of the tick colour); deaths and spawns are not gated. Kicks: the player's heavy / ultimate casts 2 / 3 px
   along the blow, a hit on the player 2 px (heavy 4) along it. Trauma: heavy blows on the player 0.35, warden slams 0.5
   (×0.6 when not heavy), elites' heavy blasts 0.15 — all faded by distance (full within r + 40, none past r + 200).
 - **Camera rig (render/camera.ts).** Trauma² shake in whole art px (max 6, τ decays 2 / s, value noise, never
   rotation), a critically damped kick spring (≤ 6 px), a governed screen flash (a full-view rectangle stepped down over
-  3 frames, alpha ≤ 0.35, ≥ 333 ms apart, ≤ 3 / s), the **warden intro pan** (once per warden per map entry when it is
-  within 300 px and not yet fighting: ease 450 ms toward 55 % of the way, hold 650, ease back; never more than 32 % of the
-  view away from the player) and a **lead** (18 %, ≤ 24 px) toward a warden / elite target in manual play. The stage adds
+  3 frames, alpha ≤ 0.35, ≥ 333 ms apart, ≤ 3 / s), the **warden intro pan** (once per warden per visit, on first sight
+  after the arrival beat or on aggro, never on the arrival itself — `IntroWatch`, §8.12: ease 450 ms toward 55 % of the
+  way, hold 650, ease back; never more than 32 % of the view away from the player) and a **lead** (18 %, ≤ 24 px) toward a warden / elite target in manual play. The stage adds
   the look before its map clamp and the jolt after. `install()` routes any remaining `cameras.main.shake / flash` into
   the rig. **Reduce shake & flashes**: trauma and kicks ×0.3, no flashes, no pans, impact frames without the white.
 - **Fixes found in the browser pass**: the freeze crystal was keylined after its 25 % dither (a dark ring round every
@@ -1174,6 +1179,83 @@ Not changed (noted): the "24 concurrent effect instances" figure is not a cap in
 the sprite, bob, particle, page and CPU caps bound the cost and are enforced. A thin (1 px) arcane floor band is
 legitimate design, not a cue.
 
+### 8.12 Polish pass (Phase C/D: flash gate, pan trigger, reads, bolt pool, long ring chunks, monster shots)
+
+Measured with Playwright + SwiftShader on a shared, heavily loaded container CPU (scratch scripts, not shipped):
+a frame sampler records, on every rendered frame (`postrender`), which monsters are a solid tint-fill silhouette
+(`sprite.tintFill`), in a busy AUTO fight with multi-hit skills (thunder_peal, thousand_cuts, thunderstorm,
+arcane_deluge, firestorm, starfall_lattice, whirlwind), monsters made tough and unkillable so the target stays on
+screen, the player pinned beside it; plus 250 ms-apart crops round the target.
+
+- **Body-flash gate** (`juice.ts` `BODY_FLASH`, `JuiceRig.impact / tick / pop`). Before: every hit queued two tint-fill
+  frames (white, then the element's R4) and every DoT tick two more (`Monster.flash`), and Combat flashed the player red
+  under the rig's own flash: under multi-hit skills Thunderhoof was a solid silhouette most of the time. Now an impact
+  is ONE frame of white (reduce-flash: the hit colour) + squash + recoil, and only on the **first hit of a cast on that
+  victim** (the bridge keys the cast record); later hits of the cast within 150 ms are spark-only (no flash, squash or
+  recoil), later beats of it only recoil; a victim flashes at most once per **220 ms and per 8 rendered frames** (so a
+  1-frame flash covers ≤ 12.5 % of the frames at ANY frame rate — 8 frames of cooldown is what holds the limit at
+  12-20 fps). DoT ticks share the gate (`tick`: one frame of the tick colour; Combat.damageMonsterRaw); death and spawn
+  pops (`pop`: two white frames) are not gated. Results (share of rendered frames the body is a silhouette; longest
+  lit run; lit at 250 ms ticks):
+
+  | target | before | after |
+  |---|---|---|
+  | Thunderhoof, Stormbreak, iPad 1180×820 @2 | 34.3 % (23.5 fps), run 11 frames, 22 of 57 ticks; 4 of 6 crops a silhouette | 9.2-9.9 % (12-13 fps), run 1, 3-5 of 57; 0-1 of 6 |
+  | Thunderhoof, phone 390×844 @3 | — | 6.7 % (30 fps), run 1 |
+  | Voltmane (elite) + 5 commons, Stormbreak Approach | elite 48.6 %, commons max 45 % (mean 36 %) | elite 7.7 %, commons max 5.9-7.7 % (mean 2-4 %) |
+
+  (The before runs at a lower frame rate read worse still: 54 % at 6 fps.) tests/vfx-world.test.ts simulates the gate
+  at 60 / 30 / 20 / 12 fps under a hit every 40 ms: ≤ 15 % everywhere.
+- **Warden intro pan** (`render/camera.ts` `IntroWatch`, runtime/index.ts). It fired when a warden stood within 300 px of
+  the player — at Stormbreak that is the arrival itself (288 px, during spawn protection and the fade). Now once per
+  warden per visit, on **first sight** (it comes into view after the arrival beat) or on **aggro** (Combat.hostile:
+  provoked, or aggressive with the player inside its 220 px aggro radius, never while spawn-protected); a warden already
+  in view on arrival is not a sighting. In the browser: arrival at 288-304 px, no pan for 7 s of standing; walking in,
+  the pan starts as Thunderhoof turns hostile (~200 px) and plays once.
+- **Wind cone strikes** (`recipe.ts` cone style: mon_gust, rime_breath, every aoe elemental cone). A few hairline lines
+  read as nothing. The gust now carries a **streak fan** (size-3 streaks across the arc at chest height, three waves 80
+  ms apart, quota-aware) and a **hot leading-edge arc** that expands from 20 % of the reach to the hit reach over ~330
+  ms while cooling, the rim lighting as the front nears it (117 ms, a swing's cast pieces start inside it) and holding
+  until it lands.
+- **Shadowstep blink** (`runtime.ts` `BlinkInst`, afterimage mode 'blink'). The departure ghost sat behind the player's
+  own sprite, hidden for the dash's first ~80 ms. Now the cast frame turns the actor's frame into a family-R3 silhouette
+  IN FRONT of the body (the vanish frame, 33 ms, alpha 0.85), which then splits into 4 px bands sliding apart by whole
+  pixels (±1, ±2, ±3) while their alpha steps 0.6 / 0.4 / 0.2. It plays at every quality (bands above 0.25).
+- **Death chips** take the monster's hide colour through `PlayCtx.chipTint` / `chipTint()` (bob multiply tint that lands
+  the dust ramp's R3 on the hide colour) as soon as art/monsters.ts exports `monsterHideColor` (looked up by name; §13
+  item 7). Until then: the dust ramp.
+- **Bolt strip pool** (`boltpool.ts`, runtime/bolts.ts). Per bolt look (style × strength) the warm set queues a pool —
+  trunk runs 6 / 10 / 16 / 24 px × 9 headings of a quadrant × 2 seeded variants in the bolt / white / remnant inks,
+  wiggly fork runs 4 / 7 / 11 / 16 px, and every integer micro step ≤ 6 px — baked in idle slices (a look is ~50 ms of
+  work; the pools get ≤ 3 ms of every idle slice so a busy fight's strip queue never starves them). A hop then composes
+  its frames: the template's coarse kinks (same jag scaling, same seeds), each run laid as a chain of pool strips
+  (quadrant flips only — never rotated or stretched) closing exactly on its kink, forks grown as the template grows
+  them, max-wins by brightness rank, glow beads every ~9 px, the template's frame grammar and finalize rules
+  (reduce-flash folding, keyline). One staging upload per hop replaces two uploads per frame, and the RGBA pass is
+  fused (`boltRgba`, identical to colourise / glowTwin). Same look: tests/vfx-boltpool.test.ts holds trunk, fork and glow
+  pixels per frame within 30 % of the template (measured within ~10-20 %), frames and times identical, both ends hit.
+  Hop cost (whole bake: frames + pack + upload), busy fight, 8 skills incl. lightning_bolt / static_charge /
+  thunder_peal, quality pinned at 1: before p50 1.2-1.3 ms, p90 4.2-4.4 ms, max 4.9-5.1 ms (paint alone 1-5 ms per
+  hop in node); after p50 0.6-0.8 ms, mean 0.79-0.9 ms (frames 0.46-0.54 ms), all hops from the pool.
+  `vfx.stats().boltHops` reports hops, pooled, peak / mean ms and the pool's bake time.
+- **Long ring chunks** (`RING_LONG`, components/ring.ts `chunkLayout`). Chunked rings wider than 128 px place **20 px
+  chunks (32 headings)** wherever the rim's radius of curvature is ≥ 100 px (a 20 px chord strays ≤ 0.5 px; the heading
+  error at the chunk ends stays ≤ 1 px, as for 10 px chunks at 16 headings), 10 px chunks elsewhere (the tight ends of
+  a wide 0.65 ellipse), spaced by arc length (no gaps at an ellipse's top). Solid styles and non-sweeps only (dashes,
+  gaps and smear stages stay 10 px units). starfall_lattice (r 170): the marker ring 107 → 54 bobs, the blast peak
+  234 → 128 bobs; the rims look the same at 1:1.
+- **Monster shots** (MonsterSkills, tellhit.ts `shotHits` / `shotReach`). The QA note "a puddlewisp spit never hit a
+  player on the same ground row" was a harness artefact: that pass ran with spawn protection set to Infinity
+  (`hurtPlayer` refuses; the shot is consumed on contact with no `playerHurt`) and teleported the player behind
+  blocked reed / water tiles while forcing techniques past their line-of-sight check. A clean probe (one wisp, protection
+  off) hits a same-row player at ±56 / ±100 / -140 px. Two real issues were fixed on the way: the hit test was a point
+  test per frame, so a frame over ~113 ms (a hitch, a slow device) could step a 300 px/s shot through the 34 px hit
+  width — it is now **swept** along each step (up to the wall it enters); and the aim telegraph was drawn through walls
+  and water to the player while its shot dies in the first blocked tile — each aim line now ends where its shot
+  would die (`TellShape.aim.lens`), so telegraph = hit test.
+- **Hygiene**: stale comments (the settings toggle "comes later", the bridge as "a later step", a missing juice test
+  file) now name what is built.
+
 ## 9. Budgets, governors
 
 | budget | cap (`VFX_BUDGET`) |
@@ -1189,6 +1271,7 @@ legitimate design, not a cue.
 | decals | ≤ 48 live, ≤ 1000 ms (pool 1600), ≤ 25% density after 600 ms |
 | flash | area-weighted: a transition over 19k art px of WHITE / R5 / contrast counts; ≤ 3 per second, ≥ 333 ms apart; periodic flicker ≤ 2 Hz; screen flash alpha ≤ 0.35. Over budget → play the `reduceFlash` bake |
 | hit-stop | local by default, ≤ 100 ms; global ≤ 150 ms per rolling second, ≥ 250 ms apart, never inside spin or chain channels except on the final hit |
+| body flash (`BODY_FLASH`) | one rendered frame; a cast's first hit per victim only (its ticks within 150 ms spark-only); per victim ≥ 220 ms and ≥ 8 rendered frames apart (≤ 12.5 % of frames); DoT ticks share it; death / spawn pops exempt |
 | cues | ≥ 2 px wide (rims, fronts, tethers, aim lines); status pips 7×7 |
 
 **Quality governor** (EMA of the frame delta):
@@ -1439,17 +1522,18 @@ Open:
 7. ~~World lane~~ (done, §8.9): monster techniques, auto-attacks and telegraphs (rasterised at the hit-test geometry),
    player statuses and hurt impacts, death and spawn pops, enrage, the Tier III and buff auras (Player.sync's rings are
    gone), Interactions' world moments, victim-local hit-stop, impact frames, squash, recoil, kicks and the camera rig.
-   Still open: art/monsters.ts hide colours for death chips (they use the dust ramp), shock / DoT tick tints, Monster's
+   DoT tick tints go through the body-flash gate (§8.12). Still open: **death chips in the hide colour** — the runtime
+   reads `monsterHideColor` from art/monsters.ts by name (a 0xRRGGBB number or '#rrggbb' per monster id / def) and
+   tints the chips with `chipTint` the moment the actors lane exports it; until then they keep the dust ramp. Monster's
    fractional breath squash and the player's stunned wobble (actors lane), MapScene's portal-reveal shake (it goes
    through the rig's `install()` shim; the scene keeps its one seam), shade_cloak's alpha.
-8. Settings UI: "Reduce shake & flashes" exists on the runtime (`setReduceFlash`, persisted in localStorage,
-   defaulting to `prefers-reduced-motion` until the player chooses — fixed in §8.11, it read an unset key as "off");
-   the toggle is in the ☰ menu (UI lane).
-9. Device gate (§11.3) still pending: SwiftShader numbers in §8.8 / §8.10 are a regression check only.
-10. From the in-game QA pass (§8.10): single-frame VFX peaks of 4-20 ms (in-frame bakes and per-hop bolt canvases)
-    exceeded the 3 ms frame budget although the EMA stayed inside it (in-frame bakes are now capped, §8.11; a first
-    bolt bake per hop can still cost ~1 ms); big rings (r > 128, ~90 chunks each) eat the bob
-    share — 20 px chunks for them would halve it; trying many different skills in one session churns the 4-page atlas
-    (the first cast of a newly learnt big skill plays the fallback while it bakes; the bar's warm set is fine);
-    shadowstep's blink shows nothing for its first ~80 ms (no departure tell); in QA a puddlewisp water spit flown at
-    a player on the same ground row never hit (gameplay, MonsterSkills shot height vs PLAYER_R: not changed here).
+8. ~~Settings UI~~ (done): "Reduce shake & flashes" lives on the runtime (`setReduceFlash`, persisted in localStorage,
+   defaulting to `prefers-reduced-motion` until the player chooses — fixed in §8.11) and its toggle is in the ☰ menu
+   (src/ui/hud/settings.ts).
+9. Device gate (§11.3) still pending: SwiftShader numbers in §8.8 / §8.10 / §8.12 are a regression check only.
+10. From the in-game QA pass (§8.10), now resolved in §8.12: per-hop bolt bakes (the pool composes a hop in ~0.5 ms of
+    frames + one upload), big rings' bob share (long 20 px chunks: half the bobs), shadowstep's missing departure tell
+    (the blink vanish frame plays on cast), the "never hit" puddlewisp spit (a QA-harness artefact, plus two real
+    fixes: swept shot hits and wall-clipped aim lines). Still open: trying many different skills in one session churns
+    the 4-page atlas (the first cast of a newly learnt big skill plays the fallback while it bakes; the bar's warm set
+    is fine).

@@ -2312,3 +2312,126 @@ export function drawTiles(scene: Phaser.Scene, opts: { allEdges?: boolean } = {}
   }
   if (opts.allEdges) ensureEdgeFamilies(scene, EDGE_FAMILIES.map((_, i) => i));
 }
+
+// ================================================================== water shimmer (render/ambient.ts)
+// Animated water WITHOUT re-baking the ground: a 32x32 overlay per interior water cell, stepped through 3 phases.
+// Each overlay holds a few wavelets in the tile's own ripple colours (opaque pixels, transparent elsewhere); a wavelet
+// cycles dim dash -> full ripple with its dark trough -> drifted a pixel downstream with a sparkle at its lead, and the
+// wavelets of one overlay are out of phase, so the surface glints without any tile ever changing as a whole. Glints are
+// 5x5 sparkles the ambient layer pops on open water.
+
+/** Overlay texture key: frames `${kind}_${variant}_${phase}` (32x32) and `glint_${kind}_${0..2}` (5x5). */
+export const AMB_WATER = 'amb_water';
+export type ShimmerKind = 'water' | 'deep';
+export const SHIMMER_VARIANTS = 4;
+export const SHIMMER_PHASES = 3;
+export const GLINT_FRAMES = 3;
+/** [ripple, sparkle, trough, foam] per water kind (the waterGround looks above). */
+const SHIMMER_COLORS: Readonly<Record<ShimmerKind, readonly [string, string, string, string]>> = {
+  water: ['#6aa8d2', '#cfeaf6', '#3676a8', '#e8f6fb'],
+  deep: ['#4580b2', '#8cc6e6', '#275a87', '#cfeaf6'],
+};
+
+/** Wavelets of one overlay variant: [x, y, len], 2-3 of them on rows at least 6 apart, inside the cell. Deterministic. */
+export function shimmerWavelets(kind: ShimmerKind, variant: number): [number, number, number][] {
+  const rnd = artRng(keySeed(`shimmer-${kind}`) + variant * 977);
+  const out: [number, number, number][] = [];
+  const n = 2 + (rnd() < 0.6 ? 1 : 0);
+  for (let tries = 0; out.length < n && tries < 40; tries++) {
+    const y = 2 + Math.floor(rnd() * 27);
+    if (out.some(([, yy]) => Math.abs(yy - y) < 6)) continue;
+    const len = 3 + Math.floor(rnd() * 4);
+    const x = 1 + Math.floor(rnd() * (32 - len - 3));
+    out.push([x, y, len]);
+  }
+  return out.sort((a, b) => a[1] - b[1]);
+}
+
+/** One overlay frame as RGBA (32x32): only wavelet pixels are set, at alpha 255. */
+export function shimmerPixels(kind: ShimmerKind, variant: number, phase: number): Uint8ClampedArray<ArrayBuffer> {
+  const d = new Uint8ClampedArray(S * S * 4);
+  const [ripple, sparkle, trough] = SHIMMER_COLORS[kind].map(hx);
+  const set = (x: number, y: number, c: RGB) => {
+    if (x < 0 || y < 0 || x >= S || y >= S) return;
+    const i = (y * S + x) * 4;
+    d[i] = (c >> 16) & 255;
+    d[i + 1] = (c >> 8) & 255;
+    d[i + 2] = c & 255;
+    d[i + 3] = 255;
+  };
+  shimmerWavelets(kind, variant).forEach(([x, y, len], k) => {
+    const s = (phase + k) % SHIMMER_PHASES;
+    if (s === 0) {
+      for (let i = 1; i < Math.max(2, len - 1); i++) set(x + i, y, ripple);
+    } else if (s === 1) {
+      for (let i = 0; i < len; i++) set(x + i, y, ripple);
+      for (let i = 1; i < len - 1; i++) set(x + i, y + 1, trough);
+    } else {
+      for (let i = 1; i <= len; i++) set(x + i, y, ripple);
+      set(x + len, y, sparkle);
+      for (let i = 2; i < len; i++) set(x + i, y + 1, trough);
+    }
+  });
+  return d;
+}
+
+/** A 5x5 glint frame as RGBA: 0 a speck, 1 a small cross, 2 the full cross with a foam-white heart. */
+export function glintPixels(kind: ShimmerKind, frame: number): Uint8ClampedArray<ArrayBuffer> {
+  const n = 5;
+  const d = new Uint8ClampedArray(n * n * 4);
+  const [ripple, sparkle, , foam] = SHIMMER_COLORS[kind].map(hx);
+  const set = (x: number, y: number, c: RGB) => {
+    const i = (y * n + x) * 4;
+    d[i] = (c >> 16) & 255;
+    d[i + 1] = (c >> 8) & 255;
+    d[i + 2] = c & 255;
+    d[i + 3] = 255;
+  };
+  if (frame === 0) set(2, 2, sparkle);
+  else {
+    for (const [dx, dy] of [
+      [-1, 0],
+      [1, 0],
+      [0, -1],
+      [0, 1],
+    ])
+      set(2 + dx, 2 + dy, sparkle);
+    if (frame === 2) for (const [dx, dy] of [
+      [-2, 0],
+      [2, 0],
+      [0, -2],
+      [0, 2],
+    ])
+      set(2 + dx, 2 + dy, ripple);
+    set(2, 2, frame === 2 ? foam : sparkle);
+  }
+  return d;
+}
+
+/** Builds AMB_WATER (idempotent): every shimmer overlay and glint frame, 1 px apart. */
+export function drawWaterShimmer(scene: Phaser.Scene): void {
+  if (scene.textures.exists(AMB_WATER)) return;
+  const kinds: ShimmerKind[] = ['water', 'deep'];
+  const cols = SHIMMER_VARIANTS * SHIMMER_PHASES;
+  const W = cols * (S + 1);
+  const H = kinds.length * (S + 1) + 6;
+  const tex = scene.textures.createCanvas(AMB_WATER, W, H);
+  if (!tex) return;
+  const c = tex.getContext();
+  kinds.forEach((kind, row) => {
+    for (let v = 0; v < SHIMMER_VARIANTS; v++)
+      for (let p = 0; p < SHIMMER_PHASES; p++) {
+        const x = (v * SHIMMER_PHASES + p) * (S + 1);
+        const y = row * (S + 1);
+        c.putImageData(new ImageData(shimmerPixels(kind, v, p), S, S), x, y);
+        tex.add(`${kind}_${v}_${p}`, 0, x, y, S, S);
+      }
+    for (let f = 0; f < GLINT_FRAMES; f++) {
+      const x = (row * GLINT_FRAMES + f) * 6;
+      const y = kinds.length * (S + 1);
+      c.putImageData(new ImageData(glintPixels(kind, f), 5, 5), x, y);
+      tex.add(`glint_${kind}_${f}`, 0, x, y, 5, 5);
+    }
+  });
+  tex.refresh();
+}

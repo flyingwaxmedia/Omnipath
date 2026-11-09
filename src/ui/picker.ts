@@ -4,12 +4,14 @@
 //             arg 'skill:<id>'   — choose which of your slots gets that skill (a card's Equip when every slot is full);
 //                                  after the pick it goes back where it came from: the Star Chart with that star's card,
 //                                  the skill card, or the NPC dialog that offered the Equip;
-//   'menu'    the ☰ button       — Sound On/Off + Volume, "Reduce shake & flashes" (hud/settings.ts), New game
+//   'menu'    the ☰ button       — Sound On/Off + Volume, "Reduce shake & flashes", Quality Low/Medium/High, Battery
+//                                  saver (hud/settings.ts), Credits (panels/credits.ts, in the same sheet), New game
 //                                  (with a one-line confirm) and only what exists.
 // Class slots are never edited here: the class fills them (holding a class slot opens that skill's card instead).
 import { pickerHtml, slotChooserHtml } from './hud/html';
-import { menuSettingsHtml, readMenuSettings, wireMenuSettings } from './hud/settings';
+import { QUALITY_WORDS, menuQualityHtml, menuSettingsHtml, readMenuSettings, readQualitySettings, wireMenuSettings, wireQualitySettings } from './hud/settings';
 import { OPENED_FROM, type OpenedFrom, type PanelHost, type PanelRender } from './panels/common';
+import { renderCredits } from './panels/credits';
 import { $, $$, esc } from './util';
 
 const CLASS = 'hud-sheet';
@@ -86,8 +88,17 @@ function playTime(ms: number): string {
   return h > 0 ? `${h} h ${min % 60} min` : `${min} min`;
 }
 
-/** The ☰ menu: who you are, "saves by itself", New game with a one-line confirm. */
+/**
+ * The ☰ menu: who you are, "saves by itself", Sound / Volume / Reduce shake & flashes, Quality / Battery saver,
+ * Credits (drawn in the same sheet, Back returns here) and New game with a one-line confirm.
+ */
 export function renderMenu(host: PanelHost): void {
+  // A re-render (host.refresh) while the Credits are up keeps them up.
+  if (host.modal.querySelector('.credits-sheet')) renderCredits(host, () => drawMenu(host));
+  else drawMenu(host);
+}
+
+function drawMenu(host: PanelHost): void {
   const ctrl = host.ctrl;
   const p = ctrl.session.player;
   let worn = '';
@@ -101,8 +112,10 @@ export function renderMenu(host: PanelHost): void {
     `<div class="mn-who"><b>${esc(p.name)}</b><span>Lv ${p.level}${worn ? ` · ${esc(worn)}` : ''} · played ${playTime(p.playMs ?? 0)}</span></div>
      <p class="mn-line">Your game saves by itself.</p>
      ${menuSettingsHtml(readMenuSettings())}
+     ${menuQualityHtml(readQualitySettings())}
      <div class="mn-actions">
        <button class="btn big gold mn-resume">Back to the game</button>
+       <button class="btn mn-credits">${QUALITY_WORDS.credits}</button>
        <button class="btn mn-new">New game</button>
      </div>
      <div class="mn-confirm hidden">
@@ -112,7 +125,9 @@ export function renderMenu(host: PanelHost): void {
     `${CLASS} menu-sheet`,
   );
   wireMenuSettings(body);
+  wireQualitySettings(body);
   $(body, '.mn-resume').addEventListener('click', () => host.close());
+  $(body, '.mn-credits').addEventListener('click', () => renderCredits(host, () => drawMenu(host)));
   $(body, '.mn-new').addEventListener('click', () => {
     $(body, '.mn-confirm').classList.remove('hidden');
     $(body, '.mn-actions').classList.add('hidden');

@@ -466,7 +466,7 @@ describe('Session save repair', () => {
     expect(s.player.hotbar.slice(0, 5)).not.toContain('heavy_cleave');
   });
 
-  it('"No class" survives a save and reload (core migration would wear the first class again)', () => {
+  it('"No class" survives a save and reload (core migration keeps worn: null)', () => {
     const store = new Map<string, string>();
     const g = globalThis as unknown as { localStorage?: unknown };
     const had = g.localStorage;

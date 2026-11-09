@@ -417,7 +417,7 @@ export type TellShape =
   | { kind: 'zone'; x: number; y: number; rx: number; ry: number }
   | { kind: 'cone'; x: number; y: number; r: number; ang: number; arc: number }
   | { kind: 'lane'; x0: number; y0: number; x1: number; y1: number; width: number }
-  | { kind: 'aim'; x: number; y: number; angs: readonly number[]; len: number }
+  | { kind: 'aim'; x: number; y: number; angs: readonly number[]; len: number; /** Per-shot length (a shot stops at the first blocked tile); `len` when absent. */ lens?: readonly number[] }
   | { kind: 'range'; x: number; y: number; r: number }
   | { kind: 'aura'; x: number; y: number; rx: number; ry: number };
 

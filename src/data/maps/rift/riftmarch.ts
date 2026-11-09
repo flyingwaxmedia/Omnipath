@@ -7,7 +7,8 @@ import type { MapDef } from '../../../core/world/types';
 // to the Waystone Court — and the Rift Altar stands on the stony lip where that lane lands. A watchtower guards the
 // NE rim; cottages, a well and the frontier camp fill the south and west, with dusk grass creeping in along the
 // road to the orchard. Four gates: west to the Riftgate Road, north to the Frost Shelf, east to the Basalt Steps,
-// south to the Dusk Orchard.
+// south to the Dusk Orchard. The Waystone Court's centrepiece is the statue of the Pathfinder, at the head of the
+// orchard road, between the frontier market's two striped tents; the Archive Court has its old well.
 const map: MapDef = {
   id: 'rift.riftmarch',
   name: 'Riftmarch',
@@ -65,6 +66,10 @@ const map: MapDef = {
     { kind: 'house', tx: 28, ty: 25 },
     { kind: 'house', tx: 33, ty: 23 },
     { kind: 'well', tx: 16, ty: 27 },
+    // the Archive Court's well, and the frontier market's tents on the Waystone Court's south and east edges
+    { kind: 'well', tx: 12, ty: 12 },
+    { kind: 'tent', tx: 19, ty: 21 },
+    { kind: 'tent', tx: 29, ty: 21 },
   ],
   portals: [
     { id: 'west', tx: 0, ty: 12, w: 2, h: 4, facing: 'w', kind: 'edge', to: { map: 'rift.riftgate_road', portal: 'town' } },
@@ -79,6 +84,7 @@ const map: MapDef = {
   ],
   objects: [
     { id: 'waystone', kind: 'waystone', tx: 26, ty: 19 },
+    { id: 'pathfinder', kind: 'statue', tx: 23, ty: 20, text: 'The Pathfinder, who first crossed the Rift. Her staff still points home.' },
     { id: 'altar', kind: 'altar', tx: 22, ty: 17 },
     {
       id: 'signpost',

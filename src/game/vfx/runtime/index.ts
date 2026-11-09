@@ -9,10 +9,12 @@
 // tells; .resetPeaks(); .setReduceFlash(on); .setQuality(q); .juice / .world for counters.
 import type { SkillDef } from '../../../core/types';
 import { auraColor } from '../../art/classLooks';
+import * as monsterArt from '../../art/monsters';
 import type { Monster } from '../../entities/Monster';
 import { sceneScope } from '../../events';
 import type { MapScene } from '../../scenes/MapScene';
 import { VfxBridge } from '../bridge';
+import { IntroWatch } from '../../render/camera';
 import { JuiceRig, type JuiceActor } from '../juice';
 import type { AuraMotif, FamilyId, VfxQuality } from '../types';
 import { WorldBridge, familyOfColor, type WorldExtra } from '../world';
@@ -24,9 +26,9 @@ export interface VfxHandle {
   readonly bridge: VfxBridge;
   readonly world: WorldBridge;
   readonly juice: JuiceRig;
-  stats(): VfxStats & { juice: { granted: number; trimmed: number }; camera: { flashes: number; flashesRefused: number; kicks: number; pans: number } };
+  stats(): VfxStats & { juice: { granted: number; trimmed: number; flashes: JuiceRig['flashes'] }; camera: { flashes: number; flashesRefused: number; kicks: number; pans: number } };
   resetPeaks(): void;
-  /** "Reduce shake & flashes" (the settings UI toggle comes later). */
+  /** "Reduce shake & flashes" (the ☰ menu's toggle calls this). */
   setReduceFlash(on: boolean): void;
   readonly reduceFlash: boolean;
   /** Pins the quality tier (QA); null hands it back to the governor. */
@@ -40,8 +42,23 @@ const CLASS_AURA: Readonly<Record<string, { motif: AuraMotif; family: FamilyId }
   ascendant: { motif: 'glint', family: 'holy' },
   eclipse_walker: { motif: 'veil', family: 'twilight' },
 };
-/** A warden this close (px) and not yet fighting gets the intro pan once per map entry. */
-const INTRO_PX = 300;
+
+/**
+ * A monster's hide colour from art/monsters.ts `monsterHideColor` (the actors lane's export; looked up by name so the
+ * runtime builds before it exists): death chips take it. Accepts a 0xRRGGBB number or a '#rrggbb' string, keyed by
+ * the monster id (or its def); null when the export is missing or has no colour.
+ */
+function hideColorOf(m: Monster): number | null {
+  const fn = (monsterArt as Record<string, unknown>)['monsterHideColor'];
+  if (typeof fn !== 'function') return null;
+  const read = (v: unknown): number | null =>
+    typeof v === 'number' && Number.isFinite(v) ? v & 0xffffff : typeof v === 'string' && /^#?[0-9a-f]{6}$/i.test(v) ? parseInt(v.replace('#', ''), 16) : null;
+  try {
+    return read(fn(m.def.id)) ?? read(fn(m.def));
+  } catch {
+    return null;
+  }
+}
 
 export function attachVfx(scene: MapScene): VfxHandle {
   const dark = !!scene.def.flags?.includes('dark');
@@ -55,6 +72,7 @@ export function attachVfx(scene: MapScene): VfxHandle {
       return typeof (m as Partial<Monster>).hold === 'function' ? m : null;
     },
     camera: () => scene.stage.rig,
+    frame: () => scene.game.loop.frame,
   });
   const bridge = new VfxBridge(runtime, {
     player: () => scene.player ?? null,
@@ -74,6 +92,7 @@ export function attachVfx(scene: MapScene): VfxHandle {
       const c = auraColor(id);
       return c === null ? null : { motif: 'glint', family: familyOfColor(c) };
     },
+    hideColor: hideColorOf,
   });
   const scope = sceneScope(scene);
   bridge.attach(scope);
@@ -101,8 +120,9 @@ export function attachVfx(scene: MapScene): VfxHandle {
   scene.events.once('shutdown', onReduceFlash(warmAll));
   world.refreshClassAura();
 
-  // Warden intro pan (once per warden per map entry) and the manual-play lead toward a warden / elite target.
-  const introduced = new WeakSet<Monster>();
+  // Warden intro pan (once per warden per visit, on first sight or aggro: render/camera.ts IntroWatch) and the
+  // manual-play lead toward a warden / elite target.
+  const intro = new IntroWatch<Monster>();
   let nextCheck = 0;
   runtime.tick(() => {
     const now = scene.time.now;
@@ -111,11 +131,12 @@ export function attachVfx(scene: MapScene): VfxHandle {
     const p = scene.player;
     if (!p || scene.combat.dead) return true;
     const rig = scene.stage.rig;
+    const arriving = now < scene.combat.protectUntil;
+    const wv = scene.cameras.main.worldView;
     for (const m of scene.combat.monsters) {
-      if (!m.warden || !m.alive || introduced.has(m) || m.provoked) continue;
-      if (Math.hypot(m.x - p.x, m.y - p.y) > INTRO_PX) continue;
-      introduced.add(m);
-      rig.intro(() => (m.alive ? { x: m.x, y: m.y - 24 } : null));
+      if (!m.warden || !m.alive || m.returning) continue;
+      const inView = m.x > wv.x + 16 && m.x < wv.right - 16 && m.y > wv.y + 24 && m.y < wv.bottom;
+      if (intro.due(m, { arriving, inView, aggro: scene.combat.hostile(m, now) })) rig.intro(() => (m.alive ? { x: m.x, y: m.y - 24 } : null));
     }
     const t = scene.combat.target;
     const lead = !scene.session.player.autoOn && t && t.alive && (t.warden || t.elite) ? t : null;
@@ -128,7 +149,7 @@ export function attachVfx(scene: MapScene): VfxHandle {
     bridge,
     world,
     juice,
-    stats: () => ({ ...runtime.stats(), juice: { granted: juice.granted, trimmed: juice.trimmed }, camera: { ...scene.stage.rig.stats } }),
+    stats: () => ({ ...runtime.stats(), juice: { granted: juice.granted, trimmed: juice.trimmed, flashes: { ...juice.flashes } }, camera: { ...scene.stage.rig.stats } }),
     resetPeaks: () => runtime.resetPeaks(),
     setReduceFlash: (on) => setReduceFlash(on),
     get reduceFlash() {

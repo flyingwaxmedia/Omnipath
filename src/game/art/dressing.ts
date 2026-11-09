@@ -102,6 +102,75 @@ function tex(scene: Phaser.Scene, key: string, w: number, h: number, draw: (c: C
   pixelTex(scene, key, w, h, (c) => draw(c, artRng(keySeed(key))));
 }
 
+// ------------------------------------------------------------------ idle strips (docs/QUALITY-PLAN.md §12)
+
+/** Transparent gap (px) between the frames of an idle strip. */
+export const IDLE_GAP = 2;
+
+/**
+ * Idle animation strip: `n` frames of w x h side by side under ONE texture key, registered as frames 0..n-1. Frame 0
+ * becomes the texture's default frame (Phaser's firstFrame), so `scene.add.image(x, y, key)` shows the still look
+ * unchanged, and render/ambient.ts steps the others with setFrame(): the key, size and anchor never change and every
+ * frame shares one GPU texture (no extra textures, no extra batches). Each frame is clipped to its own cell.
+ */
+export function stripTex(scene: Phaser.Scene, key: string, w: number, h: number, n: number, draw: (c: Ctx, frame: number) => void): void {
+  if (scene.textures.exists(key)) return;
+  const tex = scene.textures.createCanvas(key, n * w + (n - 1) * IDLE_GAP, h);
+  if (!tex) return;
+  const c = tex.getContext();
+  c.imageSmoothingEnabled = false;
+  for (let f = 0; f < n; f++) {
+    c.save();
+    c.translate(f * (w + IDLE_GAP), 0);
+    c.beginPath();
+    c.rect(0, 0, w, h);
+    c.clip();
+    draw(c, f);
+    c.restore();
+  }
+  for (let f = 0; f < n; f++) tex.add(f, 0, f * (w + IDLE_GAP), 0, w, h);
+  tex.refresh();
+}
+
+/** stripTex with the key's art RNG restarted per frame, so every frame makes the same random choices. */
+function idleTex(scene: Phaser.Scene, key: string, w: number, h: number, n: number, draw: (c: Ctx, rnd: () => number, frame: number) => void): void {
+  stripTex(scene, key, w, h, n, (c, f) => draw(c, artRng(keySeed(key)), f));
+}
+
+/** How an idle strip is stepped (render/ambient.ts): cloth waves, flames flicker, plants sway in the wind. */
+export type IdleKind = 'wave' | 'flicker' | 'flame' | 'sway';
+export interface IdleAnim {
+  /** Frames the idle steps through (0 .. frames-1). */
+  frames: number;
+  kind: IdleKind;
+  /**
+   * Sway strips only: the strip frame shown INSTEAD of frame 1 on a mirrored (flipX) image — the same pose leaning
+   * the other way in texture space, so on screen every plant leans downwind (east), mirrored or not.
+   */
+  mirror?: number;
+}
+
+/**
+ * Sway strips hold 3 cells: 0 still, 1 leaning a pixel downwind (+x), 2 the same lean mirrored (-x) for flipped
+ * images (IdleAnim.mirror). `swayLean(cell)` is the cell's x lean in px.
+ */
+export const SWAY_CELLS = 3;
+export const swayLean = (cell: number): number => (cell === 2 ? -1 : cell);
+const SWAY: IdleAnim = { frames: 2, kind: 'sway', mirror: 2 };
+
+/** Dressing textures drawn as idle strips (frame 0 = the still look). */
+export const DRESSING_IDLE: Readonly<Record<string, IdleAnim>> = {
+  dr_banner_blue: { frames: 3, kind: 'wave' },
+  dr_banner_red: { frames: 3, kind: 'wave' },
+  dr_lantern: { frames: 3, kind: 'flicker' },
+  dr_candles: { frames: 3, kind: 'flicker' },
+  dr_tallgrass_a: SWAY,
+  dr_tallgrass_b: SWAY,
+  dr_tallgrass_dusk: SWAY,
+  dr_tallgrass_frost: SWAY,
+  dr_reeds: SWAY,
+};
+
 /** Gold four-point waystar — Omnipath's own emblem. */
 function waystar(b: Ctx, cx: number, cy: number, s: number): void {
   fpoly(b, [cx, cy - s, cx + 1, cy - 1, cx + s, cy, cx + 1, cy + 1, cx, cy + s, cx - 1, cy + 1, cx - s, cy, cx - 1, cy - 1], R.gold[3]);
@@ -287,10 +356,12 @@ function mushrooms(scene: Phaser.Scene, key: string, cap: Ramp): void {
 }
 
 function tallGrass(scene: Phaser.Scene, key: string, ramp: Ramp, wide: boolean, tips?: string): void {
-  // 'a' = upright tuft; wide = a big arching fern-like clump
+  // 'a' = upright tuft; wide = a big arching fern-like clump. Sway cells 1 / 2: the same blades with their tips blown a
+  // pixel or two downwind / the mirrored way (the longest blades bend most).
   const w = wide ? 30 : 18;
   const h = wide ? 26 : 19;
-  tex(scene, key, w, h, (c, rnd) => {
+  idleTex(scene, key, w, h, SWAY_CELLS, (c, rnd, f) => {
+    const wind = swayLean(f) * 1.6;
     const cx = w / 2;
     const base = h - 2;
     shadow(c, cx, base + 0.5, w * 0.36, 1.6);
@@ -303,7 +374,7 @@ function tallGrass(scene: Phaser.Scene, key: string, ramp: Ramp, wide: boolean, 
         const x0 = cx + (t - 0.5) * (wide ? 10 : 6);
         const lean = (t - 0.5) * (wide ? 22 : 11) + (rnd() - 0.5) * 3;
         const len = (wide ? 19 : 14) * (0.62 + rnd() * 0.38) * (1 - Math.abs(t - 0.5) * 0.55);
-        const x1 = x0 + lean;
+        const x1 = x0 + lean + wind * (len / (wide ? 19 : 14));
         const y1 = base - len + (wide ? Math.abs(t - 0.5) * 8 : 0);
         const front = Math.abs(t - 0.5) < 0.2;
         const tone = front ? 4 : t < 0.5 ? 3 : 2;
@@ -505,7 +576,17 @@ function barrelBody(b: Ctx, x: number, y: number, w: number, h: number): void {
   box(b, x + 2, y - h - 1, w - 5, 1, C[5]);
 }
 
-function bannerBody(b: Ctx, cloth: Ramp, h: number): void {
+/**
+ * Banner wave (whole px, within the 14 px canvas so the outline always fits): the cloth's rows shift sideways by
+ * -1..1. Frame 0 still, 1 the lower half blown out, 2 a bulge mid-way down (stepped 0 → 2 → 1: the wave runs down).
+ */
+export function clothShift(frame: number, u: number): number {
+  if (frame === 1) return u > 0.5 ? 1 : 0;
+  if (frame === 2) return u > 0.22 && u < 0.72 ? 1 : 0;
+  return 0;
+}
+
+function bannerBody(b: Ctx, cloth: Ramp, h: number, frame = 0): void {
   // pole with a finial, crossbar, swallow-tailed cloth with the waystar
   box(b, 6, 3, 2, h - 3, R.bark[3]);
   px(b, 6, 3, R.bark[5]);
@@ -517,13 +598,17 @@ function bannerBody(b: Ctx, cloth: Ramp, h: number): void {
   box(b, 1, 5, 12, 1, R.bark[4]);
   const top = 7;
   const bot = top + Math.round(h * 0.55);
-  fpoly(b, [2, top, 12, top, 12, bot, 7, bot - 4, 2, bot], cloth[2]);
-  box(b, 2, top, 2, bot - top - 1, cloth[3]);
-  box(b, 10, top, 2, bot - top - 2, cloth[1]);
-  box(b, 2, top, 10, 1, R.gold[2]);
-  box(b, 3, bot - 4, 1, 3, R.gold[2]);
-  box(b, 10, bot - 4, 1, 3, R.gold[2]);
-  waystar(b, 7, Math.round(top + (bot - top) * 0.42), 3);
+  // the cloth on its own layer, laid over the pole row by row with the frame's wave shift
+  const cl = scratch(14, h);
+  const k = cl.c;
+  fpoly(k, [2, top, 12, top, 12, bot, 7, bot - 4, 2, bot], cloth[2]);
+  box(k, 2, top, 2, bot - top - 1, cloth[3]);
+  box(k, 10, top, 2, bot - top - 2, cloth[1]);
+  box(k, 2, top, 10, 1, R.gold[2]);
+  box(k, 3, bot - 4, 1, 3, R.gold[2]);
+  box(k, 10, bot - 4, 1, 3, R.gold[2]);
+  waystar(k, 7, Math.round(top + (bot - top) * 0.42), 3);
+  for (let y = top; y <= bot; y++) b.drawImage(cl.el, 0, y, 14, 1, clothShift(frame, (y - top) / (bot - top)), y, 14, 1);
   // base stones
   box(b, 3, h - 3, 8, 3, R.stone[2]);
   box(b, 3, h - 3, 8, 1, R.stone[4]);
@@ -546,17 +631,18 @@ function drawFurniture(scene: Phaser.Scene): void {
     shadow(c, 8, 18, 7.5, 2);
     sprite(c, 16, 20, (b) => barrelBody(b, 3, 19, 10, 15));
   });
-  tex(scene, 'dr_banner_blue', 14, 40, (c) => {
+  idleTex(scene, 'dr_banner_blue', 14, 40, 3, (c, _r, f) => {
     shadow(c, 7, 38.5, 6, 1.5);
-    sprite(c, 14, 40, (b) => bannerBody(b, R.blue, 39));
+    sprite(c, 14, 40, (b) => bannerBody(b, R.blue, 39, f));
   });
-  tex(scene, 'dr_banner_red', 14, 40, (c) => {
+  idleTex(scene, 'dr_banner_red', 14, 40, 3, (c, _r, f) => {
     shadow(c, 7, 38.5, 6, 1.5);
-    sprite(c, 14, 40, (b) => bannerBody(b, R.red, 39));
+    sprite(c, 14, 40, (b) => bannerBody(b, R.red, 39, f));
   });
-  tex(scene, 'dr_lantern', 16, 40, (c) => {
+  // flicker: 0 the still look, 1 a brighter flare (hot core, wider halo), 2 a dip (the flame sinks a pixel)
+  idleTex(scene, 'dr_lantern', 16, 40, 3, (c, _r, f) => {
     shadow(c, 7, 38.5, 5, 1.5);
-    halo(c, 11, 12, 9, '#ffcf6a', 0.4);
+    halo(c, 11, 12, [9, 10, 8][f], '#ffcf6a', [0.4, 0.46, 0.32][f]);
     sprite(c, 16, 40, (b) => {
       box(b, 5, 6, 3, 33, R.bark[3]);
       box(b, 5, 6, 1, 33, R.bark[4]);
@@ -567,15 +653,20 @@ function drawFurniture(scene: Phaser.Scene): void {
       // lantern
       box(b, 9, 8, 5, 1, R.iron[1]);
       box(b, 9, 9, 5, 6, R.glass[3]);
-      box(b, 10, 10, 3, 4, R.glass[4]);
+      if (f === 2) box(b, 10, 11, 3, 3, R.glass[4]);
+      else box(b, 10, 10, 3, 4, R.glass[4]);
       box(b, 11, 9, 1, 6, R.iron[2]);
+      if (f === 1) {
+        px(b, 10, 12, '#fffbe8');
+        px(b, 12, 12, '#fffbe8');
+      }
       box(b, 9, 15, 5, 1, R.iron[1]);
       box(b, 3, 36, 7, 3, R.stone[2]);
       box(b, 3, 36, 7, 1, R.stone[4]);
     });
   });
-  tex(scene, 'dr_candles', 14, 16, (c) => {
-    halo(c, 7, 7, 7, '#ffcf6a', 0.4);
+  idleTex(scene, 'dr_candles', 14, 16, 3, (c, _r, f) => {
+    halo(c, 7, 7, 7, '#ffcf6a', [0.4, 0.44, 0.36][f]);
     sprite(c, 14, 16, (b) => {
       disc(b, 7, 14, 6, 1.6, R.cream[2]);
       const candle = (x: number, h: number) => {
@@ -587,15 +678,18 @@ function drawFurniture(scene: Phaser.Scene): void {
       candle(8, 9);
       candle(11, 4);
     });
-    for (const [x, h] of [
+    // flames (frame 0 the still look; 1 and 2 stretch one flame a pixel and lean another's tip downwind)
+    [
       [4, 6],
       [8, 9],
       [11, 4],
-    ]) {
-      box(c, x, 14 - h - 3, 1, 2, R.ember[4]);
+    ].forEach(([x, h], k) => {
+      const tall = f && (k + f) % 3 === 0 ? 1 : 0;
+      const lean = f && (k + 2 * f) % 3 === 1 ? 1 : 0;
+      box(c, x, 14 - h - 3 - tall, 1, 2 + tall, R.ember[4]);
       px(c, x, 14 - h - 1, R.ember[5]);
-      px(c, x, 14 - h - 4, R.ember[3]);
-    }
+      px(c, x + lean, 14 - h - 4 - tall, R.ember[3]);
+    });
   });
 }
 
@@ -687,7 +781,9 @@ function drawFences(scene: Phaser.Scene): void {
 // ------------------------------------------------------------------ biome accents
 
 function drawAccents(scene: Phaser.Scene): void {
-  tex(scene, 'dr_reeds', 16, 22, (c) => {
+  // sway cells 1 / 2: blade tips and the cattail heads a pixel downwind / the mirrored way
+  idleTex(scene, 'dr_reeds', 16, 22, SWAY_CELLS, (c, _r, cell) => {
+    const f = swayLean(cell);
     shadow(c, 8, 20.5, 6, 1.4);
     sprite(c, 16, 22, (b) => {
       for (const [x0, lean, len, tone] of [
@@ -697,15 +793,16 @@ function drawAccents(scene: Phaser.Scene): void {
         [11, 5, 10, 2],
         [8, 0, 9, 4],
       ] as const)
-        blade(b, x0, 20, x0 + lean, 20 - len, 2, R.grass, tone);
+        blade(b, x0, 20, x0 + lean + (len > 10 ? f : 0), 20 - len, 2, R.grass, tone);
       for (const [x, top] of [
         [6, 3],
         [10, 5],
       ]) {
-        box(b, x, top + 5, 1, 20 - top - 5, R.grass[2]);
-        box(b, x - 1, top, 3, 5, R.bark[2]);
-        box(b, x - 1, top, 1, 5, R.bark[4]);
-        px(b, x, top - 1, R.grass[4]);
+        if (f) seg(b, x, 19, x + f, top + 5, R.grass[2]);
+        else box(b, x, top + 5, 1, 20 - top - 5, R.grass[2]);
+        box(b, x - 1 + f, top, 3, 5, R.bark[2]);
+        box(b, x - 1 + f, top, 1, 5, R.bark[4]);
+        px(b, x + f, top - 1, R.grass[4]);
       }
     });
   });
@@ -821,4 +918,247 @@ export function drawDressing(scene: Phaser.Scene): void {
   drawFurniture(scene);
   drawFences(scene);
   drawAccents(scene);
+}
+
+// ------------------------------------------------------------------ ambient particles (render/ambient.ts)
+// The living world's small moving pixels (docs/QUALITY-PLAN.md §12), all in ONE texture so every particle layer is a
+// single Blitter on one GPU texture. Matter (leaves, petals) gets the 1 px PAL.outline rim; light, water and smoke
+// (snow, rain, embers, fireflies, spores, dust, puffs) do not (docs/VFX.md P7). Every pixel is fully opaque: fades
+// are dithered frames, never alpha. Cloud shadows are a second texture (big, flat, soft-edged by 1 px noise).
+
+/** Particle atlas key (frames named below: leaf_<set>_<0..3|fade>, snow_<0..2>, rain_<0..1>, puddle_<0..3>, …). */
+export const AMB_FX = 'amb_fx';
+/** Cloud-shadow atlas key (frames cloud_0..CLOUD_SHAPES-1). */
+export const AMB_CLOUD = 'amb_cloud';
+
+/** Leaf / petal colour sets [light, mid, dark]. */
+export const LEAF_SETS = {
+  green: ['#a2c46a', '#74a655', '#3d6630'],
+  autumn: ['#f0c868', '#d08a30', '#8a4a1e'],
+  grove: ['#7aa486', '#3f6a5a', '#203a34'],
+  petal: ['#ffd8f2', '#e890d0', '#9a5aa8'],
+} as const;
+export type LeafSet = keyof typeof LEAF_SETS;
+/** Flutter frames per leaf (flat, tilted, edge-on, tilted back) + a dithered 'fade' frame. */
+export const LEAF_FRAMES = 4;
+const LEAF_BODIES: readonly (readonly string[])[] = [
+  ['.ab.', 'abbc', '.cc.'],
+  ['..ab', '.abc', 'abc.', 'bc..'],
+  ['abbc'],
+  ['ab..', 'bbc.', '.bbc', '..cc'],
+];
+
+/** Glow-particle palettes [dim, bright, plus-core, plus-arm]. */
+export const SPORE_SETS = {
+  gloom: ['#3a8a7a', '#7ae0c8', '#d8fff4', '#5ab8a8'],
+  dusk: ['#5a4490', '#b8a0e8', '#f4e8ff', '#8a6cc0'],
+} as const;
+export type SporeSet = keyof typeof SPORE_SETS;
+
+/** Smoke ramps [lit, mid, underside]: chimneys, and the darker forge smoke. */
+const SMOKE = {
+  smoke: ['#e6e0d6', '#c9c1b5', '#a0988c'],
+  smokedark: ['#9c968e', '#7a756e', '#5c5852'],
+} as const;
+/** Puff sizes [w, h, coverage]: solid while small, Bayer-dithered as it thins out (no alpha fades). */
+export const PUFF_SIZES: readonly (readonly [number, number, number])[] = [
+  [4, 3, 1],
+  [6, 5, 1],
+  [8, 6, 1],
+  [10, 8, 0.5],
+  [12, 9, 0.25],
+];
+
+const BAYER4 = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5];
+
+/** Cloud shapes [w, h]. */
+export const CLOUD_SIZES: readonly (readonly [number, number])[] = [
+  [208, 112],
+  [272, 132],
+  [176, 100],
+];
+export const CLOUD_SHAPES = CLOUD_SIZES.length;
+/** Cloud shadow colour: a cool slate, multiplied over the world at low alpha by render/ambient.ts. */
+export const CLOUD_COLOR = '#2c3450';
+
+/** Integer hash -> [0, 1) (1 px noise for cloud edges). */
+function hash01(x: number, y: number, seed: number): number {
+  let h = Math.imul(x, 374761393) ^ Math.imul(y, 668265263) ^ Math.imul(seed, 0x27d4eb2d);
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+}
+
+/**
+ * A cloud-shadow mask (pure, 0/1 per pixel, row-major): a few overlapping ellipses whose summed field is solid inside
+ * and breaks up into 1 px noise across a soft rim (coverage falls from 1 to 0 over the outer ~40% of the field), with a
+ * 2 px empty border. Deterministic per (w, h, seed).
+ */
+export function cloudMask(w: number, h: number, seed: number): Uint8Array {
+  const rnd = artRng(seed);
+  const blobs: [number, number, number, number][] = [];
+  const n = 5 + Math.floor(rnd() * 3);
+  for (let i = 0; i < n; i++) {
+    const t = n === 1 ? 0.5 : i / (n - 1);
+    blobs.push([w * (0.22 + t * 0.56 + (rnd() - 0.5) * 0.12), h * (0.42 + (rnd() - 0.5) * 0.26), w * (0.15 + rnd() * 0.12), h * (0.24 + rnd() * 0.14)]);
+  }
+  const out = new Uint8Array(w * h);
+  for (let y = 2; y < h - 2; y++)
+    for (let x = 2; x < w - 2; x++) {
+      let f = 0;
+      for (const [cx, cy, rx, ry] of blobs) {
+        const d = ((x + 0.5 - cx) / rx) ** 2 + ((y + 0.5 - cy) / ry) ** 2;
+        if (d < 1) f += (1 - d) * (1 - d);
+      }
+      const cover = Math.min(1, f / 0.42);
+      if (cover >= 1 || (cover > 0 && hash01(x, y, seed) < cover * cover)) out[y * w + x] = 1;
+    }
+  return out;
+}
+
+interface FxFrame {
+  name: string;
+  w: number;
+  h: number;
+  draw: (c: Ctx) => void;
+}
+
+/** Paints a pixel map ('.' = empty, other chars looked up in pal) at (ox, oy). */
+function pmap(c: Ctx, rows: readonly string[], pal: Readonly<Record<string, string>>, ox = 0, oy = 0, keep?: (x: number, y: number) => boolean): void {
+  rows.forEach((row, y) => {
+    for (let x = 0; x < row.length; x++) {
+      const col = pal[row[x]];
+      if (col && (!keep || keep(x, y))) px(c, ox + x, oy + y, col);
+    }
+  });
+}
+
+function puff(c: Ctx, w: number, h: number, cover: number, ramp: readonly string[]): void {
+  for (let y = 0; y < h; y++)
+    for (let x = 0; x < w; x++) {
+      const d = ((x + 0.5 - w / 2) / (w / 2)) ** 2 + ((y + 0.5 - h / 2) / (h / 2)) ** 2;
+      if (d > 1.02) continue;
+      if (cover < 1 && BAYER4[(y & 3) * 4 + (x & 3)] >= cover * 16) continue;
+      const col = y < h * 0.4 && x < w * 0.62 ? ramp[0] : y >= h * 0.66 ? ramp[2] : ramp[1];
+      px(c, x, y, col);
+    }
+}
+
+function fxFrames(): FxFrame[] {
+  const out: FxFrame[] = [];
+  const one = (name: string, w: number, h: number, draw: (c: Ctx) => void) => out.push({ name, w, h, draw });
+  for (const set of Object.keys(LEAF_SETS) as LeafSet[]) {
+    const [a, b, c3] = LEAF_SETS[set];
+    const pal = { a, b, c: c3 };
+    LEAF_BODIES.forEach((rows, i) => {
+      const w = rows[0].length + 2;
+      const h = rows.length + 2;
+      one(`leaf_${set}_${i}`, w, h, (c) => sprite(c, w, h, (k) => pmap(k, rows, pal, 1, 1)));
+    });
+    // fade: the flat leaf, every other pixel, no rim
+    one(`leaf_${set}_fade`, 6, 5, (c) => pmap(c, LEAF_BODIES[0], pal, 1, 1, (x, y) => (x + y) % 2 === 0));
+  }
+  one('snow_0', 1, 1, (c) => px(c, 0, 0, '#ffffff'));
+  one('snow_1', 2, 2, (c) => pmap(c, ['ab', 'bc'], { a: '#ffffff', b: '#e2ebf3', c: '#b8c8d8' }));
+  one('snow_2', 3, 3, (c) => pmap(c, ['.b.', 'bab', '.b.'], { a: '#ffffff', b: '#d0deea' }));
+  // rain: slanted 1:4 downwind, the head (bottom) brightest
+  one('rain_0', 3, 12, (c) => {
+    for (let i = 0; i < 12; i++) px(c, Math.floor(i / 5), i, i < 3 ? '#8aa4c0' : i < 10 ? '#b8d2ea' : '#eef8ff');
+  });
+  one('rain_1', 2, 8, (c) => {
+    for (let i = 0; i < 8; i++) px(c, Math.floor(i / 5), i, i < 2 ? '#7f98b4' : '#a8c4de');
+  });
+  one('puddle_0', 3, 1, (c) => pmap(c, ['aaa'], { a: '#c8dcec' }));
+  one('puddle_1', 5, 3, (c) => pmap(c, ['.aaa.', 'a...a', '.aaa.'], { a: '#b8d0e4' }));
+  one('puddle_2', 7, 3, (c) => pmap(c, ['.a.a.a.', 'a.....a', '.a.a.a.'], { a: '#a8c0d8' }));
+  one('puddle_3', 9, 3, (c) => pmap(c, ['..a...a..', 'a.......a', '...a.a...'], { a: '#98b0c8' }));
+  one('firefly_0', 1, 1, (c) => px(c, 0, 0, '#7a8a30'));
+  one('firefly_1', 1, 1, (c) => px(c, 0, 0, '#e8f878'));
+  one('firefly_2', 3, 3, (c) => pmap(c, ['.b.', 'bab', '.b.'], { a: '#fbffd0', b: '#b8e050' }));
+  // full glow: a bright cross inside a dim green ring of pixels (opaque; reads as glow on dark ground)
+  one('firefly_3', 5, 5, (c) => pmap(c, ['..c..', '.cbc.', 'cbabc', '.cbc.', '..c..'], { a: '#fffff0', b: '#d8f070', c: '#6a9a30' }));
+  for (const set of Object.keys(SPORE_SETS) as SporeSet[]) {
+    const [dim, bright, core, arm] = SPORE_SETS[set];
+    one(`spore_${set}_0`, 1, 1, (c) => px(c, 0, 0, dim));
+    one(`spore_${set}_1`, 1, 1, (c) => px(c, 0, 0, bright));
+    one(`spore_${set}_2`, 3, 3, (c) => pmap(c, ['.b.', 'bab', '.b.'], { a: core, b: arm }));
+  }
+  one('dust_0', 1, 1, (c) => px(c, 0, 0, '#8a8070'));
+  one('dust_1', 1, 1, (c) => px(c, 0, 0, '#e8dec4'));
+  // embers cool as they rise: white-hot cross, 2x2, a 1x2 streak, an orange speck, a dying red one
+  one('ember_0', 3, 3, (c) => pmap(c, ['.b.', 'bab', '.b.'], { a: '#fff6c8', b: '#ffc04a' }));
+  one('ember_1', 2, 2, (c) => pmap(c, ['ab', 'bc'], { a: '#fff0a8', b: '#ffc04a', c: '#f07a28' }));
+  one('ember_2', 1, 2, (c) => pmap(c, ['a', 'b'], { a: '#ffc04a', b: '#f07a28' }));
+  one('ember_3', 1, 1, (c) => px(c, 0, 0, '#f07a28'));
+  one('ember_4', 1, 1, (c) => px(c, 0, 0, '#a8301a'));
+  one('heat_0', 1, 1, (c) => px(c, 0, 0, '#fff6d8'));
+  one('heat_1', 1, 2, (c) => pmap(c, ['a', 'b'], { a: '#ffeec0', b: '#f0d090' }));
+  for (const kind of ['smoke', 'smokedark'] as const)
+    PUFF_SIZES.forEach(([w, h, cover], i) => one(`${kind}_${i}`, w, h, (c) => puff(c, w, h, cover, SMOKE[kind])));
+  return out;
+}
+
+/**
+ * Builds AMB_FX (every particle frame, shelf-packed with 1 px gaps) and AMB_CLOUD (the cloud-shadow shapes).
+ * Idempotent per key; render/ambient.ts calls it when the first map with ambience starts.
+ */
+export function drawAmbientFx(scene: Phaser.Scene): void {
+  if (!scene.textures.exists(AMB_FX)) {
+    const frames = fxFrames();
+    const W = 96;
+    const pos: [number, number][] = [];
+    let x = 0;
+    let y = 0;
+    let row = 0;
+    for (const f of frames) {
+      if (x + f.w > W) {
+        x = 0;
+        y += row + 1;
+        row = 0;
+      }
+      pos.push([x, y]);
+      x += f.w + 1;
+      row = Math.max(row, f.h);
+    }
+    const H = y + row;
+    const tex = scene.textures.createCanvas(AMB_FX, W, H);
+    if (tex) {
+      const c = tex.getContext();
+      c.imageSmoothingEnabled = false;
+      frames.forEach((f, i) => {
+        c.save();
+        c.translate(pos[i][0], pos[i][1]);
+        f.draw(c);
+        c.restore();
+      });
+      frames.forEach((f, i) => tex.add(f.name, 0, pos[i][0], pos[i][1], f.w, f.h));
+      tex.refresh();
+    }
+  }
+  if (!scene.textures.exists(AMB_CLOUD)) {
+    const W = CLOUD_SIZES.reduce((s, [w]) => s + w + IDLE_GAP, -IDLE_GAP);
+    const H = Math.max(...CLOUD_SIZES.map(([, h]) => h));
+    const tex = scene.textures.createCanvas(AMB_CLOUD, W, H);
+    if (tex) {
+      const c = tex.getContext();
+      const img = c.createImageData(W, H);
+      const [r, g, b] = [1, 3, 5].map((i) => parseInt(CLOUD_COLOR.slice(i, i + 2), 16));
+      let ox = 0;
+      CLOUD_SIZES.forEach(([w, h], k) => {
+        const m = cloudMask(w, h, keySeed(`cloud-${k}`));
+        for (let yy = 0; yy < h; yy++)
+          for (let xx = 0; xx < w; xx++) {
+            if (!m[yy * w + xx]) continue;
+            const i = (yy * W + ox + xx) * 4;
+            img.data[i] = r;
+            img.data[i + 1] = g;
+            img.data[i + 2] = b;
+            img.data[i + 3] = 255;
+          }
+        tex.add(`cloud_${k}`, 0, ox, 0, w, h);
+        ox += w + IDLE_GAP;
+      });
+      c.putImageData(img, 0, 0);
+      tex.refresh();
+    }
+  }
 }

@@ -4,12 +4,18 @@
 // Hit feel (vfx/juice.ts JuiceActor): hold (victim-local hit-stop: the sprite and its frame freeze, gameplay does
 // not), impactFlash (tint-fill frames, one per rendered frame), a 1-frame squash and a whole-pixel recoil. The wind-up
 // glow, buff auras and status overlays (stun stars…) are the VFX runtime's.
+// Pixel rule (docs/QUALITY-PLAN.md §1): the sprite is never scaled except the 1-frame squash — elites show textures
+// painted natively at their size with the tint baked in (art/monsters.ts monsterTexture), shadows are drawn at their
+// width, flyers hover by a whole pixel and walkers breathe through their idle frames. Floating text over a monster
+// goes in its lanes (render/text.ts TextAnchor).
 import Phaser from 'phaser';
 import type { BuffStat, ElementDef, MonsterDef, StatusKind } from '../../core/types';
 import { isBlockedPx } from '../../core/world/compile';
 import type { CompiledMap } from '../../core/world/types';
+import { monsterTexture } from '../art/monsters';
 import { DEPTH, ySort } from '../render/depths';
-import { type WorldLabel, worldLabel } from '../render/text';
+import { type TextAnchor, type WorldLabel, textAnchors, trackTextAnchor, untrackTextAnchor, worldLabel } from '../render/text';
+import { monsterShadowW, shadowKey } from './actorArt';
 import { HOVER_MONSTERS, monsterAnimKey, monsterAnimRate } from './rules';
 
 export interface Dot {
@@ -52,12 +58,19 @@ export const freshStatus = (): StatusState => ({
 /** Warden enrage (HP < 50 %): moves and swings faster. Technique tempo lives in MonsterSkills. */
 export const ENRAGE = { at: 0.5, speed: 1.15, attackDelay: 0.85 } as const;
 
-/** Space kept between the HP bar and the name plate for the target chevron (art px). */
+/** Space kept between the HP bar and the name plate for the target chevron (art px; always kept, so the plate never
+ *  jumps when the chevron comes and goes). */
 export const CHEVRON_ROOM = 11;
+
+/** Name plate alpha while it covers the player's body. */
+const PLATE_SEE_THROUGH = 0.45;
+
+/** HP bar width per rank (art px). */
+const BAR_W = { warden: 64, elite: 40, common: 28 } as const;
 
 let nextUid = 1;
 
-export class Monster {
+export class Monster implements TextAnchor {
   readonly sprite: Phaser.GameObjects.Sprite;
   readonly shadow: Phaser.GameObjects.Image;
   readonly bar: Phaser.GameObjects.Graphics;
@@ -123,7 +136,11 @@ export class Monster {
   readonly texture: string;
   private readonly hover: boolean;
   private readonly animKey: string | null;
-  readonly baseScale: number;
+  /** Always 1: the size (and an elite's tint) is painted into the texture (kept for older readers). */
+  readonly baseScale = 1;
+  /** The texture carries the def's size and tint (no runtime tint for it). */
+  private readonly baked: boolean;
+  readonly textRole = 'foe' as const;
 
   constructor(
     readonly scene: Phaser.Scene,
@@ -136,25 +153,36 @@ export class Monster {
     this.x = spawn.x;
     this.y = spawn.y;
     this.hp = def.hp;
-    this.baseScale = def.scale ?? 1;
-    let tex = def.texture ?? `mon_${def.id}`;
-    if (!scene.textures.exists(tex)) tex = def.base && scene.textures.exists(`mon_${def.base}`) ? `mon_${def.base}` : 'mon_jellop';
-    const big = def.rank === 'warden' ? 2.6 : def.rank === 'elite' ? 1.6 : 1;
-    this.shadow = scene.add.image(this.x, this.y, 'shadow').setScale(big * this.baseScale * 0.8 + 0.2).setDepth(DEPTH.SHADOW);
+    const look = monsterTexture(scene, def);
+    const tex = look.key;
+    this.baked = look.baked;
+    this.shadow = scene.add.image(this.x, this.y, shadowKey(scene, monsterShadowW(def.rank, def.scale ?? 1))).setDepth(DEPTH.SHADOW);
     this.aura = def.rank !== 'common' ? scene.add.graphics().setBlendMode(Phaser.BlendModes.ADD).setDepth(DEPTH.AURA) : null;
     this.texture = tex;
-    this.hover = HOVER_MONSTERS.has(tex);
+    this.hover = HOVER_MONSTERS.has(look.species);
     this.lastX = this.x;
     this.lastY = this.y;
     this.sprite = scene.add.sprite(this.x, this.y, tex).setOrigin(0.5, 0.9);
-    this.animKey = scene.anims.exists(monsterAnimKey(tex)) ? monsterAnimKey(tex) : null;
+    this.animKey = this.ensureAnim(tex, look.species);
     // Start on a random frame so a crowd never moves in lockstep.
     if (this.animKey) this.sprite.play({ key: this.animKey, startFrame: Math.random() < 0.5 ? 0 : 1 });
     this.bar = scene.add.graphics().setDepth(DEPTH.HP_BAR);
     // Name labels are created lazily (only targeted monsters and wardens show one): up to 60 monsters per map.
     if (this.warden) this.label.setVisible(true);
     this.restoreTint();
+    trackTextAnchor(scene, this);
     this.sync(0);
+  }
+
+  /** The 2-frame loop of a texture (a variant painted after boot registers its own, at its species' speed). */
+  private ensureAnim(tex: string, species: string): string | null {
+    const key = monsterAnimKey(tex);
+    const anims = this.scene.anims;
+    if (anims.exists(key)) return key;
+    if (tex === species || !this.scene.textures.exists(`${tex}_1`)) return null;
+    const base = anims.get(monsterAnimKey(species));
+    anims.create({ key, frames: [{ key: tex }, { key: `${tex}_1` }], frameRate: base?.frameRate ?? 4, repeat: -1 });
+    return key;
   }
 
   /** Name plate in the bitmap pixel font (created on first use: only targeted monsters and wardens show one). */
@@ -162,7 +190,7 @@ export class Monster {
     if (!this._label) {
       const e = this.element;
       const color = e ? `#${e.color.toString(16).padStart(6, '0')}` : this.warden ? '#ffd0c0' : '#ffffff';
-      this._label = worldLabel(this.scene, this.x, this.y, `${this.def.name}  Lv ${this.def.level}`, {
+      this._label = worldLabel(this.scene, this.x, this.y, `${this.def.name} Lv ${this.def.level}`, {
         color,
         size: this.warden ? 13 : 10,
         bold: this.warden || this.elite,
@@ -174,6 +202,40 @@ export class Monster {
   /** Top of the body (world y) — where the HP bar sits; plates and chevrons go above it. */
   get top(): number {
     return this.y - this.sprite.displayHeight * 0.9 - 4;
+  }
+
+  /** Bottom of the name plate (world y): fixed above the HP bar and the chevron's room. */
+  private get plateY(): number {
+    return Math.round(this.top) - 3 - CHEVRON_ROOM;
+  }
+
+  // ---------------------------------------------------------------- TextAnchor (floating text lanes)
+
+  textTop(): number {
+    const top = Math.round(this.top);
+    if (this._label?.visible) return this.plateY - this._label.height;
+    if (this.chevron) return top - CHEVRON_ROOM;
+    if (this.hp < this.maxHp || this.warden) return top - 2;
+    return top + 3;
+  }
+
+  textBottom(): number {
+    return Math.round(this.y) + 4;
+  }
+
+  textHalfW(): number {
+    const bar = BAR_W[this.def.rank] / 2 + 1;
+    return Math.ceil(Math.max(this.radius, bar, this._label?.visible ? this._label.width / 2 : 0));
+  }
+
+  textLive(): boolean {
+    return this.alive && this.sprite.active && this.sprite.visible;
+  }
+
+  textBody(): { x0: number; y0: number; x1: number; y1: number } {
+    const half = Math.round(this.sprite.displayWidth / 2);
+    const x = Math.round(this.x);
+    return { x0: x - half, y0: Math.round(this.top) + 4, x1: x + half, y1: Math.round(this.y) };
   }
 
   get radius(): number {
@@ -263,7 +325,7 @@ export class Monster {
     if (this.frozen) this.sprite.setTint(0xaee9ff);
     else if (this.stunned) this.sprite.setTint(0xdddddd);
     else if (this.scene.time.now < this.status.slowUntil) this.sprite.setTint(0x9fd8ff);
-    else if (this.def.tint !== undefined) this.sprite.setTint(this.def.tint);
+    else if (this.def.tint !== undefined && !this.baked) this.sprite.setTint(this.def.tint);
     else this.sprite.clearTint();
   }
 
@@ -287,24 +349,23 @@ export class Monster {
       this.lag.x = Math.abs(this.lag.x) < 1 ? 0 : this.lag.x * 0.45;
       this.lag.y = Math.abs(this.lag.y) < 1 ? 0 : this.lag.y * 0.45;
     }
-    // The frames carry the motion now: only a faint breath on walkers, none on flyers.
-    const breath = this.hover || this.moving ? 1 : 1 + Math.sin(this.bob) * 0.02;
-    const scale = this.baseScale;
+    // The frames carry the motion (walkers breathe through their slow idle frames); flyers hover by one whole pixel.
+    const hoverDy = this.hover && !held && !this.stunned && Math.sin(this.bob * 0.5) > 0 ? -1 : 0;
     // Recoil: whole pixels along the blow, held through the hit-stop, then home one step per frame.
     const rc = this.recoilQ[0];
     if (rc && !held) this.recoilQ.shift();
     const bx = held ? this.held!.x : this.x + this.lag.x;
     const by = held ? this.held!.y : this.y + this.lag.y;
-    this.sprite.setPosition(Math.round(bx) + (rc?.x ?? 0), Math.round(by) + (rc?.y ?? 0));
+    this.sprite.setPosition(Math.round(bx) + (rc?.x ?? 0), Math.round(by) + (rc?.y ?? 0) + hoverDy);
     this.sprite.setFlipX(this.facing < 0);
     if (this.squashF > 0) {
-      // 1-frame squash: 2 px wider, 2 px shorter (whole pixels of the drawn sprite).
+      // 1-frame squash (the one scale the pixel rule allows): 2 px wider, 2 px shorter.
       this.squashF--;
       const w = Math.max(8, this.sprite.width);
       const h = Math.max(8, this.sprite.height);
-      this.sprite.setScale((scale * (w + 2 / scale)) / w, (scale * (h - 2 / scale)) / h);
-    } else this.sprite.setScale(scale * (1 / breath), scale * breath);
-    this.shadow.setPosition(this.x, this.y + 1);
+      this.sprite.setScale((w + 2) / w, (h - 2) / h);
+    } else if (this.sprite.scaleX !== 1 || this.sprite.scaleY !== 1) this.sprite.setScale(1);
+    this.shadow.setPosition(Math.round(this.x), Math.round(this.y) + 1);
     this.sprite.setDepth(ySort(this.y));
     // Impact flash frames (white -> colour), then the normal tint.
     if (this.flashQ.length) {
@@ -319,14 +380,27 @@ export class Monster {
     } else this.syncAnim();
     if (this.aura) this.drawAura(now);
     const top = this.top;
-    if (this._label?.visible) this._label.setPosition(Math.round(this.x), Math.round(top - 3 - (this.chevron ? CHEVRON_ROOM : 0)));
+    if (this._label?.visible) {
+      const lb = this._label.setPosition(Math.round(this.x), this.plateY);
+      // a plate that lands on the player's body (the monster stands just below them) turns see-through
+      const x0 = lb.x - lb.width / 2;
+      const y0 = lb.y - lb.height;
+      const over = textAnchors(this.scene, 'player').some((p) => {
+        const b = p.textBody();
+        return x0 < b.x1 && b.x0 < x0 + lb.width && y0 < b.y1 && b.y0 < lb.y;
+      });
+      lb.setAlpha(over ? PLATE_SEE_THROUGH : 1);
+    }
     const g = this.bar;
     g.clear();
     if (this.hp < this.maxHp || this.warden) {
-      const w = this.warden ? 64 : this.elite ? 40 : 28;
-      g.fillStyle(0x000000, 0.6).fillRect(this.x - w / 2 - 1, top - 1, w + 2, 5);
-      g.fillStyle(this.warden ? (this.enraged ? 0xff2a2a : 0xff4d6d) : 0xe84d4d, 1).fillRect(this.x - w / 2, top, (w * Math.max(0, this.hp)) / this.maxHp, 3);
-      if (this.warden) g.fillStyle(0xffffff, 0.5).fillRect(this.x - 0.5, top - 1, 1, 5);
+      // whole pixels, so the bar sits still under the plate
+      const w = BAR_W[this.def.rank];
+      const x0 = Math.round(this.x) - w / 2;
+      const y0 = Math.round(top);
+      g.fillStyle(0x000000, 0.6).fillRect(x0 - 1, y0 - 1, w + 2, 5);
+      g.fillStyle(this.warden ? (this.enraged ? 0xff2a2a : 0xff4d6d) : 0xe84d4d, 1).fillRect(x0, y0, Math.round((w * Math.max(0, this.hp)) / this.maxHp), 3);
+      if (this.warden) g.fillStyle(0xffffff, 0.5).fillRect(x0 + w / 2, y0 - 1, 1, 5);
     }
   }
 
@@ -448,6 +522,7 @@ export class Monster {
   }
 
   destroy(): void {
+    untrackTextAnchor(this.scene, this);
     this.sprite.destroy();
     this.shadow.destroy();
     this.bar.destroy();

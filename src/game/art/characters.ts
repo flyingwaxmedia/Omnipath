@@ -30,6 +30,22 @@ function mix(a: string, b: string, t: number): string {
   return `#${((ch(16) << 16) | (ch(8) << 8) | ch(0)).toString(16).padStart(6, '0')}`;
 }
 
+/** Relative brightness 0..1 of '#rrggbb' (Rec. 601 weights). */
+function luma(col: string): number {
+  const n = parseInt(col.slice(1, 7), 16);
+  return (((n >> 16) & 255) * 0.299 + ((n >> 8) & 255) * 0.587 + (n & 255) * 0.114) / 255;
+}
+
+/**
+ * The 1 px rim of a cape (outer fluttering edge, hem, mantle edge): the lining when it is light enough, else a lifted
+ * cape tone — so a dark cape still reads against a dark outfit and dark ground.
+ */
+function capeRim(L: Look): string {
+  const lining = L.capeLining;
+  if (lining && luma(lining) >= 0.42) return lining;
+  return mix(shade(L.cape!, 70), '#fff2c8', 0.3);
+}
+
 /** [deep, dark, base, light]: shadows drift toward plum, lights toward warm cream (light from top-left). */
 function ramp(base: string): [string, string, string, string] {
   return [mix(shade(base, -58), '#2a1630', 0.22), mix(shade(base, -30), '#3a2440', 0.14), base, mix(shade(base, 34), '#fff2c8', 0.18)];
@@ -963,15 +979,17 @@ function paintBack(c: Ctx, R: Rig): void {
   if (L.cape) {
     const cp = ramp(L.cape);
     const flow = [0, 1, 2, 1][t % 4];
-    const bottom = L.child ? 42 : 41;
-    trap(c, ty0 + 1, bottom, tx0 + 1, tx0 + 6, tx0 - 2 - flow, tx0 + 5, cp[1]);
-    trap(c, ty0 + 1, bottom - 1, tx0 + 1, tx0 + 3, tx0 - 1 - flow, tx0 + 1, cp[2]);
-    rect(c, tx0 - 2 - flow, bottom, 3, 1, cp[0]);
-    if (L.capeLining) {
-      // the lining shows along the fluttering edge and the hem
-      trap(c, ty0 + 3, bottom - 1, tx0, tx0, tx0 - 2 - flow, tx0 - 2 - flow, L.capeLining);
-      rect(c, tx0 - 1 - flow, bottom, 3, 1, shade(L.capeLining, -40));
-    }
+    // The cape shows as a strip behind the back (a robe's flared hem would hide it: it trails to the hem there).
+    const robe = L.robe ? L.robe + Math.min(0, R.oy) : 0;
+    const bottom = robe ? Math.min(H - 4, robe) : L.child ? 42 : 41;
+    const l1 = tx0 - (robe ? 4 : 3) - flow;
+    trap(c, ty0 + 1, bottom, tx0 - 1, tx0 + 6, l1, tx0 + 5, cp[1]);
+    trap(c, ty0 + 1, bottom - 1, tx0 - 1, tx0 + 3, l1 + 1, tx0 + 1, cp[2]);
+    rect(c, l1, bottom, 3, 1, cp[0]);
+    // 1 px light rim along the fluttering edge and the hem (the lining): reads on dark outfits and dark ground
+    const rim = capeRim(L);
+    trap(c, ty0 + 3, bottom - 1, tx0 - 1, tx0 - 1, l1, l1, rim);
+    rect(c, l1 + 1, bottom, 3, 1, shade(rim, -40));
   }
   if (L.scarf) {
     const s = ramp(L.scarf);
@@ -1145,11 +1163,13 @@ function paintTorso(c: Ctx, R: Rig): void {
   }
   if (L.cape) {
     const cp = ramp(L.cape);
-    // mantle over the shoulders
+    // mantle over the shoulders, its lower edge trimmed with the cape's rim so it parts from a dark tunic
     rect(c, tx0, ty0, w, 3, cp[2]);
     rect(c, tx0, ty0, w, 1, cp[3]);
     rect(c, tx1 - 2, ty0 + 1, 3, 2, cp[1]);
-    px(c, tx0 + 5, ty0 + 2, GOLD[2]);
+    const rim = capeRim(L);
+    rect(c, tx0, ty0 + 2, w - 3, 1, rim);
+    px(c, tx0 + 5, ty0 + 2, rim === GOLD[2] ? GOLD[3] : GOLD[2]);
   }
   if (L.back === 'pack') {
     const st = LEATHER[1];
@@ -2037,12 +2057,37 @@ function outfitLook(base: Look, o: ClassOutfit): Look {
  * set (`_idle_1`, `_walk_0..3`, `_atk_0..1`). Idempotent per key; register its animations with `lookAnimDefs(base)`.
  */
 export function drawPlayerLook(scene: Phaser.Scene, base: string, weapon: Weapon, outfit: ClassOutfit, full = true): void {
-  const L = outfitLook(PLAYERS[weapon], outfit);
-  charTex(scene, base, L, IDLE[0]);
-  if (!full) return;
-  charTex(scene, `${base}_idle_1`, L, weapon === 'sword' ? { ...IDLE[1], fx: 'glint' } : IDLE[1]);
-  WALK.forEach((p, i) => charTex(scene, `${base}_walk_${i}`, L, p));
-  ATTACK[weapon].forEach((p, i) => charTex(scene, `${base}_atk_${i}`, L, p));
+  const n = full ? LOOK_FRAMES : 1;
+  for (let i = 0; i < n; i++) drawPlayerLookFrame(scene, base, weapon, outfit, i);
+}
+
+/** Frames in a look's set: idle 0 (the preview), idle 1, walk 0..3, attack 0..1. */
+export const LOOK_FRAMES = 8;
+
+/** Key of frame `i` (0 .. LOOK_FRAMES - 1) of a look. */
+export function lookFrameKey(base: string, i: number): string {
+  if (i === 0) return base;
+  if (i === 1) return `${base}_idle_1`;
+  if (i < 6) return `${base}_walk_${i - 2}`;
+  return `${base}_atk_${i - 6}`;
+}
+
+const outfitLooks = new Map<string, Look>();
+
+/**
+ * Draws ONE frame of a class look (idempotent per key; ~10 ms): the unit of a time-sliced pre-bake, so wearing a class
+ * for the first time does not stall a frame (entities/looks.ts prebakeLooks).
+ */
+export function drawPlayerLookFrame(scene: Phaser.Scene, base: string, weapon: Weapon, outfit: ClassOutfit, i: number): void {
+  const key = lookFrameKey(base, i);
+  if (scene.textures.exists(key)) return;
+  let L = outfitLooks.get(base);
+  if (!L) {
+    L = outfitLook(PLAYERS[weapon], outfit);
+    outfitLooks.set(base, L);
+  }
+  const pose = i === 0 ? IDLE[0] : i === 1 ? (weapon === 'sword' ? { ...IDLE[1], fx: 'glint' as const } : IDLE[1]) : i < 6 ? WALK[i - 2] : ATTACK[weapon][i - 6];
+  charTex(scene, key, L, pose);
 }
 
 /** Draws every player and NPC frame (idempotent per key). */

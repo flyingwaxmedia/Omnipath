@@ -73,6 +73,8 @@ export interface PlayCtx {
   /** Low priority (status units): drawn only while the sprite pools have room to spare, so a crowd of statuses
    *  never starves the casts and impact sparks. */
   low?: boolean;
+  /** Multiply tint for the play's 'chip' motes (death chips take the monster's hide colour); absent = as baked. */
+  chipTint?: number;
 }
 
 export interface VfxGroup {
@@ -104,8 +106,14 @@ export interface TellSpec {
 export interface JuiceHooks {
   /** Victim-local hit-stop, coalesced and inside the per-second budget: the hold actually granted (ms). */
   hold(victim: object | 'player', ms: number): number;
-  /** The victim's impact frames: white -> `color` flash (1-2 frames), a 1-frame squash, a whole-px recoil along ang. */
-  impact(victim: object | 'player', color: number, ang: number, recoilPx: number): void;
+  /**
+   * The victim's impact frame through the per-victim flash gate (../vfx/juice.ts BODY_FLASH): one frame of white
+   * (`color` under reduce-flash), a 1-frame squash and a whole-px recoil along ang on the first hit of `cast` on this
+   * victim; later ticks of the cast within 150 ms are spark-only, a victim flashes at most once per 220 ms / 8 frames.
+   */
+  impact(victim: object | 'player', color: number, ang: number, recoilPx: number, cast?: unknown): unknown;
+  /** Death / spawn pop on the real sprite: white frames + squash, never gated. */
+  pop(victim: object | 'player'): void;
   /** Directional camera kick (whole art px along ang, springs back). */
   kick(ang: number, px: number): void;
   /** Screen flash, governed (alpha <= 0.35, >= 333 ms apart, <= 3 / s, none under reduce-flash). True if shown. */

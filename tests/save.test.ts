@@ -152,6 +152,11 @@ describe('v1 migration', () => {
     expect(none.flags[BOOK_FLAGS.classWorn]).toBeUndefined();
   });
 
+  it('v1 had no "No class": a null active class still wears the first class even with a worn: null key', () => {
+    expect(migrateBookState({ ...V1, activeClass: null, worn: null }).worn).toBe('blademaster');
+    expect(migrateBookState({ ...V1, activeClass: undefined }).worn).toBe('blademaster');
+  });
+
   it('derives a deterministic per-save spark seed', () => {
     expect(migrateBookState(V1).spark.seed).toBe(migrateBookState(V1).spark.seed);
     const other = { ...V1, skills: { slash: { ...V1.skills.slash, learnedAt: 1731999999999 } } };
@@ -242,6 +247,41 @@ describe('v2 fill-ins', () => {
     expect(s.worn).toBe('blademaster');
     expect(s.imprints).toEqual([]);
     expect(s.spark).toMatchObject({ pity: { 'a>b': SPARK.pityCap }, counter: 0 });
+  });
+
+  it('keeps an explicit "No class" (worn: null) and its Keepsakes; a missing or unknown worn wears the first class', () => {
+    const base = {
+      version: 2,
+      classes: { blademaster: { rank: 6, xp: 0, spent: {} }, pyroblade: { rank: 2, xp: 0, spent: {} } },
+      flags: { [BOOK_FLAGS.classWorn]: 1 },
+      imprints: ['blademaster'],
+    };
+    const none = migrateBookState({ ...base, worn: null }, reg);
+    expect(none.worn).toBeNull();
+    expect(none.flags[BOOK_FLAGS.classWorn]).toBe(1); // a class was worn once: stays set
+    expect(none.imprints).toEqual(['blademaster']); // not worn, so its Keepsake stays slotted
+    // Idempotent: the SkillBook runs the migration again on construction.
+    expect(migrateBookState(none, reg)).toEqual(none);
+    const book = new SkillBook(reg, none);
+    expect(book.state.worn).toBeNull();
+    expect(book.serialize().worn).toBeNull();
+    // Missing / unknown / undiscovered worn ids still fall back to the first discovered class.
+    expect(migrateBookState({ ...base }, reg).worn).toBe('blademaster');
+    expect(migrateBookState({ ...base, worn: 'ghost' }, reg).worn).toBe('blademaster');
+    expect(migrateBookState({ ...base, worn: 42 }, reg).worn).toBe('blademaster');
+    expect(migrateBookState({ ...base, worn: 'pyroblade' }, reg).worn).toBe('pyroblade');
+    // No classes at all: nothing to wear either way.
+    expect(migrateBookState({ version: 2, worn: null }).worn).toBeNull();
+  });
+
+  it('a book that took its class off round-trips through serialize without wearing one again', () => {
+    const book = new SkillBook(reg);
+    book.state.classes.pyroblade = { rank: 1, xp: 0, spent: {} };
+    expect(book.wear('pyroblade').ok).toBe(true);
+    expect(book.unwear().ok).toBe(true);
+    const back = new SkillBook(reg, JSON.parse(JSON.stringify(book.serialize())) as SkillBookState);
+    expect(back.state.worn).toBeNull();
+    expect(back.state.classes.pyroblade).toBeDefined();
   });
 
   it('fills a save from before quests with an empty quest state', () => {

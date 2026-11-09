@@ -33,7 +33,7 @@ import { Y_BIAS, ySort } from '../render/depths';
 import { TILE } from '../world/runtime';
 import { fairTellMs } from '../vfx/recipe';
 import { clearShot, nextProjectileId } from './SkillSystem';
-import { PLAYER_R, distToSegment, inCone, inRange, inZone } from './tellhit';
+import { PLAYER_R, distToSegment, inCone, inRange, inZone, shotHits, shotReach } from './tellhit';
 
 const WITNESS_RANGE = 6 * TILE;
 /**
@@ -247,14 +247,14 @@ export class MonsterSkills {
         const count = sh.count ?? 1;
         const spread = ((sh.spread ?? (count > 1 ? 30 : 0)) * Math.PI) / 180;
         const angsAt = (base: number) => Array.from({ length: count }, (_, i) => (count > 1 ? base - spread / 2 + (spread * i) / (count - 1) : base));
-        // The aim follows the player through the wind-up; the volley leaves along the aim it shows on release.
-        const geom = (): TellShape => ({
-          kind: 'aim',
-          x: m.x,
-          y: m.y - Math.min(30, m.sprite.displayHeight * 0.5),
-          angs: angsAt(Math.atan2(p.y - m.y, p.x - m.x)),
-          len: Math.min(sh.range, Math.hypot(p.x - m.x, p.y - m.y) + 30),
-        });
+        // The aim follows the player through the wind-up; the volley leaves along the aim it shows on release. Each
+        // line ends where its shot would die (the first blocked tile on its ground path): telegraph = hit test.
+        const blocked = (x: number, y: number) => isBlockedPx(s.cm, x, y);
+        const geom = (): TellShape => {
+          const angs = angsAt(Math.atan2(p.y - m.y, p.x - m.x));
+          const len = Math.min(sh.range, Math.hypot(p.x - m.x, p.y - m.y) + 30);
+          return { kind: 'aim', x: m.x, y: m.y - Math.min(30, m.sprite.displayHeight * 0.5), angs, len, lens: angs.map((a) => shotReach(blocked, m.x, m.y, a, len)) };
+        };
         main = this.tell(m, skill, now, total, true, geom, () => {
           const base = Math.atan2(p.y - m.y, p.x - m.x);
           gameBus.emit('skillPulse', { ...ref, owner: m, index: 0, count: 1, ang: base, aim: { x: p.x, y: p.y }, x: m.x, y: m.y });
@@ -451,20 +451,29 @@ export class MonsterSkills {
     const p = s.player;
     for (let i = this.shots.length - 1; i >= 0; i--) {
       const sh = this.shots[i];
-      const sx = sh.vx * dt;
-      const sy = sh.vy * dt;
-      sh.x += sx;
-      sh.y += sy;
-      sh.traveled += Math.hypot(sx, sy);
+      const x0 = sh.x,
+        y0 = sh.y;
+      // A step never flies past the range, and stops where it enters a blocked tile (the wall check of the end point).
+      const step = Math.min(Math.hypot(sh.vx * dt, sh.vy * dt), Math.max(0, sh.range - sh.traveled));
+      const v = Math.hypot(sh.vx, sh.vy) || 1;
+      sh.x += (sh.vx / v) * step;
+      sh.y += (sh.vy / v) * step;
+      sh.traveled += step;
       sh.img.setPosition(sh.x, sh.y - 14).setDepth(ySort(sh.y, Y_BIAS.PROJECTILE));
-      let dead = sh.traveled >= sh.range || isBlockedPx(s.cm, sh.x, sh.y);
-      if (!dead && Math.hypot(p.x - sh.x, p.y - sh.y) <= PLAYER_R + sh.size / 2) {
-        this.hitPlayer(sh.hit, { x: sh.x - sh.vx * 0.05, y: sh.y - sh.vy * 0.05 });
+      const wall = isBlockedPx(s.cm, sh.x, sh.y);
+      let dead = sh.traveled >= sh.range || wall;
+      // Swept hit along this step (tellhit.shotHits), up to the wall it may have entered.
+      const reach = wall ? shotReach((x, y) => isBlockedPx(s.cm, x, y), x0, y0, Math.atan2(sh.vy, sh.vx), step, 2) : step;
+      const ex = x0 + (sh.vx / v) * reach,
+        ey = y0 + (sh.vy / v) * reach;
+      const hit = shotHits(p, x0, y0, ex, ey, sh.size);
+      if (hit) {
+        this.hitPlayer(sh.hit, { x: ex - sh.vx * 0.05, y: ey - sh.vy * 0.05 });
         dead = true;
       }
       if (dead) {
         const sk = sh.hit.skill;
-        gameBus.emit('projectileEnd', { owner: sh.m, obj: sh.img, mover: sh, id: sh.id, skillId: sk.id, skill: sk, element: sk.element, x: sh.x, y: sh.y, reason: sh.traveled >= sh.range ? 'expire' : isBlockedPx(s.cm, sh.x, sh.y) ? 'wall' : 'hit' });
+        gameBus.emit('projectileEnd', { owner: sh.m, obj: sh.img, mover: sh, id: sh.id, skillId: sk.id, skill: sk, element: sk.element, x: sh.x, y: sh.y, reason: hit ? 'hit' : wall ? 'wall' : 'expire' });
         sh.img.destroy();
         this.shots.splice(i, 1);
       }

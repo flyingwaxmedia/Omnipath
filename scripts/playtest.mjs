@@ -19,7 +19,10 @@
 // walks Hearthvale -> Greenmeadow through a real portal, fights,
 // reveals a hidden portal by casting, opens a Prism Gate, warps through every map via window.omnipath.debug, checks
 // that warping does not grow listener counts, takes Hale's First Drill quest (accept in the dialog, complete, turn in)
-// for Rising Kick, and takes portrait-phone / landscape-phone / iPad screenshots.
+// for Rising Kick, checks the softlock guard (a pause and a resume in one tick, back-to-back cards, dialogs queued behind
+// cards, the watchdog, a seeded mini-fuzz: never paused with nothing to close), keeps the centre band clear in portrait
+// and short landscapes (1280x720: warden plate, zone plate, toasts), and takes portrait-phone / landscape-phone / iPad
+// screenshots.
 // Exits non-zero on any console error, page error or failed check.
 import { createRequire } from 'node:module';
 import { mkdirSync } from 'node:fs';
@@ -429,7 +432,17 @@ try {
   else fail('Prism Gate still closed with 3 elements');
   await shot('09-prism-gate');
   await dbg('walkToPortal', 'gate');
-  if (await waitFor(async () => (await info()).map === 'vale.stormbreak', 25000, 'walk through the Prism Gate')) ok('walked through the Prism Gate');
+  // The level-1 hero crosses a level-9 field on the way: keep them alive (a death respawned them in Hearthvale and the
+  // walk never arrived), and allow for a slow machine (the walk itself is ~25 s at a low frame rate).
+  const crossed = await waitFor(
+    async () => {
+      await dbg('heal');
+      return (await info()).map === 'vale.stormbreak';
+    },
+    45000,
+    'walk through the Prism Gate',
+  );
+  if (crossed) ok('walked through the Prism Gate');
   await closeModal();
   await shot('10-stormbreak');
 
@@ -681,6 +694,170 @@ try {
   else fail('rift gate still closed after Thunderhoof');
   await shot('10b-stormbreak-cleared');
 
+  // ------------------------------------------------------------ softlock guard: never paused without something to close
+  // Phaser 3.90 queues ScenePlugin.pause()/resume() to the next update, so a pause and a resume in one tick dropped one
+  // of them: a card over a running world, or the world paused with nothing open. MapScene.setPaused now acts at once;
+  // ui.ts drains every dialog queued behind a card, and its watchdog repairs (and logs) any broken modal state.
+  await warp('vale.hearthvale');
+  const modal = () =>
+    page.evaluate(() => {
+      const { scene, ui, render } = window.omnipath;
+      const m = ui.modal;
+      return {
+        paused: scene.sys.isPaused(),
+        asleep: !!render?.asleep?.(),
+        open: ui.isOpen,
+        shown: !m.classList.contains('hidden') && m.childElementCount > 0,
+        card: !!m.querySelector(':scope > .discovery'),
+        dialog: m.querySelector('.dialog .who b')?.textContent ?? null,
+        watchdog: ui.watchdogLog.length,
+      };
+    });
+  const testCard = (title) => ({ icon: '🧪', kicker: 'TEST CARD', title, body: 'x' });
+  // a) Opened and closed by the same handler: the world runs again.
+  await page.evaluate(() => {
+    window.omnipath.ui.open('bag');
+    window.omnipath.ui.close();
+  });
+  await page.waitForTimeout(300);
+  let mst = await modal();
+  if (mst.paused || mst.open || mst.shown) fail(`open + close in one tick left ${JSON.stringify(mst)}`);
+  // b) One card closes as the next opens (same tick): the world stays paused under the second card.
+  await page.evaluate(
+    ([a, b]) => {
+      window.omnipath.ui.discovery(a);
+      window.omnipath.ui.discovery(b);
+    },
+    [testCard('First'), testCard('Second')],
+  );
+  await page.waitForTimeout(200);
+  await page.evaluate(() => document.querySelector('.discovery .ok')?.click());
+  await page.waitForTimeout(400);
+  mst = await modal();
+  if (!(mst.paused && mst.card)) fail(`the next card showed over a running world: ${JSON.stringify(mst)}`);
+  // c) Two dialogs queued behind a card both show, in order, after it (the second used to be dropped).
+  await page.evaluate(() => {
+    const ui = window.omnipath.ui;
+    ui.dialog('Dialog A', '🧪', 'first', [{ label: 'OK' }]);
+    ui.dialog('Dialog B', '🧪', 'second', [{ label: 'OK' }]);
+  });
+  const seen = [];
+  for (let i = 0; i < 6; i++) {
+    mst = await modal();
+    if (!mst.open) break;
+    if (mst.dialog) seen.push(mst.dialog);
+    const btn = (await page.$('.discovery .ok')) ?? (await page.$('.dialog [data-opt]'));
+    if (!btn) break;
+    await btn.click();
+    await page.waitForTimeout(250);
+  }
+  mst = await modal();
+  if (seen.join(',') !== 'Dialog A,Dialog B') fail(`dialogs queued behind a card: saw ${JSON.stringify(seen)}`);
+  else if (mst.paused || mst.open) fail(`after the queued dialogs: ${JSON.stringify(mst)}`);
+  else ok('same-tick pause/resume, back-to-back cards and dialogs queued behind cards keep the pause state right');
+  // c2) A card's button that opens a panel never replaces the minigame queued behind that card (it never finished:
+  //     the forge's ore was spent for nothing). The panel opens once the minigame is done.
+  await page.evaluate(() => {
+    const ui = window.omnipath.ui;
+    ui.discovery({ icon: '🧪', kicker: 'TEST CARD', title: 'See it', body: 'x', cta: { label: 'See it', run: () => ui.open('bag') } });
+    window.__forge = null;
+    void ui.forgeMinigame().then((g) => (window.__forge = g));
+  });
+  await page.waitForTimeout(250);
+  await page.click('.discovery .cta');
+  await page.waitForTimeout(250);
+  const mg = await page.evaluate(() => ({ panel: window.omnipath.ui.current, strike: !!document.querySelector('.minigame .strike') }));
+  if (!(mg.panel === 'minigame' && mg.strike)) fail(`a card's button replaced the minigame behind it: ${JSON.stringify(mg)}`);
+  else {
+    for (let i = 0; i < 3; i++) {
+      await page.click('.minigame .strike');
+      await page.waitForTimeout(150);
+    }
+    if (await waitFor(() => page.evaluate(() => window.__forge !== null), 5000, 'the forge minigame behind a card finishes')) {
+      await page.waitForTimeout(200);
+      mst = await modal();
+      const now = await info();
+      if (now.panel !== 'bag' || !mst.paused) fail(`after the minigame: panel ${now.panel}, ${JSON.stringify(mst)}`);
+      else ok("a card's button waits for the minigame behind the card, then opens its panel");
+    }
+  }
+  await closeModal();
+  // d) The watchdog: break the state on purpose (paused, nothing open): it resumes the world within ~2 s and logs it.
+  await page.evaluate(() => window.omnipath.scene.sys.pause());
+  await waitFor(async () => !(await modal()).paused, 4000, 'watchdog resumes a world paused with nothing open');
+  mst = await modal();
+  if (mst.watchdog !== 1) fail(`watchdog log after one forced softlock: ${mst.watchdog} entries`);
+  else ok('the watchdog repairs a world paused with nothing open (and logs it)');
+  await page.evaluate(() => (window.omnipath.ui.watchdogLog.length = 0));
+  // e) Seeded mini-fuzz: fights, learning (class discovery), quests, NPC dialogs, panels, cards, dialogs and warps,
+  //    with the invariant checked in the page every 100 ms. Nothing may stay frozen without a visible panel or card,
+  //    nothing may show over a running world, and the watchdog must never have to step in.
+  await page.evaluate(() => {
+    const { scene, ui, render } = window.omnipath;
+    const f = (window.__softlock = { bad: [], since: {} });
+    f.timer = setInterval(() => {
+      const m = ui.modal;
+      const shown = !m.classList.contains('hidden') && m.childElementCount > 0;
+      const asleep = !!render?.asleep?.();
+      const frozen = scene.sys.isPaused() || asleep;
+      const running = scene.sys.isActive() && !scene.warping && !asleep;
+      const rules = { 'frozen with nothing shown': frozen && !shown, 'modal over a running world': ui.isOpen && running };
+      for (const [name, isBad] of Object.entries(rules)) {
+        if (!isBad) delete f.since[name];
+        else if ((f.since[name] ??= performance.now()) < performance.now() - 1000 && f.bad.length < 5) {
+          f.bad.push(`${name} (panel ${ui.current}, card ${ui.showingDiscovery}, map ${scene.mapId})`);
+          delete f.since[name];
+        }
+      }
+    }, 100);
+  });
+  let seed = 7;
+  const rand = () => (seed = (seed * 1103515245 + 12345) >>> 0) / 4294967296;
+  const any = (xs) => xs[Math.floor(rand() * xs.length)];
+  const lists = await page.evaluate(() => {
+    const r = window.omnipath.reg;
+    const vals = (m) => (m instanceof Map ? [...m.values()] : Array.isArray(m) ? m : Object.values(m ?? {}));
+    return {
+      skills: vals(r.skills).filter((x) => x.tier >= 1).map((x) => x.id),
+      classes: vals(r.classes).map((c) => c.id),
+      quests: vals(r.quests).map((q) => q.id),
+    };
+  });
+  const clickAny = async (sel) => {
+    const els = await page.$$(sel);
+    if (els.length) await any(els).click({ timeout: 600 }).catch(() => {});
+  };
+  const moves = [
+    () => dbg('fight'),
+    () => dbg('learn', any(lists.skills)),
+    () => dbg('become', any(lists.classes), true),
+    () => dbg('accept', any(lists.quests)),
+    () => dbg('complete', any(lists.quests)),
+    () => dbg('turnIn', any(lists.quests)),
+    () => page.evaluate(() => window.omnipath.scene.npcs[0] && window.omnipath.debug.npc(window.omnipath.scene.npcs[0].def.id)),
+    () => page.evaluate((p) => window.omnipath.ui.open(p), any(['skills', 'classes', 'codex', 'bag', 'map'])),
+    () => clickAny('.sheet .x'),
+    () => clickAny('.discovery .ok, .discovery .cta, .discovery .act'),
+    () => clickAny('.dialog [data-opt], .dialog [data-accept], .dialog [data-complete]'),
+    () => page.evaluate((c) => window.omnipath.ui.discovery(c), testCard('Fuzz card')),
+    () => dbg('warp', any(['vale.hearthvale', 'vale.greenmeadow', 'vale.mirror_lake', 'rift.riftmarch'])),
+    () => page.waitForTimeout(600),
+  ];
+  const fuzzSteps = quick ? 40 : 120;
+  for (let i = 0; i < fuzzSteps; i++) {
+    await any(moves)().catch(() => {});
+    await page.waitForTimeout(60 + Math.floor(rand() * 140));
+  }
+  for (let i = 0; i < 6 && (await info()).open; i++) await closeModal();
+  await page.waitForTimeout(1500);
+  const fz = await page.evaluate(() => {
+    clearInterval(window.__softlock.timer);
+    return { bad: window.__softlock.bad, watchdog: window.omnipath.ui.watchdogLog.map((w) => `${w.problem}: ${w.state}`) };
+  });
+  if (fz.bad.length) fail(`softlock fuzz: ${fz.bad.join(' | ')}`);
+  else if (fz.watchdog.length) fail(`softlock fuzz: the watchdog had to step in: ${fz.watchdog.join(' | ')}`);
+  else ok(`softlock fuzz (${fuzzSteps} random steps): never frozen with nothing shown, never a panel over a running world`);
+
   // ------------------------------------------------------------ warp chain through every map
   const before = await dbg('listeners');
   const chain = quick ? ALL_MAPS.slice(0, 8) : ALL_MAPS;
@@ -743,11 +920,14 @@ try {
   // Portrait screens keep the middle band (40–60 % of the height, where the player stands) free of HUD boxes, with
   // the Pursuits open: tap-to-move must reach the world there. The bar, the attack cluster, the left-edge quick
   // buttons, the fading log and toasts are allowed.
-  const middleBand = () =>
-    page.evaluate(() => {
+  const ALL_BOXES = ['.hud-me .me-plate', '.hud-me .me-stats', '.hud-right .menu', '.hud-right .mm-dock', '.hud-right .pursuits', '.hud-centre .zone-banner', '.hud-centre .target', '.hud-centre .navpill'];
+  // Landscape: the centre column over the player (zone plate, target plate, nav pill) and the toasts under it.
+  const CENTRE_BOXES = ['.hud-centre .zone-banner', '.hud-centre .target', '.hud-centre .navpill', '.toasts .toast'];
+  const middleBand = (sels = ALL_BOXES) =>
+    page.evaluate((list) => {
       const H = innerHeight;
       const out = [];
-      for (const sel of ['.hud-me .me-plate', '.hud-me .me-stats', '.hud-right .menu', '.hud-right .mm-dock', '.hud-right .pursuits', '.hud-centre .zone-banner', '.hud-centre .target', '.hud-centre .navpill']) {
+      for (const sel of list) {
         const el = document.querySelector(sel);
         if (!el || el.offsetParent === null || el.classList.contains('hidden')) continue;
         const r = el.getBoundingClientRect();
@@ -755,13 +935,14 @@ try {
         if (r.top < H * 0.6 && r.bottom > H * 0.4) out.push(`${sel} ${Math.round(r.top)}-${Math.round(r.bottom)}`);
       }
       return out;
-    });
+    }, sels);
   for (const [name, w, h] of [
     ['portrait-phone', 390, 844],
     ['landscape-phone', 844, 390],
     ['ipad-landscape', 1024, 768],
     ['ipad-portrait', 810, 1080],
     ['desktop', 1440, 900],
+    ['laptop-1280', 1280, 720],
   ]) {
     await page.setViewportSize({ width: w, height: h });
     await page.waitForTimeout(400);
@@ -777,6 +958,21 @@ try {
       const mid = await middleBand();
       if (mid.length) fail(`${name}: HUD in the middle of the screen: ${mid.join(', ')}`);
       else ok(`${name}: the middle band is free of HUD (Pursuits open, a target up)`);
+    } else {
+      // Landscape (short ones especially, 1280×720 at 2 CSS px per art px): a warden's plate and the zone plate must
+      // not reach down over the player, nor the toasts.
+      await page.evaluate(() => {
+        window.omnipath.ui.banner('Stormbreak', 'Lv 12');
+        window.omnipath.ui.setTarget({ name: 'Thunderhoof', level: 12, hp: 4000, maxHp: 5000, boss: true });
+        window.omnipath.ui.toast('AUTO is on: you fight by yourself.');
+        window.omnipath.ui.toast('You awaken at the Windcrest Hill waystone.');
+      });
+      await page.waitForTimeout(500);
+      await shot(`13-${name}-warden`);
+      const mid = await middleBand(CENTRE_BOXES);
+      if (mid.length) fail(`${name}: the centre column covers the player: ${mid.join(', ')}`);
+      else ok(`${name}: the centre band is clear (warden plate, zone plate and toasts)`);
+      await page.evaluate(() => window.omnipath.ui.setTarget(null));
     }
     // Every visible HUD and panel button must be a >= 44 px touch target.
     const smallButtons = () =>
@@ -795,6 +991,11 @@ try {
       small = small.concat(await smallButtons());
       await page.click('.sheet .x');
     }
+    // The Star Chart with a star's card docked beside the sky (its constellation chips shrink and wrap there).
+    await page.evaluate(() => window.omnipath.ui.open('skills', `star:${window.omnipath.session.book.known()[0].id}`));
+    await page.waitForTimeout(300);
+    small = small.concat((await smallButtons()).map((t) => `${t} (card docked)`));
+    await page.click('.sheet .x');
     if (small.length) fail(`${name}: buttons smaller than 44 px: ${[...new Set(small)].join(', ')}`);
   }
   ok('layouts rendered');

@@ -1,11 +1,14 @@
-// Live bolt strips (docs/VFX.md §8.5): chain hops and arc zaps are the only cast-time bakes. Each hop rasterises
-// into a pooled transient canvas texture (VFX_BUDGET.boltCanvases: 8 × 256², 2 × 512²), its frames shelf-packed,
-// and uploads by dirty rectangle like the atlas. When no canvas is free (or the hop does not fit) the caller draws a
-// 2 px bead line instead.
+// Live bolt strips (docs/VFX.md §8.5, §8.12): chain hops and arc zaps are the only cast-time bakes. A hop's frames are
+// COMPOSED from the bolt look's pre-baked strip pool (../boltpool.ts: warmed with the loadout and the map's spawns, in
+// idle slices) — a fraction of a millisecond instead of 1-5 ms of disc stamping per hop; a look that is not baked yet
+// paints the hop with the template once (as before) and queues its pool. The frames go into a pooled transient canvas
+// texture (VFX_BUDGET.boltCanvases: 8 × 256², 2 × 512²), shelf-packed, uploaded by dirty rectangle like the atlas.
+// When no canvas is free (or the hop does not fit) the caller draws a 2 px bead line instead.
 import type Phaser from 'phaser';
-import { colourise, glowTwin, indexFrames } from '../bake';
+import { indexFrames } from '../bake';
+import { BoltPool, boltRgba, composeBolt } from '../boltpool';
 import { lut as lutFor } from '../ramps';
-import { VFX_BUDGET, type BakeOptions, type RgbaFrame, type VfxPiece } from '../types';
+import { VFX_BUDGET, type BakeOptions, type BoltParams, type RgbaFrame, type VfxPiece } from '../types';
 import type { FrameRef, StripRef } from './atlas';
 
 interface Slot {
@@ -21,6 +24,10 @@ let boltSeq = 0;
 export class BoltCanvases {
   private slots: Slot[] = [];
   bytes = 0;
+  /** Pre-baked strip pools per bolt look (run-wide, like the canvases). */
+  readonly pool = new BoltPool();
+  /** QA: hops baked, hops composed from the pool, and the hop bake time (compose / paint + RGBA + pack + upload). */
+  readonly hopStats = { hops: 0, pooled: 0, peakMs: 0, totalMs: 0, frameMs: 0 };
 
   constructor(
     textures: Phaser.Textures.TextureManager,
@@ -47,34 +54,63 @@ export class BoltCanvases {
 
   /** Bakes a bolt piece into a free canvas: its strip, or null (no canvas free / too big). Release when done. */
   bake(piece: VfxPiece, opts: BakeOptions): { strip: StripRef; release: () => void } | null {
-    const idx = indexFrames(piece, 0, opts);
+    const t0 = performance.now();
+    const prm = piece.params as BoltParams;
+    const look = this.pool.look(piece.motif, prm.strength);
+    if (!look) this.pool.want(piece.motif, prm.strength);
+    const idx = look ? composeBolt(prm, look, opts) : indexFrames(piece, 0, opts);
     const table = lutFor(piece.ramp, opts.lut);
-    const body: RgbaFrame[] = idx.map((f) => colourise(f, table));
-    const glow: RgbaFrame[] = idx.map((f) => glowTwin(f));
+    const rgba = idx.map((f) => boltRgba(f, table));
+    const body: RgbaFrame[] = rgba.map((f) => f.body);
+    const glow: RgbaFrame[] = rgba.map((f) => f.glow);
+    // Frames ready (compose / paint + RGBA); the rest is packing and the uploads.
+    this.hopStats.frameMs += performance.now() - t0;
     const rects = [...body, ...glow].filter((f) => f.w && f.h);
-    const slot = this.slots
-      .filter((s) => !s.busy)
-      .sort((a, b) => a.side - b.side)
-      .find((s) => this.pack(s.side, rects) !== null);
-    if (!slot) return null;
-    const at = this.pack(slot.side, rects)!;
+    const done = () => {
+      const ms = performance.now() - t0;
+      const st = this.hopStats;
+      st.hops++;
+      if (look) st.pooled++;
+      st.totalMs += ms;
+      if (ms > st.peakMs) st.peakMs = ms;
+    };
+    let slot: Slot | null = null;
+    let at: { x: number; y: number }[] | null = null;
+    for (const sl of this.slots.filter((x) => !x.busy).sort((a, b) => a.side - b.side)) {
+      at = this.pack(sl.side, rects);
+      if (at) {
+        slot = sl;
+        break;
+      }
+    }
+    if (!slot || !at) {
+      done();
+      return null;
+    }
     slot.busy = true;
-    const ctx = slot.tex.getContext();
-    ctx.clearRect(0, 0, slot.side, slot.side);
     for (const n of slot.names) slot.tex.remove(n);
     slot.names = [];
+    // One staging image over the packed rows: one putImageData and one texture upload per hop (not two per frame).
+    let usedH = 1;
+    rects.forEach((f, i) => (usedH = Math.max(usedH, at![i].y + f.h)));
+    const W = slot.side;
+    const staging = new Uint8ClampedArray(W * usedH * 4);
+    const s32 = new Uint32Array(staging.buffer);
     const refs = new Map<RgbaFrame, FrameRef>();
     rects.forEach((f, i) => {
-      const p = at[i];
+      const p = at![i];
       const name = `b${boltSeq++}`;
-      slot.tex.add(name, 0, p.x, p.y, f.w, f.h);
-      slot.names.push(name);
-      ctx.putImageData(new ImageData(f.data as unknown as Uint8ClampedArray<ArrayBuffer>, f.w, f.h), p.x, p.y);
-      this.upload(slot, p.x, p.y, f);
-      refs.set(f, { tex: slot.key, name, page: -2, w: f.w, h: f.h, ox: f.ox, oy: f.oy, ms: f.ms });
+      slot!.tex.add(name, 0, p.x, p.y, f.w, f.h);
+      slot!.names.push(name);
+      const src = new Uint32Array(f.data.buffer, f.data.byteOffset, f.w * f.h);
+      for (let y = 0; y < f.h; y++) s32.set(src.subarray(y * f.w, (y + 1) * f.w), (p.y + y) * W + p.x);
+      refs.set(f, { tex: slot!.key, name, page: -2, w: f.w, h: f.h, ox: f.ox, oy: f.oy, ms: f.ms });
     });
+    slot.tex.getContext().putImageData(new ImageData(staging as unknown as Uint8ClampedArray<ArrayBuffer>, W, usedH), 0, 0);
+    this.upload(slot, 0, 0, { w: W, h: usedH, data: staging });
     const ref = (f: RgbaFrame): FrameRef => refs.get(f) ?? { tex: '', name: '', page: -1, w: 0, h: 0, ox: f.ox, oy: f.oy, ms: f.ms };
     const strip: StripRef = { frames: body.map(ref), glow: glow.map(ref), totalMs: body.reduce((a, f) => a + f.ms, 0) };
+    done();
     return { strip, release: () => (slot.busy = false) };
   }
 
@@ -101,7 +137,7 @@ export class BoltCanvases {
     return out;
   }
 
-  private upload(slot: Slot, x: number, y: number, f: RgbaFrame): void {
+  private upload(slot: Slot, x: number, y: number, f: { w: number; h: number; data: Uint8ClampedArray }): void {
     this.bytes += f.w * f.h * 4;
     const gl = this.gl;
     if (!gl || gl.isContextLost()) return;

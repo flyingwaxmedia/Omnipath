@@ -8,7 +8,7 @@
 // chunk's OUTWARD NORMAL angle (u * 22.5 deg). The runtime places N = ceil(perimeter / 10) chunks and picks each one's
 // bake with pickDir(normalAngle, 16): normals mirror correctly under flipX / flipY (tangent angles would not).
 // Dashed and gapped patterns are then placement choices (hide 2 of 5 / every 4th chunk).
-import { IDX, RING_WHOLE_MAX, SMEAR_TAIL, smearStage, type RingInk, type RingParams, type Template } from '../types';
+import { IDX, RING_LONG, RING_WHOLE_MAX, SMEAR_TAIL, smearStage, type RingInk, type RingParams, type Template } from '../types';
 import { hash01 } from '../dither';
 import type { Painter } from '../painter';
 import { Strip, clampMs, headingOf, mkKey, outCubic, seedOf, type TemplateOptions } from './kit';
@@ -26,7 +26,7 @@ const UNIT = 10;
 const isPieces = (p: RingParams) => Math.max(p.r, p.anim === 'expand' || p.anim === 'contract' ? (p.r0 ?? 0) : 0) > RING_WHOLE_MAX;
 
 function keyOf(p: RingParams, _motif: unknown, opts: TemplateOptions): string {
-  if (isPieces(p)) return mkKey('ring', { pieces: 1, thick: p.thick, style: p.style, ink: p.ink, smear: p.smear }, null, opts);
+  if (isPieces(p)) return mkKey('ring', { pieces: 1, thick: p.thick, style: p.style, ink: p.ink, smear: p.smear, unit: p.unit === 20 ? 20 : undefined }, null, opts);
   const f: Record<string, unknown> = { r: p.r, aspect: p.aspect, thick: p.thick, style: p.style, ink: p.ink, anim: p.anim, arc: p.arc, smear: p.smear };
   if (p.anim === 'expand' || p.anim === 'contract') {
     f.r0 = p.r0;
@@ -37,6 +37,26 @@ function keyOf(p: RingParams, _motif: unknown, opts: TemplateOptions): string {
     f.ms = p.ms;
   }
   return mkKey('ring', f, null, opts, true);
+}
+
+/**
+ * Chunk centres (parametric angles from the top, clockwise) for a long-chunk rim of rx × ry (docs/VFX.md §8.12):
+ * one chunk length apart along the rim (arc length: a wide ellipse has no gaps at its top), a 20 px chunk wherever
+ * the radius of curvature is >= RING_LONG.minCurve (its chord strays <= 0.5 px from the rim), else a 10 px one.
+ */
+export function chunkLayout(rx: number, ry: number): { ths: number[]; long: boolean[] } {
+  const ths: number[] = [];
+  const long: boolean[] = [];
+  let th = -Math.PI / 2;
+  const end = th + Math.PI * 2;
+  for (let guard = 0; th < end - 1e-6 && guard < 1024; guard++) {
+    const speed = Math.max(1e-3, Math.hypot(rx * Math.sin(th), ry * Math.cos(th)));
+    const isLong = (speed * speed * speed) / (rx * ry) >= RING_LONG.minCurve;
+    ths.push(th);
+    long.push(isLong);
+    th += (isLong ? 20 : 10) / speed;
+  }
+  return { ths, long };
 }
 
 /** Ramanujan's ellipse perimeter. */
@@ -96,35 +116,39 @@ function drawWhole(p: Painter, prm: RingParams, d: RingDraw, half: TemplateOptio
 }
 
 function pieceFrames(prm: RingParams, u: number, opts: TemplateOptions, key: string): Strip {
-  const S = new Strip(16, 16, 8, 8, seedOf(key, u), opts, { glowFrom: 'hot' });
+  // A 10 px chunk in a 16 px cell (16 headings), or a long 20 px chunk in a 26 px cell (32 headings).
+  const long = prm.unit === 20;
+  const half = long ? 10 : 5;
+  const side = long ? 26 : 16;
+  const S = new Strip(side, side, side / 2, side / 2, seedOf(key, u), opts, { glowFrom: 'hot' });
   const [o, i] = INKS[prm.ink];
   // A smear chunk is as wide as its stage; the head (hot) is white-hot: 2 px R5 at the rim, R4 inside.
   const t = prm.smear ?? prm.thick;
   const whiteHot = !!prm.smear && prm.ink === 'hot';
   const a = prm.ink === 'dim' ? 0.5 : 1;
-  // Local +x = outward normal; the chunk spans y in [-5, 5), x in (-t, 0].
+  // Local +x = outward normal; the chunk spans y in [-half, half), x in (-t, 0].
   S.add(33, (p) => {
-    const chunk = (x0: number, x1: number, ink: (x: number) => number, y0 = -5, y1 = 4.99) =>
+    const chunk = (x0: number, x1: number, ink: (x: number) => number, y0 = -half, y1 = half - 0.01) =>
       p.fill(x0, y0, x1, y1, (lx, ly) => (lx > x0 && lx <= x1 && ly >= y0 && ly < y1 ? ink(lx) : 0), a);
     const off = prm.style === 'jagged' ? 1 : 0;
     const bandInk = (x: number) =>
       whiteHot ? (x > -2 ? IDX.R5 : IDX.R4) : prm.style === 'inverted' ? (x > -1 ? IDX.R4 : IDX.R0) : x > -1 ? o : i;
-    chunk(-t, 0, bandInk, -5, 0);
-    chunk(-t + off, off, bandInk, 0, 4.99);
+    chunk(-t, 0, bandInk, -half, 0);
+    chunk(-t + off, off, bandInk, 0, half - 0.01);
     if (prm.style === 'double') chunk(-t - 3, -t - 2, () => i);
     if (prm.style === 'dashed') {
       chunk(0, 1, () => IDX.ACCENT);
       chunk(1, 2, () => IDX.OUTLINE);
       chunk(-t - 1, -t, () => IDX.OUTLINE);
     }
-  }, 'normal', headingOf(u, 16));
+  }, 'normal', headingOf(u, long ? 32 : 16));
   return S;
 }
 
 export const ring: Template<'ring'> = {
   id: 'ring',
   use: (p) => (isPieces(p) ? 'pieces' : p.anim === 'march' || p.anim === 'static' ? 'loop' : 'once'),
-  dirs: (p) => (isPieces(p) ? 16 : 1),
+  dirs: (p) => (isPieces(p) ? (p.unit === 20 ? 32 : 16) : 1),
   key: keyOf,
   frames(prm, motif, u, opts) {
     const key = keyOf(prm, motif, opts);

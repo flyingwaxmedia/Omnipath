@@ -150,7 +150,7 @@ describe('class power budget (SPEC §5)', () => {
   });
 
   it('the worst case counts every component (a known skill, by hand)', () => {
-    // Tempest Dancer worn on Firestorm (blade, spin, aoe, wind, fire): spin 10 + Spin Focus 3×2 + capstone 3
+    // Tempest Dancer worn on Firestorm (blade, spin, aoe, wind, fire): spin 10 + Spin Power 3×2 + capstone 3
     // + the 3 best imprints among blade/spin/aoe/wind/fire/... (Tier I 2 each) = 25.
     const td = reg.classDef('tempest_dancer')!;
     const firestorm = reg.skill('firestorm')!;

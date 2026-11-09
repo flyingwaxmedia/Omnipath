@@ -79,6 +79,7 @@ import {
 import { statPct } from '../../core/passives';
 import { gameBus } from '../events';
 import { attachAudio } from '../audio';
+import { attachAmbient } from '../render/ambient';
 import { DEPTH, Y_BIAS, ySort } from '../render/depths';
 
 export type Arrival = string | { waystone: string };
@@ -227,6 +228,7 @@ export class MapScene extends Phaser.Scene implements GameController {
 
     this.wireEvents();
     this.disposers.push(attachAudio(this)); // sounds for this map (src/game/audio); disposed on SHUTDOWN
+    this.disposers.push(attachAmbient(this)); // living world: weather, clouds, water, smoke, prop idles (render/ambient.ts)
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => this.shutdown());
 
     this.enterMap();
@@ -1292,10 +1294,20 @@ export class MapScene extends Phaser.Scene implements GameController {
     // Mid-warp: let the 220 ms fade finish (a paused camera never completes it, which left the game stuck
     // half-faded when a dialog opened during a warp). create() re-pauses if a panel is still open.
     if (paused && this.warping) return;
-    if (paused && this.scene.isActive()) {
-      this.scene.pause();
+    // At once (Systems), not ScenePlugin.pause()/resume(): Phaser 3.90 queues those to the next Scene Manager update,
+    // so a resume and a pause in the same tick (one card closes as the next opens) read a stale status here and the
+    // pause was dropped (the world ran under the card), and a pause then a resume in one tick (a panel opened and
+    // closed by the same handler) dropped the resume: the world stayed paused with nothing open (the softlock).
+    if (paused && this.sys.isActive()) {
+      this.sys.pause();
       this.pausedAt = performance.now();
-    } else if (!paused && this.scene.isPaused()) this.scene.resume();
+    } else if (!paused && this.sys.isPaused()) this.sys.resume();
+  }
+
+  /** For the UI's modal watchdog (ui.ts): paused by a panel, running, or between maps (warp / restart). */
+  pauseState(): 'paused' | 'running' | 'between' {
+    if (this.sys.isPaused()) return this.warping ? 'between' : 'paused';
+    return this.sys.isActive() && !this.warping ? 'running' : 'between';
   }
 
   /** Wall time (performance.now) when a panel paused the scene: a paused scene's clock stands still. */

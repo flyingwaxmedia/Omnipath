@@ -104,3 +104,12 @@ export const Y_BIAS = {
 export const VFX_DEPTH = {
   FX_MOTES: 89000,
 } as const;
+
+// Light lane additions (docs/QUALITY-PLAN.md §10–11; append-only). The pixel-banded light map (render/lighting.ts) is
+// a RenderTexture composited with MULTIPLY at DEPTH.DARKNESS (the VFX glow layer moves to DEPTH.LIGHT above it on dark
+// maps). OmniGrade (render/grade.ts) grades everything below UNGRADED_MIN on the world camera; from UNGRADED_MIN up
+// (telegraph rims, combat text, screen FX) draws on an ungraded overlay camera, so danger reads are never regraded.
+export const LIGHT_DEPTH = {
+  LIGHT_MAP: DEPTH.DARKNESS,
+  UNGRADED_MIN: DEPTH.TELL_TOP,
+} as const;

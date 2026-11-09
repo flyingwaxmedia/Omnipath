@@ -548,6 +548,10 @@ export class Hud {
     const snap = (v: number) => Math.round(v * dpr) / dpr;
     const whole = (v: number) => Math.ceil(v / u - 0.01) * u;
     const port = this.portraitPhone();
+    // Short landscapes (laptops at 2 CSS px per art px, phones on their side) keep the middle band clear like portrait
+    // does: the zone plate fades after arrival (a target takes its place in the top band) and toasts rise from above
+    // the skill bar instead of stacking down over the player.
+    const clearMiddle = port || this.lay.short;
     const m = this.len('--m', 8);
     // Skill bar: its plan (rows, slot size), width, and its left edge (centred, clear of the attack cluster).
     const baseSlot = this.len('--slot', 52);
@@ -594,7 +598,13 @@ export class Hud {
     const room = left - 2 * m;
     const stacked = room < 170 * u;
     this.logEl.classList.toggle('stacked', stacked);
-    this.setVar('--log-w', `${snap(stacked ? Math.min(320 * u, W * 0.62) : Math.min(340 * u, room))}px`);
+    // Stacked, its 3 lines (≈ 16 art px each) start right of the quick column (Heal / Recall / Rest) when that column
+    // reaches down to them (short landscapes such as 1280×720 put the log's top line under the Rest label).
+    const qk = stacked ? this.el.querySelector('.quick')?.getBoundingClientRect() : undefined;
+    const logLeft = qk && qk.width > 0 && qk.bottom > this.logEl.getBoundingClientRect().bottom - 3 * 16 * u - 2 * u ? qk.right + 4 * u : 0;
+    this.setVar('--log-left', logLeft ? `${snap(logLeft)}px` : '');
+    const logRoom = logLeft ? clLeft - 8 * u - logLeft : Infinity;
+    this.setVar('--log-w', `${snap(stacked ? Math.min(320 * u, W * 0.62, logRoom) : Math.min(340 * u, room))}px`);
     // Stat strip: when the buttons stack into rows beside it (portrait phones), its text stops short of them (only the
     // fading right padding may slide under the buttons).
     const menu = this.menuEl.getBoundingClientRect();
@@ -615,8 +625,8 @@ export class Hud {
     zone.classList.remove('compact');
     let zw = whole(zone.getBoundingClientRect().width);
     let zh = zone.offsetHeight;
-    // Portrait, the plate faded away: the column is placed for what it shows now (the target plate, if any).
-    if (port && zone.classList.contains('gone')) {
+    // Portrait / short landscape, the plate faded away: the column is placed for what it shows now (the target plate).
+    if (clearMiddle && zone.classList.contains('gone')) {
       this.targetEl.style.width = '';
       const t = this.targetEl.classList.contains('hidden') ? null : this.targetEl.getBoundingClientRect();
       zw = zwCompact = t && t.width > 0 ? whole(t.width) : 44 * u;
@@ -651,15 +661,25 @@ export class Hud {
     // Toasts. Landscape: centred under the plate (+ target), slid sideways into the free span when needed. Portrait:
     // they rise from just above the skill bar / attack cluster / log, clear of the player in the middle.
     const centreBottom = this.centre.getBoundingClientRect().bottom;
-    if (port) {
+    if (clearMiddle) {
       // The log (stacked above the bar) keeps room for its 3 lines (≈ 16 art px each) even while they fade.
       const logTop = stacked ? this.logEl.getBoundingClientRect().bottom - 3 * 16 * u : H;
-      const anchor = Math.min(cl.width ? cl.top : H, this.hotbar.getBoundingClientRect().top, logTop);
+      const barTop = this.hotbar.getBoundingClientRect().top;
+      if (port) {
+        const anchor = Math.min(cl.width ? cl.top : H, barTop, logTop);
+        this.setVar('--toast-bottom', `${snap(H - anchor + 6 * u)}px`);
+        this.setVar('--toast-x', `${snap(W / 2)}px`);
+        this.setVar('--centre-w', `${Math.floor(W - 2 * m)}px`);
+      } else {
+        // Landscape: above the bar, centred on it (the attack cluster stands to its right, not under the toasts).
+        const cx = left + bw / 2;
+        const half = Math.min(cx - m, clLeft - 8 * u - cx);
+        this.setVar('--toast-bottom', `${snap(H - Math.min(barTop, logTop) + 6 * u)}px`);
+        this.setVar('--toast-x', `${snap(cx)}px`);
+        this.setVar('--centre-w', `${Math.floor(Math.max(bw, 2 * half))}px`);
+      }
       this.toastEl.classList.add('rise');
       this.setVar('--toast-top', 'auto');
-      this.setVar('--toast-bottom', `${snap(H - anchor + 6 * u)}px`);
-      this.setVar('--toast-x', `${snap(W / 2)}px`);
-      this.setVar('--centre-w', `${Math.floor(W - 2 * m)}px`);
     } else {
       const below = centreBottom;
       const side = (r: DOMRect) => r.width > 0 && r.top < below + 200 * u && r.bottom > below;
@@ -691,7 +711,8 @@ export class Hud {
     const bar = this.hotbar.getBoundingClientRect();
     if (!bar.height) return;
     const limit = bar.top - 4 * this.scale.px;
-    const ceiling = window.innerHeight * 0.55;
+    // Rising toasts stop below the middle band (portrait: they may reach a little higher, the bar is two rows).
+    const ceiling = window.innerHeight * (this.lay.port ? 0.55 : 0.6);
     for (const k of kids.slice(0, -1)) {
       const r = this.toastEl.getBoundingClientRect();
       if (rise ? r.top >= ceiling : r.bottom <= limit) break;
@@ -927,7 +948,7 @@ export class Hud {
     this.queueLayout();
   }
 
-  /** Portrait: the zone plate shows on arrival and fades after a few seconds (CSS: only on .hud-port). */
+  /** Portrait / short landscape: the zone plate shows on arrival and fades after a few seconds (CSS: .hud-port, .hud-short). */
   private armZoneFade(): void {
     this.zoneEl.classList.remove('faded', 'gone');
     clearTimeout(this.zoneFade);
@@ -1024,6 +1045,13 @@ export class Hud {
     if (fresh) {
       this.targetSince = performance.now();
       this.setTargetIdle(false);
+      // Portrait / short landscape: the target plate takes the zone plate's place in the top band at once (stacked
+      // under it, a warden's plate reached down over the player at 1280×720).
+      if ((this.lay.port || this.lay.short) && !this.zoneEl.classList.contains('gone')) {
+        clearTimeout(this.zoneFade);
+        this.zoneEl.classList.add('faded', 'gone');
+        this.queueLayout();
+      }
     }
     this.targetEl.classList.remove('hidden');
     this.targetEl.classList.toggle('boss', !!t.boss);

@@ -4,11 +4,13 @@
 // Game systems drive it through the members below (position, path, timers, statuses, attackAnim, setCast, sync…).
 // Buff auras, the Tier III class aura, status overlays (stun stars, frost, poison…) and the hurt flash's colours are
 // the VFX runtime's; the body takes the hit feel through hold / impactFlash / squash / recoil (vfx/juice.ts).
+// Pixel rule (docs/QUALITY-PLAN.md §1): the sprite sits on whole pixels and is never scaled but for the 1-frame squash
+// (the stunned shake steps by whole pixels). Floating text over the player goes in its lanes (render/text.ts).
 import Phaser from 'phaser';
 import type { StatusKind, WeaponType } from '../../core/types';
 import { DEPTH, ySort } from '../render/depths';
-import { type WorldLabel, worldLabel } from '../render/text';
-import { PLAYER_STATUS_ICONS, statusIconKey } from './actorArt';
+import { type TextAnchor, type WorldLabel, trackTextAnchor, worldLabel } from '../render/text';
+import { PLAYER_STATUS_ICONS, opaqueTop, statusIconKey } from './actorArt';
 import { ensurePlayerLook, playerAnims } from './looks';
 import { iconRow } from './rules';
 
@@ -28,8 +30,11 @@ const ATK_MS = 190;
 /** Status icons: size and gap (art px). */
 const ICON = 9;
 const ICON_GAP = 1;
+/** Stunned shake: whole-pixel x offsets stepped every SHAKE_MS (no sub-pixel wobble). */
+const SHAKE = [0, 1, 0, -1] as const;
+const SHAKE_MS = 60;
 
-export class Player {
+export class Player implements TextAnchor {
   readonly sprite: Phaser.GameObjects.Sprite;
   readonly shadow: Phaser.GameObjects.Image;
   /** Name tag under the feet (bitmap pixel font). */
@@ -79,6 +84,7 @@ export class Player {
   private castProgress: number | null = null;
   private icons: Phaser.GameObjects.Image[] = [];
   private iconKey = '';
+  readonly textRole = 'player' as const;
 
   constructor(
     readonly scene: Phaser.Scene,
@@ -93,6 +99,38 @@ export class Player {
     this.castBar = scene.add.graphics().setDepth(DEPTH.CAST_BAR);
     this.nameText = worldLabel(scene, x, y + 4, name, { color: '#ffffff', originY: 0 });
     this.applyLook();
+    trackTextAnchor(scene, this);
+  }
+
+  // ---------------------------------------------------------------- TextAnchor (floating text lanes)
+
+  /** Above the head (hat included), the status icons and the wind-up bar, whichever is highest. */
+  textTop(): number {
+    const y = Math.round(this.y);
+    const s = this.sprite;
+    let top = y - Math.round(s.displayHeight * 0.95) + opaqueTop(this.scene, this.lookKey || s.texture.key) - 1;
+    if (this.iconKey) top = Math.min(top, Math.round(this.y - (this.castProgress !== null ? 62 : 50)) - ICON - 1);
+    if (this.castProgress !== null) top = Math.min(top, Math.round(this.y - 58) - 3);
+    return top;
+  }
+
+  /** Under the name tag. */
+  textBottom(): number {
+    return Math.round(this.y) + 5 + this.nameText.height;
+  }
+
+  textHalfW(): number {
+    return 12;
+  }
+
+  textLive(): boolean {
+    return this.sprite.active && this.sprite.visible;
+  }
+
+  textBody(): { x0: number; y0: number; x1: number; y1: number } {
+    const x = Math.round(this.x);
+    const y = Math.round(this.y);
+    return { x0: x - 9, y0: y - Math.round(this.sprite.displayHeight * 0.95) + opaqueTop(this.scene, this.lookKey || this.sprite.texture.key), x1: x + 9, y1: y };
   }
 
   /** Shows the look for a weapon (MapScene.equipWeapon) — the worn class's outfit stays on. */
@@ -218,17 +256,17 @@ export class Player {
     const lx = Math.cos(this.aimAngle) * this.lunge * 3;
     const ly = Math.sin(this.aimAngle) * this.lunge * 3;
     const stunned = now < this.stunUntil;
-    const shake = stunned && now >= this.frozenUntil ? Math.sin(now / 25) * 1.2 : 0;
+    const shake = stunned && now >= this.frozenUntil ? SHAKE[Math.floor(now / SHAKE_MS) % SHAKE.length] : 0;
     const s = this.sprite;
     const rc = this.recoilQ[0];
     if (rc && !held) this.recoilQ.shift();
     const bx = held ? this.held!.x : this.x + this.lag.x;
     const by = held ? this.held!.y : this.y + this.lag.y;
-    s.setPosition(bx + lx + shake + (rc?.x ?? 0), by + ly + (rc?.y ?? 0));
+    s.setPosition(Math.round(bx + lx) + shake + (rc?.x ?? 0), Math.round(by + ly) + (rc?.y ?? 0));
     s.setFlipX(this.facing < 0);
     s.setDepth(ySort(this.y));
     if (this.squashF > 0) {
-      // 1-frame squash: 2 px wider, 2 px shorter.
+      // 1-frame squash (the one scale the pixel rule allows): 2 px wider, 2 px shorter.
       this.squashF--;
       s.setScale((s.width + 2) / Math.max(8, s.width), (s.height - 2) / Math.max(8, s.height));
     } else if (s.scaleX !== 1 || s.scaleY !== 1) s.setScale(1, 1);
@@ -243,7 +281,7 @@ export class Player {
       this.flashing = false;
       s.clearTint();
     }
-    this.shadow.setPosition(this.x, this.y + 1);
+    this.shadow.setPosition(Math.round(this.x), Math.round(this.y) + 1);
     this.nameText.setPosition(Math.round(this.x), Math.round(this.y + 4));
     if (this.castProgress !== null) this.drawCast();
     this.syncStatusIcons(now);

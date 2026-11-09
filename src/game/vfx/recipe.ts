@@ -435,7 +435,24 @@ function strikePieces(c: Ctx, style: StrikeStyle, ph: Phases): void {
       if (c.look.cone) push(ph, 'cast', piece('puff', { kind: c.look.cone, r: 5 }, c.ink, { anchor: feet, place: stream }));
       else push(ph, 'cast', piece('motes', { kind: 'line', size: 2 }, c.ink, { anchor: feet, place: stream }));
       if (c.accLook.trail.mote) push(ph, 'cast', piece('motes', { kind: c.accLook.trail.mote, size: 1 }, c.acc, { anchor: feet, place: { ...stream, count: Math.min(8, n) } }));
-      push(ph, 'cast', piece('ring', { r: sh.range, aspect: 1, thick: 2, style: c.look.ring === 'double' ? 'double' : 'solid', ink: 'lit', anim: 'static', arc: halfArc(sh.arc), ms: 150 }, c.ink, { anchor: feet, layer: 'ground', delayMs: 100, tags: ['geometryFromEvent'] }));
+      // The gust's body for its whole run (a few hairline lines read as nothing, in-game QA): a fan of long streaks in
+      // three waves (every 80 ms) across the cone at chest height, and a hot leading-edge arc that runs from the mouth
+      // to the hit reach while the stream travels (expand: ~330 ms, eased out, cooling hot -> dim); the rim lights as
+      // the front nears it (~75 % of the reach at 117 ms: cast pieces start inside a swing) and holds until it lands.
+      const fan = clamp(round(sh.arc / 9), 6, 10);
+      // One wave = the streaks actually emitted (monster recipes play at quota 0.5) spread over 80 ms: 3 waves in 240.
+      const perWave = c.monster ? Math.max(1, round(fan * 0.5)) : fan;
+      push(
+        ph,
+        'cast',
+        piece('motes', { kind: 'streak', size: 3 }, c.ink, {
+          anchor: at('caster', ANCHOR_DY.strike),
+          place: { pattern: 'burst', count: fan, radius: sh.range, spreadDeg: sh.arc, speed: round(sh.range / 0.22), staggerMs: round(80 / perWave) },
+          lifeMs: 240,
+        }),
+        piece('ring', { r: sh.range, r0: round(sh.range * 0.2), aspect: 1, thick: 3, style: 'solid', ink: 'hot', anim: 'expand', arc: halfArc(sh.arc), ms: 333 }, c.ink, { anchor: feet, layer: 'ground', tags: ['geometryFromEvent'] }),
+      );
+      push(ph, 'cast', piece('ring', { r: sh.range, aspect: 1, thick: 2, style: c.look.ring === 'double' ? 'double' : 'solid', ink: 'lit', anim: 'static', arc: halfArc(sh.arc), ms: 200 }, c.ink, { anchor: feet, layer: 'ground', delayMs: 117, tags: ['geometryFromEvent'] }));
       break;
     }
     case 'staff':

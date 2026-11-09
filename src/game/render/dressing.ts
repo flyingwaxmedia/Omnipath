@@ -27,6 +27,24 @@ export const DRESSING_DECAL_DEPTH = DEPTH.DRESSING_FLAT;
 /** Keys drawn flat on the ground (no y-sorting). */
 export const DRESSING_FLAT: ReadonlySet<string> = new Set(['dr_pebbles', 'dr_ember_crack', 'dr_bones', 'dr_cobweb']);
 
+/**
+ * Max jitter (px) of repeated dressing (docs/ART-DIRECTION.md §3, QUALITY-PLAN §12 item 4): every placed sprite is
+ * nudged by up to ±DRESSING_JITTER px (staying on the tile the planner checked) and, unless its facing means
+ * something, flipped at random — so crates beside every house, reeds along a shore or pebbles along a road never
+ * repeat at the same offset and the tile grid never reads. Both come from a seeded hash of the item: deterministic.
+ */
+export const DRESSING_JITTER = 4;
+/** Placed on an exact line or corner (fence runs, posts, corner cobwebs): never nudged or flipped. */
+export const DRESSING_ALIGNED: ReadonlySet<string> = new Set(['dr_fence_h', 'dr_fence_v', 'dr_fence_v_end', 'dr_fence_post', 'dr_cobweb']);
+/** Facing that means something (banners carry the emblem lit from the left; lanterns hang toward the road). */
+export const DRESSING_FACING: ReadonlySet<string> = new Set(['dr_banner_blue', 'dr_banner_red', 'dr_lantern']);
+/**
+ * A clear lit face and shadow face (light from the top-left, docs/ART-DIRECTION.md §1): jittered but never mirrored,
+ * like render/stage.ts PROP_NO_FLIP for props — a mirrored stone, stump, crate or barrel would be lit from the right
+ * beside its unmirrored neighbour. Organic dressing (grass, reeds, flowers, mushrooms, logs, bones) keeps the coin.
+ */
+export const DRESSING_LIT: ReadonlySet<string> = new Set(['dr_stone', 'dr_rubble', 'dr_pebbles', 'dr_stump', 'dr_ice_shards', 'dr_crate', 'dr_crates', 'dr_barrel']);
+
 // ------------------------------------------------------------------ decor tables
 
 type Pick = readonly [key: string, weight: number];
@@ -328,10 +346,28 @@ export function planDressing(cm: CompiledMap): DressingItem[] {
   for (const pr of cm.props) ban[idx(pr.tx, pr.ty)] = 1;
 
   const free = (x: number, y: number) => inB(x, y) && !ban[idx(x, y)] && !used[idx(x, y)] && !isPath(x, y) && !isWater(x, y);
-  const put = (key: string, x: number, y: number, flipX = false, tx = -1, ty = -1) => {
-    const xi = Math.round(x);
-    const yi = Math.round(y);
-    out.push({ key, x: xi, y: yi, depthY: DRESSING_FLAT.has(key) ? DRESSING_DECAL_DEPTH : ySort(yi), ...(flipX ? { flipX: true } : {}) });
+  /**
+   * Adds one item. `flipX` is kept only for DRESSING_FACING / DRESSING_ALIGNED keys; DRESSING_LIT keys are never
+   * mirrored; every other item takes a seeded coin flip. `jit` = max nudge [x, y] in px (DRESSING_JITTER by default).
+   * The nudge keeps the item on the tile its foot was planned on, so every check above still holds.
+   */
+  const put = (key: string, x: number, y: number, flipX?: boolean, tx = -1, ty = -1, jit: readonly [number, number] = [DRESSING_JITTER, DRESSING_JITTER]) => {
+    let xi = Math.round(x);
+    let yi = Math.round(y);
+    let flip = flipX ?? false;
+    if (!DRESSING_ALIGNED.has(key)) {
+      const jr = mulberry32(hashSeed(seed, 'jit', key, xi, yi, out.length));
+      const cx = Math.floor(xi / TILE);
+      const cy = Math.floor((yi - 1) / TILE);
+      xi = Math.min(cx * TILE + TILE - 1, Math.max(cx * TILE + 1, xi + Math.round((jr() * 2 - 1) * jit[0])));
+      yi = Math.min(cy * TILE + TILE, Math.max(cy * TILE + 2, yi + Math.round((jr() * 2 - 1) * jit[1])));
+      // facing matters only for banners and lanterns, lit faces never mirror; everything else takes this seeded coin
+      // (the planner's own per-tile coin correlated with its pick and placement rolls)
+      const coin = jr() < 0.5;
+      if (DRESSING_LIT.has(key)) flip = false;
+      else if (!DRESSING_FACING.has(key)) flip = coin;
+    }
+    out.push({ key, x: xi, y: yi, depthY: DRESSING_FLAT.has(key) ? DRESSING_DECAL_DEPTH : ySort(yi), ...(flip ? { flipX: true } : {}) });
     if (tx >= 0 && ty >= 0 && inB(tx, ty)) used[idx(tx, ty)] = 1;
   };
 
@@ -511,7 +547,7 @@ export function planDressing(cm: CompiledMap): DressingItem[] {
         if (placed.some(([px, py]) => Math.abs(px - x) + Math.abs(py - y) < (plaza ? 5 : 7))) continue;
         placed.push([x, y]);
         const toRight = isPath(x + 1, y);
-        put('dr_lantern', x * TILE + (toRight ? 24 : 8), (y + 1) * TILE - 6, !toRight, x, y);
+        put('dr_lantern', x * TILE + (toRight ? 24 : 8), (y + 1) * TILE - 6, !toRight, x, y, [0, 3]);
       }
     }
   }
@@ -537,7 +573,7 @@ export function planDressing(cm: CompiledMap): DressingItem[] {
         let key = resolve(items[(k + Math.floor(r() * 2)) % items.length], tx, ty, r);
         // banners flank the front wall only; never stack them on one side
         if (key.startsWith('dr_banner') && si >= 2) key = 'dr_barrel';
-        put(key, tx * TILE + ox, (ty + 1) * TILE - 3, tx >= s.tx + fp.w && !key.startsWith('dr_banner'), tx, ty);
+        put(key, tx * TILE + ox, (ty + 1) * TILE - 3, key.startsWith('dr_banner') ? false : undefined, tx, ty);
         k++;
       }
     }
@@ -577,7 +613,7 @@ export function planDressing(cm: CompiledMap): DressingItem[] {
               [inward, p.ty + p.h + 1],
             ];
         if (dungeon || def.kind === 'arena') continue;
-        for (const [tx, ty] of flank) if (free(tx, ty) && !fenceBan[idx(tx, ty)]) put(banner, tx * TILE + 16, (ty + 1) * TILE - 4, false, tx, ty);
+        for (const [tx, ty] of flank) if (free(tx, ty) && !fenceBan[idx(tx, ty)]) put(banner, tx * TILE + 16, (ty + 1) * TILE - 4, false, tx, ty, [2, 2]);
       } else {
         const keys = dungeon ? ['dr_candles', 'dr_bones', 'dr_candles'] : ['dr_crate', 'dr_barrel', 'dr_crates'];
         const spots: [number, number][] = [
@@ -638,7 +674,7 @@ export function planDressing(cm: CompiledMap): DressingItem[] {
         // stand against the rim: toward the outer side of the tile
         const ox = E ? 24 : W ? 8 : 10 + r() * 12;
         const oy = S ? 30 : N ? 14 : 18 + r() * 8;
-        put(key, x * TILE + ox, y * TILE + oy, W && !key.startsWith('dr_banner'), x, y);
+        put(key, x * TILE + ox, y * TILE + oy, key === 'dr_lantern' ? W : key.startsWith('dr_banner') ? false : undefined, x, y, key === 'dr_lantern' ? [0, 3] : undefined);
       }
     }
   }
@@ -657,7 +693,7 @@ export function planDressing(cm: CompiledMap): DressingItem[] {
           continue;
         }
         const v = r();
-        if (v < 0.07) put('dr_candles', x * TILE + 8 + Math.floor(r() * 16), y * TILE + 16, false, x, y);
+        if (v < 0.07) put('dr_candles', x * TILE + 8 + Math.floor(r() * 16), y * TILE + 16, undefined, x, y);
         else if (v < 0.13) put('dr_cobweb', x * TILE + (r() < 0.5 ? 10 : 22), y * TILE + 20, r() < 0.5, x, y);
       }
     }
@@ -683,7 +719,7 @@ export function planDressing(cm: CompiledMap): DressingItem[] {
         const [dx, dy] = wet;
         const px = dx < 0 ? x * TILE + 6 : dx > 0 ? x * TILE + 26 : x * TILE + 16 + Math.floor((r() - 0.5) * 14);
         const py = dy < 0 ? y * TILE + 10 : dy > 0 ? (y + 1) * TILE - 1 : (y + 1) * TILE - 8 + Math.floor((r() - 0.5) * 8);
-        put(frost ? 'dr_ice_shards' : 'dr_reeds', px, py, r() < 0.5, x, y);
+        put(frost ? 'dr_ice_shards' : 'dr_reeds', px, py, r() < 0.5, x, y, dx ? [1, DRESSING_JITTER] : [DRESSING_JITTER, 1]);
       }
     }
   }
