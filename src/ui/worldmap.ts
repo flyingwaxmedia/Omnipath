@@ -261,7 +261,8 @@ export function regionGraphHtml(ctrl: GameController, g: RegionGraph, opt: Graph
       const ws = visited.some((m) => (m.objects ?? []).some((o) => o.kind === 'waystone' && ctrl.world().waystones.includes(objectKey(m.id, o.id))));
       const onRoute = c.shown.some((s) => opt.routeMaps?.has(s.def.id));
       const nav = !!opt.navTarget && c.all.some((m) => m.id === opt.navTarget);
-      const cls = ['rcell', allSeen ? 'seen' : 'visited', c.here ? 'here' : '', c.group ? 'group' : '', opt.sel === key ? 'sel' : '', onRoute ? 'route' : '', nav ? 'navto' : '']
+      const gated = g.links.some((l) => l.gate && c.all.some((m) => m.id === l.gate!.portal.to.map));
+      const cls = ['rcell', allSeen ? 'seen' : 'visited', c.here ? 'here' : '', c.group ? 'group' : '', gated ? 'gated' : '', opt.sel === key ? 'sel' : '', onRoute ? 'route' : '', nav ? 'navto' : '']
         .filter(Boolean)
         .join(' ');
       const label = c.group ? `${title}, ${c.shown.length} floors, ${sub}` : `${title === '?' ? 'Unexplored map' : title}, ${sub}`;
@@ -274,17 +275,15 @@ export function regionGraphHtml(ctrl: GameController, g: RegionGraph, opt: Graph
         </button></div>`;
     })
     .join('');
+  // Gate pins badge the gated destination's top-left corner (a 44 px button over the cell; names stay clear).
   const pins = g.links
     .filter((l) => l.gate)
     .map((l) => {
       const gt = l.gate!;
-      let x = (l.a.x + l.b.x + 1) / 2;
-      let y = (l.a.y + l.b.y + 1) / 2;
-      // Adjacent cells: sit on the shared edge near the top (horizontal link) or the right (vertical link),
-      // clear of the names, which are bottom-left aligned.
-      if (l.a.y === l.b.y) y = Math.min(l.a.y, l.b.y) + 0.36;
-      else if (l.a.x === l.b.x) x = Math.max(l.a.x, l.b.x) + 0.5;
-      return `<button class="rgate ${gt.open ? 'open' : ''}" style="left:${pct(x, cols)};top:${pct(y, rows)}" data-gate="${esc(portalKey(gt.map.id, gt.portal.id))}" aria-label="${esc(gt.portal.label ?? 'Gate')}: ${gt.open ? 'open' : 'sealed'}">
+      const dest = l.a.all.some((m) => m.id === gt.portal.to.map) ? l.a : l.b;
+      return `<button class="rgate ${gt.open ? 'open' : ''}" style="left:calc(${pct(dest.x, cols)} + 27px);top:calc(${pct(dest.y, rows)} + 17px)" data-gate="${esc(
+        portalKey(gt.map.id, gt.portal.id),
+      )}" aria-label="${esc(gt.portal.label ?? 'Gate')}: ${gt.open ? 'open' : 'sealed'}">
         <span class="prism"></span>${socketsHtml(ctrl, gt.portal)}</button>`;
     })
     .join('');
@@ -308,15 +307,6 @@ export function regionGraphHtml(ctrl: GameController, g: RegionGraph, opt: Graph
 /** Every region graph the player has a foothold in. */
 export function worldGraphs(ctrl: GameController): RegionGraph[] {
   return REGIONS.map((r) => regionGraph(ctrl, r)).filter((g): g is RegionGraph => !!g);
-}
-
-/** Back-compat: the whole world as HTML (region headings + graphs). */
-export function worldMapHtml(ctrl: GameController, opt: GraphOptions = {}): string {
-  return worldGraphs(ctrl)
-    .map(
-      (g) => `<h3>${esc(g.region.name)} <small>Lv ${g.region.levelBand[0]}–${g.region.levelBand[1]}</small></h3>${regionGraphHtml(ctrl, g, opt)}`,
-    )
-    .join('');
 }
 
 // ------------------------------------------------------------------ local map (1:1 compiled render)
@@ -382,13 +372,6 @@ function groundFor(world: ReturnType<GameController['world']>, def: MapDef): HTM
     if (groundCache.size > 12) groundCache.delete(groundCache.keys().next().value!);
   }
   return c;
-}
-
-/** Destination label of a portal: the map name once known, else "?". */
-export function portalDestName(ctrl: GameController, p: PortalDef): string {
-  const dest = mapById(p.to.map);
-  if (!dest) return '?';
-  return ctrl.world().visited.includes(dest.id) ? dest.name : '?';
 }
 
 /**

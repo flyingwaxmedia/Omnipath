@@ -49,7 +49,7 @@ export class UI implements PanelHost {
     this.root = document.createElement('div');
     this.root.id = 'hud-root';
     parent.appendChild(this.root);
-    this.hud = new Hud(this.root, ctrl, (p) => this.open(p));
+    this.hud = new Hud(this.root, ctrl, (p, a) => this.open(p, a));
     this.minimap = new Minimap(this.hud.el, ctrl, () => this.open('map'));
     this.modal = document.createElement('div');
     this.modal.className = 'modal hidden';

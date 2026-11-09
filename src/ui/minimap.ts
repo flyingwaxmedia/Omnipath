@@ -793,8 +793,3 @@ export class Minimap {
     g.restore();
   }
 }
-
-/** Portal centre in px (rect centre). */
-export function portalCentre(p: PortalDef): { x: number; y: number } {
-  return { x: (p.tx + p.w / 2) * TILE, y: (p.ty + p.h / 2) * TILE };
-}

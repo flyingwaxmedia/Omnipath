@@ -11,6 +11,7 @@ import { MASTERY, monsterThreat } from '../../core/mastery';
 import { cooldownPctFor, regenStillPct, spCostPctFor, vsFamilyPct, vsStatusPct } from '../../core/passives';
 import type { Family, MonsterRank, SkillDef, StatusKind, WeaponType } from '../../core/types';
 import { isBlocked, isBlockedPx } from '../../core/world/compile';
+import { findPath } from '../../core/world/pathfinding';
 import { COLL } from '../../core/world/types';
 import { WEAPONS } from '../../data/weapons';
 import { esc } from '../../ui/util';
@@ -19,7 +20,7 @@ import type { PlayerDot } from '../entities/Player';
 import type { MapScene } from '../scenes/MapScene';
 import { type Buff, type Stats, expToNext } from '../session';
 import { TILE } from '../world/runtime';
-import { CFX, type Cast, type CombatHost, SkillSystem, fxStyle, hex } from './SkillSystem';
+import { CFX, type Cast, type CombatHost, SkillSystem, clearShot, fxStyle, hex } from './SkillSystem';
 
 const GLOOMCAPS_FOR_SHADOW = 5;
 /** Dealt or took damage within this window = in combat (buff use XP). */
@@ -1092,7 +1093,7 @@ export class Combat implements CombatHost {
     const hostile = !this.dead && !protectedNow && (m.provoked || (m.def.aggressive && dp < aggroR));
     if (hostile) {
       if (s.monsterSkills.tryStart(m, now, dp)) return;
-      if (dp > m.def.attackRange + 8) m.stepToward(map, p.x, p.y, speed * 1.15, dt);
+      if (dp > m.def.attackRange + 8) this.chase(m, speed * 1.15, dt, now);
       else if (now >= m.nextAttack) {
         m.nextAttack = now + m.attackDelay();
         m.facing = p.x > m.x ? 1 : -1;
@@ -1100,6 +1101,8 @@ export class Combat implements CombatHost {
         this.hurtPlayer(m.atk(now), m.def.name, { source: { x: m.x, y: m.y }, rank: m.def.rank });
       }
     } else {
+      // Not engaged: the next engagement starts with the opening beat again (MonsterSkills.tryStart).
+      m.nextTechAt = 0;
       if (now >= m.nextWander) {
         m.nextWander = now + Phaser.Math.Between(2000, 5000);
         const a = Math.random() * Math.PI * 2;
@@ -1110,6 +1113,20 @@ export class Combat implements CombatHost {
       }
       if (m.wanderTo && m.stepToward(map, m.wanderTo.x, m.wanderTo.y, speed * 0.5, dt)) m.wanderTo = null;
     }
+  }
+
+  /** Chase the player: a straight line when nothing is in the way, else A* around walls (refreshed every 700 ms). */
+  private chase(m: Monster, speed: number, dt: number, now: number): void {
+    const map = this.cm;
+    const p = this.player;
+    if (now >= m.chaseAt) {
+      m.chaseAt = now + 700;
+      m.chase = clearShot(map, m.x, m.y, p.x, p.y) ? [] : (findPath(map, m.x, m.y, p.x, p.y, 2500) ?? []);
+    }
+    const wp = m.chase[0];
+    if (wp) {
+      if (m.stepToward(map, wp.x, wp.y, speed, dt)) m.chase.shift();
+    } else m.stepToward(map, p.x, p.y, speed, dt);
   }
 
   /**

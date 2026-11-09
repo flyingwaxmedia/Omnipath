@@ -380,6 +380,10 @@
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
 }
 
+.rcell.gated .rk {
+  display: none;
+}
+
 .rcell .rk {
   position: absolute;
   left: 5px;
@@ -441,6 +445,10 @@
 
 .rcell.route {
   border-color: #7ff0ff;
+}
+
+.rcell.here.route {
+  border-color: var(--gold);
 }
 
 .rcell.navto {
@@ -1068,9 +1076,12 @@
     display: none;
   }
 
-  .rcell b {
-    -webkit-line-clamp: 1;
-    line-clamp: 1;
+  .mapsheet header {
+    padding: 6px 12px 4px;
+  }
+
+  .mapsheet .sheet-body {
+    padding-top: 0;
   }
 }
 

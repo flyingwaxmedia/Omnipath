@@ -439,8 +439,11 @@ export function renderMap(host: PanelHost, arg?: string): void {
     // landscape phones put the map beside its legend (see maps.css .ltab)
     const side = window.innerHeight < 500 && window.innerWidth >= 600;
     const body = m.querySelector<HTMLElement>('.sheet-body');
+    const tabsH = m.querySelector<HTMLElement>('.tabs')?.offsetHeight ?? 50;
     const maxW = side && body ? body.clientWidth * 0.6 : undefined;
-    renderLocalMap(wrap, ctrl, localId, Math.max(170, window.innerHeight * (side ? 0.66 : 0.5)), maxW);
+    // landscape: fit the sheet's visible height; portrait: about half the screen
+    const maxH = side && body ? body.clientHeight - tabsH - 22 : window.innerHeight * 0.5;
+    renderLocalMap(wrap, ctrl, localId, Math.max(160, maxH), maxW);
   }
   fitCellNames(m);
   // keep the selected place in view

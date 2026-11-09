@@ -134,6 +134,14 @@ export class Hud {
     $(this.navEl, '.np-open').addEventListener('click', () => this.onMenu('map', 'route'));
     $(this.navEl, '.np-stop').addEventListener('click', () => this.cancelNav());
     this.el.addEventListener('contextmenu', (e) => e.preventDefault());
+    // Desktop: M opens the map (the HUD lives for the whole run, so this listener is registered once).
+    window.addEventListener('keydown', (e) => {
+      if (e.repeat || e.ctrlKey || e.metaKey || e.altKey || (e.key !== 'm' && e.key !== 'M')) return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT')) return;
+      if (!this.el.isConnected || this.root.querySelector('.modal:not(.hidden)')) return;
+      this.onMenu('map');
+    });
   }
 
   /** The menu column element (the minimap docks next to it). */

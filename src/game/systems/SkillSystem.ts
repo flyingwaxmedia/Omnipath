@@ -106,6 +106,19 @@ export function distToSegment(px: number, py: number, ax: number, ay: number, bx
   return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
 }
 
+/**
+ * Thin line of sight (sampled every 8 px): shots and chasing. pathfinding.lineClear checks a body-sized box, which
+ * would refuse a shot whenever either end hugs a wall.
+ */
+export function clearShot(cm: CompiledMap, x0: number, y0: number, x1: number, y1: number): boolean {
+  const n = Math.ceil(Math.hypot(x1 - x0, y1 - y0) / 8);
+  for (let i = 1; i < n; i++) {
+    const t = i / n;
+    if (isBlockedPx(cm, x0 + (x1 - x0) * t, y0 + (y1 - y0) * t)) return false;
+  }
+  return true;
+}
+
 /** Chain-shaped knife skills render as bouncing knives, not lightning. */
 export function isKnifeChain(skill: SkillDef): boolean {
   return skill.shape.kind === 'chain' && (skill.tags.includes('projectile') || skill.tags.includes('pierce'));
@@ -522,12 +535,14 @@ export class SkillSystem {
         // Conduct: one extra jump on chain shapes (once per cast).
         if (roll?.combo?.extraJump && !extended) {
           extended = true;
-          const last = chain[chain.length - 1];
+          const lastIdx = chain.length - 1;
+          const last = chain[lastIdx];
           const extra = nextFrom(last);
           if (extra) {
             chain.push(extra);
             this.host.float(extra.x, extra.y - extra.radius - 26, '+1 jump', '#ffe14a', 11);
-            strike(extra, chain.length - 1, { x: last.x, y: last.y - 10 }, knives ? 0 : step);
+            // The extra hop leaves the end of the chain once the chain has reached it.
+            strike(extra, lastIdx + 1, { x: last.x, y: last.y - 10 }, (lastIdx - i) * step + (knives ? 0 : step));
           }
         }
       });

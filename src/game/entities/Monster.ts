@@ -41,7 +41,7 @@ export const freshStatus = (): StatusState => ({
 });
 
 /** Warden enrage (HP < 50 %): moves and swings faster. Technique tempo lives in MonsterSkills. */
-export const ENRAGE = { at: 0.5, speed: 1.15, attackDelay: 0.8 } as const;
+export const ENRAGE = { at: 0.5, speed: 1.15, attackDelay: 0.85 } as const;
 
 let nextUid = 1;
 
@@ -86,6 +86,9 @@ export class Monster {
   chargeColor = 0xff3b3b;
   /** Next status mote (scene time). */
   fxAt = 0;
+  /** Chase waypoints around walls (A*), refreshed at `chaseAt`. Empty = straight line. */
+  chase: { x: number; y: number }[] = [];
+  chaseAt = 0;
   private bob = Math.random() * Math.PI * 2;
   private flashUntil = 0;
   private _label: Phaser.GameObjects.Text | null = null;
@@ -324,6 +327,7 @@ export class Monster {
     this.busyUntil += ms;
     this.lastHitAt += ms;
     this.fxAt += ms;
+    this.chaseAt += ms;
     if (this.nextTechAt) this.nextTechAt += ms;
     if (Number.isFinite(this.respawnAt)) this.respawnAt += ms;
   }
@@ -345,6 +349,8 @@ export class Monster {
     this.enraged = false;
     this.buffs = [];
     this.charge = 0;
+    this.chase = [];
+    this.chaseAt = 0;
     this.x = this.spawn.x;
     this.y = this.spawn.y;
   }
