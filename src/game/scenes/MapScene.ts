@@ -680,7 +680,7 @@ export class MapScene extends Phaser.Scene implements GameController {
         this.session.autoSlot(skill.id);
         if (!this.book.flag('tip_autocast') && this.session.player.hotbar.includes(skill.id)) {
           this.book.incFlag('tip_autocast');
-          this.time.delayedCall(1200, () => ui.log('💡 Tip: <b>hold</b> a skill button to set it to auto-cast. AUTO pauses them all.', 'info'));
+          this.time.delayedCall(1200, () => ui.log('💡 Tip: tap <b>AUTO</b> to auto-battle — you hunt the nearest foe and cast every equipped skill when it is in reach.', 'info'));
         }
         this.combat.invalidateSparks();
         this.hotbarDirty = true;
@@ -852,6 +852,7 @@ export class MapScene extends Phaser.Scene implements GameController {
     const views: (NpcView | ObjectView | NodeView)[] = [...this.npcs, ...this.objects, ...this.nodes];
     for (const v of views) {
       if (this.hitSprite(v.sprite, x, y)) {
+        this.combat.holdAuto();
         this.interactions.approach(v);
         return;
       }
@@ -861,6 +862,7 @@ export class MapScene extends Phaser.Scene implements GameController {
       const onRect = distToRect(v.def, x, y) <= 14;
       const onArt = (v.overlay && this.hitSprite(v.overlay, x, y)) || (v.parts[0] instanceof Phaser.GameObjects.Image && this.hitSprite(v.parts[0], x, y));
       if (onRect || onArt) {
+        this.combat.holdAuto();
         this.interactions.approach(v);
         return;
       }
@@ -868,6 +870,7 @@ export class MapScene extends Phaser.Scene implements GameController {
     this.interactions.cancelChannel();
     this.interactions.pending = null;
     this.combat.setTarget(null);
+    this.combat.holdAuto();
     this.player.path = this.pathTo(x, y) ?? [];
     this.moveMarker.setPosition(x, y).setVisible(true).setAlpha(1).setScale(1);
     this.tweens.add({ targets: this.moveMarker, alpha: 0, scale: 0.6, duration: 500 });
@@ -877,13 +880,10 @@ export class MapScene extends Phaser.Scene implements GameController {
     if (this.ui.isOpen || e.repeat) return;
     const t = e.target as HTMLElement | null;
     if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA')) return;
-    if (e.shiftKey && e.code >= 'Digit1' && e.code <= 'Digit6') {
-      const id = this.session.player.hotbar[Number(e.code.slice(5)) - 1];
-      if (id) {
-        const r = this.toggleAutoCast(id);
-        if (r.message) this.ui.toast(r.message);
-      }
-    } else if (e.key >= '1' && e.key <= '6') this.castSlot(Number(e.key) - 1);
+    if (e.key === 'a' || e.key === 'A') {
+      this.setAutoCastOn(!this.autoCastOn());
+      this.ui.toast(this.autoCastOn() ? '⟳ AUTO on: hunting the nearest foe' : 'AUTO off');
+    } else if (e.key >= '1' && e.key <= String(this.session.player.hotbar.length)) this.castSlot(Number(e.key) - 1);
     else if (e.key === ' ') this.castSlot(-1);
   }
 
@@ -1173,36 +1173,13 @@ export class MapScene extends Phaser.Scene implements GameController {
     if (id) this.combat.castSkill(id);
   }
 
-  isAutoCast(id: string): boolean {
-    return this.session.player.autoSkills.includes(id);
-  }
-
-  toggleAutoCast(id: string): Outcome {
-    const pl = this.session.player;
-    const skill = this.reg.skill(id);
-    if (!skill || !this.book.has(id)) return { ok: false, message: 'Unknown skill.' };
-    if (id === WEAPONS[pl.weapon].basic) return { ok: false, message: 'Your basic attack already strikes on its own.' };
-    if (skill.shape.kind !== 'buff' && skill.power <= 0)
-      return { ok: false, message: `${skill.name} is pure movement and can't auto-cast.` };
-    const on = !pl.autoSkills.includes(id);
-    pl.autoSkills = on ? [...pl.autoSkills, id] : pl.autoSkills.filter((x) => x !== id);
-    if (on && !pl.autoOn) pl.autoOn = true;
-    this.ui.renderHotbar();
-    this.save();
-    return {
-      ok: true,
-      message: on
-        ? `⟳ Auto-cast on: ${skill.name}${pl.hotbar.includes(id) ? '' : ' (put it on the hotbar to use it)'}`
-        : `Auto-cast off: ${skill.name}`,
-    };
-  }
-
   autoCastOn(): boolean {
     return this.session.player.autoOn;
   }
 
   setAutoCastOn(on: boolean): void {
     this.session.player.autoOn = on;
+    this.combat.lastInput = this.time.now;
     this.ui.renderHotbar();
     this.save();
   }

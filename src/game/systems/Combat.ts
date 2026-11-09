@@ -25,10 +25,14 @@ import { CFX, type Cast, type CombatHost, SkillSystem, clearShot, fxStyle, hex }
 const GLOOMCAPS_FOR_SHADOW = 5;
 /** Dealt or took damage within this window = in combat (buff use XP). */
 const COMBAT_WINDOW = 5000;
-/** Auto-cast never spends SP below this fraction of max SP, so manual casts stay possible. */
-export const AUTO_SP_RESERVE = 0.15;
-/** Auto-cast re-checks at most this often (ms). */
+/** AUTO battle re-checks at most this often (ms). */
 const AUTO_TICK_MS = 150;
+/** AUTO waits this long after a manual move / interaction tap before hunting again (ms). */
+const AUTO_HOLD_MS = 4000;
+/** Buffs auto-cast only while the target is this close (px). */
+const AUTO_BUFF_RANGE = 192;
+/** A monster AUTO could not path to is skipped for this long (ms). */
+const AUTO_UNREACHABLE_MS = 15000;
 /** Auto-attack chains stop after this long without player input. */
 const AFK_MS = 30000;
 const LEECH_CAP = 0.08;
@@ -75,8 +79,12 @@ export class Combat implements CombatHost {
   lastHurt = -1e9;
   lastDealt = -1e9;
   lastInput = 0;
-  /** Next time auto-cast may look for a skill. */
+  /** Next time AUTO battle may act. */
   private autoAt = 0;
+  /** AUTO does not pick new targets before this time (manual move / interaction override). */
+  private autoHoldUntil = 0;
+  /** Monsters AUTO could not reach, with the time they become eligible again. */
+  private autoSkip = new Map<Monster, number>();
   /** Global skill lock after a cast (afterCastMs); walking and auto-attacks stay allowed. */
   lockUntil = 0;
   private lockTotal = 0;
@@ -284,11 +292,11 @@ export class Combat implements CombatHost {
       return;
     }
     if (s.interactions.channel) return;
-    this.autoCast(now);
+    this.autoBattle(now);
     if (this.windup) return;
     const t = this.target;
     if (!t || !t.alive) return;
-    if (now - this.lastInput > AFK_MS) {
+    if (!s.session.player.autoOn && now - this.lastInput > AFK_MS) {
       this.setTarget(null);
       s.ui.log('You lower your weapon. (Tap an enemy to fight again.)', 'info');
       return;
@@ -309,35 +317,73 @@ export class Combat implements CombatHost {
     }
   }
 
+  /** Pauses AUTO target hunting after a manual move or interaction tap (combat casts continue). */
+  holdAuto(ms = AUTO_HOLD_MS): void {
+    this.autoHoldUntil = Math.max(this.autoHoldUntil, this.scene.time.now + ms);
+  }
+
   /**
-   * Auto-cast: while the player is fighting (a live target, or dealt/took damage in the last 5 s), fire the first
-   * ready hotbar skill marked auto, in hotbar order. Buffs refresh only when not active; pure mobility skills
-   * (power 0, e.g. Quickstep) never auto-fire; an SP reserve keeps manual casts possible. Respects the AFK stop,
-   * wind-ups, the after-cast lock, stuns and gathering channels. Auto casts never count as player input.
+   * AUTO battle (one global switch, docs/CLIENT-v2.md §6.1). While on:
+   * 1. with no live target, pick the nearest reachable monster (monsters already chasing the player first; wardens only
+   *    once they are engaged) — the normal engage logic then walks there and auto-attacks;
+   * 2. cast EVERY equipped skill as soon as it is ready, in skill-bar order, but only when the target is within that
+   *    skill's reach (buffs: target within ~6 tiles and the buff not already running). Pure-movement skills
+   *    (power 0) never auto-fire.
+   * Manual taps win: a ground move or an NPC/object tap holds target hunting for a few seconds after the player
+   * stops; tapping a monster simply retargets. Disables the 30 s AFK stop while on.
    */
-  private autoCast(now: number): void {
+  private autoBattle(now: number): void {
     const s = this.scene;
     const pl = s.session.player;
-    if (!pl.autoOn || !pl.autoSkills.length || this.dead || this.windup || now < this.autoAt) return;
+    if (!pl.autoOn || this.dead || now < this.autoAt) return;
     this.autoAt = now + AUTO_TICK_MS;
-    if (now < this.lockUntil || now - this.lastInput > AFK_MS || this.player.stunned(now)) return;
-    if (!((this.target && this.target.alive) || this.inCombat(now))) return;
-    const reserve = s.stats().maxSp * AUTO_SP_RESERVE;
+    const p = this.player;
+    if (p.stunned(now)) return;
+    let t = this.target && this.target.alive ? this.target : null;
+    if (!t) {
+      if (now < this.autoHoldUntil || p.path.length || s.interactions.pending || s.session.nav) return;
+      t = this.pickAutoTarget(now);
+      if (!t) return;
+      this.setTarget(t);
+    }
+    if (this.windup || now < this.lockUntil) return;
+    const d = Math.hypot(t.x - p.x, t.y - p.y);
     for (const id of pl.hotbar) {
-      if (!id || !pl.autoSkills.includes(id)) continue;
+      if (!id) continue;
       const skill = s.reg.skill(id);
-      if (!skill || !s.usable(id).ok) continue;
+      if (!skill || !s.usable(id).ok || this.ownCooldown(id).remain > 0) continue;
       if (skill.shape.kind === 'buff') {
-        if (this.buffs.some((b) => b.source === id && b.until > now + 1000)) continue;
-      } else if (skill.power <= 0) continue;
-      const cost = this.spCost(skill);
-      if (cost > 0 && pl.sp - cost < reserve) continue;
-      if (this.ownCooldown(id).remain > 0) continue;
+        if (d > AUTO_BUFF_RANGE || this.buffs.some((b) => b.source === id && b.until > now + 1000)) continue;
+      } else {
+        if (skill.power <= 0) continue;
+        if (d > SkillSystem.reach(skill) + t.radius + 8) continue;
+      }
+      if (pl.sp < this.spCost(skill)) continue;
       if (this.castSkill(id, true)) {
         s.ui.pulseSlot(id);
         return;
       }
     }
+  }
+
+  /** Nearest monster AUTO should hunt: chasers first, then by distance; skips unreachable ones and idle wardens. */
+  private pickAutoTarget(now: number): Monster | null {
+    const p = this.player;
+    const cands: { m: Monster; score: number }[] = [];
+    for (const m of this.monsters) {
+      if (!m.alive) continue;
+      if ((this.autoSkip.get(m) ?? 0) > now) continue;
+      if (m.warden && !m.provoked) continue;
+      const d = Math.hypot(m.x - p.x, m.y - p.y);
+      cands.push({ m, score: d - (m.provoked ? 10000 : 0) });
+    }
+    cands.sort((a, b) => a.score - b.score);
+    for (const { m } of cands.slice(0, 5)) {
+      const close = Math.hypot(m.x - p.x, m.y - p.y) <= WEAPONS[this.scene.session.player.weapon].range + m.radius;
+      if (close || this.scene.pathTo(m.x, m.y)) return m;
+      this.autoSkip.set(m, now + AUTO_UNREACHABLE_MS);
+    }
+    return null;
   }
 
   /** Drops the wind-up (no cost). `show` floats a small "cancelled" note (moved / stunned). */

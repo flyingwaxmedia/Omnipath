@@ -165,17 +165,19 @@ SkillBook flags (`tests/content.test.ts` enforces it), so the client must set ev
 - AFK: auto-attack chains stop after 30 s without player input.
 - Death: respawn at `world.savePoint` waystone (else region hub spawn), 50 % HP/SP, lose 5 % EXP.
 
-### 6.1 Auto-cast
-- Any non-basic skill can be marked **auto-cast**: hold its hotbar slot (450 ms; short taps still cast on release),
-  press Shift+1..6 on desktop, or use the switch in the skill's detail panel. The mark follows the skill
-  (`PlayerSave.autoSkills`), and the **AUTO** pill beside the attack button pauses/resumes all of them
-  (`PlayerSave.autoOn`, default on).
-- While fighting (a live target, or dealt/took damage in the last 5 s) the first ready auto skill **in hotbar order**
-  fires on its own (checked every 150 ms): respects cooldown, the after-cast lock, wind-ups, stuns, channels and the
-  30 s AFK stop; never spends SP below 15 % of max (`AUTO_SP_RESERVE`); buffs refresh only when not active; pure
-  movement skills (power 0) cannot auto-cast; non-buff skills need a monster in reach. Auto casts earn mastery like
-  manual ones (XP still requires real hits) and never count as player input.
-- Controller: `isAutoCast(id)`, `toggleAutoCast(id)`, `autoCastOn()`, `setAutoCastOn(on)`.
+### 6.1 AUTO battle (one switch)
+- AUTO is a single on/off switch (the pill beside the attack button; key **A** on desktop). Off: nothing casts by
+  itself. On: **every** equipped skill auto-casts — there are no per-skill marks.
+- On, with no live target: the player walks to the **nearest** monster (monsters already chasing the player first;
+  wardens only once engaged; monsters AUTO cannot path to are skipped for 15 s), and the normal engage logic
+  auto-attacks it.
+- Skills fire in skill-bar order as soon as they are ready, **only when the target is within that skill's reach**
+  (buffs: target within ~6 tiles and the buff not already running); pure-movement skills (power 0) never auto-fire.
+  Cooldowns, the after-cast lock, wind-ups, stuns and SP apply as usual.
+- Manual control wins: a ground tap or an NPC/object/portal tap pauses target hunting until 4 s after the player
+  stops (auto-casting at an existing target continues); tapping a monster just retargets. The 30 s AFK stop is
+  disabled while AUTO is on. Auto casts earn mastery like manual ones (XP still requires real hits).
+- Saved as `PlayerSave.autoOn` (default off). Controller: `autoCastOn()`, `setAutoCastOn(on)`.
 
 ## 7. UI (`src/ui/**`)
 

@@ -1117,7 +1117,7 @@
   }
 }
 
-/* ------------------------------------------------------------------ auto-cast */
+/* ------------------------------------------------------------------ AUTO battle */
 
 .hotbar .basic-col {
   display: flex;
@@ -1127,14 +1127,15 @@
 }
 
 .autobtn {
-  width: 52px;
-  height: 30px;
+  min-width: 64px;
+  height: 32px;
+  padding: 0 8px;
   border-radius: 999px;
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 3px;
-  font-size: 15px;
+  gap: 4px;
+  font-size: 14px;
   line-height: 1;
   background: rgba(14, 20, 40, 0.85);
   border: 1.5px solid rgba(160, 180, 230, 0.35);
@@ -1148,74 +1149,43 @@
   letter-spacing: 0.06em;
 }
 
+.autobtn b {
+  font-size: 10px;
+  font-weight: 900;
+}
+
 .autobtn.on {
   color: #8fe9ff;
-  border-color: rgba(143, 233, 255, 0.7);
+  border-color: rgba(143, 233, 255, 0.75);
   box-shadow:
     0 3px 10px rgba(0, 0, 0, 0.4),
-    0 0 10px rgba(143, 233, 255, 0.35);
+    0 0 12px rgba(143, 233, 255, 0.4);
 }
 
-.autobtn.on.idle {
-  color: var(--mute);
-  border-color: rgba(160, 180, 230, 0.35);
-  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.4);
-}
-
-.autobtn.off {
-  color: #ffc98a;
-  border-color: rgba(255, 201, 138, 0.6);
-}
-
-.slot .autob {
-  position: absolute;
-  right: 3px;
-  top: 2px;
-  min-width: 13px;
-  height: 13px;
-  padding: 0 2px;
-  border-radius: 4px;
-  font-size: 9px;
-  font-weight: 900;
-  line-height: 13px;
-  text-align: center;
+.autobtn.on b {
   color: #062030;
   background: #8fe9ff;
-  z-index: 2;
+  border-radius: 4px;
+  padding: 1px 3px;
 }
 
+/* While AUTO is on every equipped skill shows a slow rotating ring. */
 .slot.auto::before {
   content: '';
   position: absolute;
   inset: 2px;
   border-radius: 12px;
   padding: 2px;
-  background: conic-gradient(from var(--auto-a, 0deg), #8fe9ff 0 25%, transparent 25% 50%, #8fe9ff 50% 75%, transparent 75%);
+  background: conic-gradient(from var(--auto-a, 0deg), #8fe9ff 0 20%, transparent 20% 50%, #8fe9ff 50% 70%, transparent 70%);
   -webkit-mask:
     linear-gradient(#000 0 0) content-box,
     linear-gradient(#000 0 0);
   -webkit-mask-composite: xor;
   mask-composite: exclude;
-  opacity: 0.75;
+  opacity: 0.55;
   pointer-events: none;
-  animation: auto-spin 3s linear infinite;
+  animation: auto-spin 4s linear infinite;
   z-index: 1;
-}
-
-.slot.auto-paused::before {
-  animation: none;
-  opacity: 0.3;
-}
-
-.slot.auto-paused .autob {
-  background: #ffc98a;
-}
-
-.slot.holding {
-  transform: scale(0.94);
-  box-shadow:
-    0 0 0 2px rgba(143, 233, 255, 0.6),
-    0 4px 12px rgba(0, 0, 0, 0.45);
 }
 
 .slot.autofire {
@@ -1255,9 +1225,5 @@
   .hotbar .basic-col {
     flex-direction: row;
     align-items: flex-end;
-  }
-
-  .autobtn {
-    width: 44px;
   }
 }

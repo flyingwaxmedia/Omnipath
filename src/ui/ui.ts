@@ -134,16 +134,10 @@ export class UI implements PanelHost {
         if (empty) this.open('skills');
         else this.ctrl.castSlot(i);
       },
-      (i) => {
-        const id = this.ctrl.session.player.hotbar[i];
-        if (!id) return;
-        const r = this.ctrl.toggleAutoCast(id);
-        if (r.message) this.toast(r.message);
-      },
       () => {
         const on = !this.ctrl.autoCastOn();
         this.ctrl.setAutoCastOn(on);
-        this.toast(on ? '⟳ Auto-cast resumed' : '⏸ Auto-cast paused');
+        this.toast(on ? '⟳ AUTO on: hunting the nearest foe' : 'AUTO off');
       },
     );
   }

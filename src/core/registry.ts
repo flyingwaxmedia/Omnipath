@@ -2,24 +2,28 @@
 // shape merges, composed on demand and cached) and data validation. Every core module codes
 // against this class; it never mutates the data it was built from.
 import { canTakeElement, compose, hasReservedChar, legalEssenceSet, mergeSkills, parseVariantId } from './compose';
+import { QUEST_NODE_KINDS } from './quests';
 import { pairKey, parseRef, type ParsedRef } from './refs';
-import type {
-  ClassDef,
-  ElementDef,
-  ElementId,
-  EssenceDef,
-  FusionRecipe,
-  GameData,
-  IngredientRef,
-  ItemDef,
-  LessonDef,
-  MonsterDef,
-  MonsterTechnique,
-  MorphDef,
-  PassiveDef,
-  Requirement,
-  SkillDef,
-  TrainerDef,
+import {
+  SHAPE_KINDS,
+  type ClassDef,
+  type ElementDef,
+  type ElementId,
+  type EssenceDef,
+  type FusionRecipe,
+  type GameData,
+  type IngredientRef,
+  type ItemDef,
+  type LessonDef,
+  type MonsterDef,
+  type MonsterTechnique,
+  type MorphDef,
+  type PassiveDef,
+  type QuestDef,
+  type QuestObjective,
+  type Requirement,
+  type SkillDef,
+  type TrainerDef,
 } from './types';
 
 /** A monster that uses a technique, and how. */
@@ -65,6 +69,14 @@ function tryParseRef(ref: IngredientRef): ParsedRef | null {
   }
 }
 
+/** Map ids are `<region>.<name>` with an optional `.<n>` floor (vale.quarry_depths.1). */
+const MAP_ID = /^[a-z][a-z0-9_]*\.[a-z0-9_]+(\.[0-9]+)?$/;
+
+/** SkillBook flag ids: lower-case words, optionally `<prefix>:<id>` (visited:vale.hearthvale). */
+const FLAG_ID = /^[a-z0-9_]+(:[a-z0-9_.]+)?$/;
+
+const isCount = (n: unknown): boolean => typeof n === 'number' && Number.isInteger(n) && n >= 1;
+
 /** Ids that occur more than once, in first-seen order. */
 function duplicates(ids: readonly string[]): string[] {
   const seen = new Set<string>();
@@ -86,6 +98,8 @@ export class Registry {
   readonly trainers: TrainerDef[];
   readonly monsters: Map<string, MonsterDef>;
   readonly items: Map<string, ItemDef>;
+  /** Quests by id, in data order (docs/QUESTS.md). Empty when the bundle has none. */
+  readonly quests: Map<string, QuestDef>;
   readonly dataVersion: number;
 
   private readonly data: GameData;
@@ -100,6 +114,9 @@ export class Registry {
   private readonly recipes = new Map<string, FusionRecipe>();
   private readonly byIngredient = new Map<IngredientRef, FusionRecipe[]>();
   private readonly techniques = new Map<string, TechniqueSource[]>();
+  private readonly questGiven = new Map<string, QuestDef[]>();
+  private readonly questTurnIns = new Map<string, QuestDef[]>();
+  private readonly lessonQuests = new Map<string, QuestDef[]>();
 
   constructor(data: GameData) {
     this.data = data;
@@ -134,6 +151,12 @@ export class Registry {
       for (const technique of monster.techniques ?? []) pushTo(this.techniques, technique.skill, { monster, technique });
     }
     this.items = indexFirst(data.items, (i) => i.id);
+    this.quests = indexFirst(data.quests ?? [], (q) => q.id);
+    for (const quest of this.quests.values()) {
+      pushTo(this.questGiven, quest.giver, quest);
+      pushTo(this.questTurnIns, quest.turnIn ?? quest.giver, quest);
+      if (quest.rewards.lesson !== undefined) pushTo(this.lessonQuests, quest.rewards.lesson, quest);
+    }
   }
 
   // ---------------------------------------------------------------- skills
@@ -237,6 +260,26 @@ export class Registry {
     return this.lessonIndex.get(id);
   }
 
+  /** A quest by id. */
+  quest(id: string): QuestDef | undefined {
+    return this.quests.get(id);
+  }
+
+  /** Quests NPC `npcId` gives (QuestDef.giver), in data order. */
+  questsBy(npcId: string): QuestDef[] {
+    return this.questGiven.get(npcId) ?? [];
+  }
+
+  /** Quests turned in to NPC `npcId` (`turnIn`, else the giver), in data order. */
+  questsTurnedInAt(npcId: string): QuestDef[] {
+    return this.questTurnIns.get(npcId) ?? [];
+  }
+
+  /** Quests whose reward is lesson `lessonId`, in data order (content rule: exactly one). */
+  questsForLesson(lessonId: string): QuestDef[] {
+    return this.lessonQuests.get(lessonId) ?? [];
+  }
+
   /** Morphs whose source is `id`. */
   morphsFrom(id: string): MorphDef[] {
     return this.morphFrom.get(id) ?? [];
@@ -312,7 +355,9 @@ export class Registry {
    * Data integrity check. Returns human-readable problems; [] means the bundle is consistent.
    * Covers duplicate ids, reserved characters, unknown references in every table and requirement,
    * morph edges (self-morphs; sparks on capstones or from buff parents), recipe shapes, class
-   * parents/trees, lessons, monsters and items.
+   * parents/trees, lessons, monsters, items and quests (objective targets, rewards, `after` chains,
+   * flag and map id formats — NPC ids and map existence live in the world data and are not checked here —
+   * and that a lesson is the reward of at most one non-repeatable quest).
    */
   validate(): string[] {
     const errs: string[] = [];
@@ -466,6 +511,120 @@ export class Registry {
       if (i.kind === 'shard' && !this.elements.has(i.element)) errs.push(`item ${i.id}: unknown shard element ${i.element}`);
     }
 
+    errs.push(...this.validateQuests(checkReqs));
+    return errs;
+  }
+
+  /** Quest checks of validate(); `checkReqs` is validate's requirement checker (it pushes to its own list). */
+  private validateQuests(checkReqs: (where: string, reqs: readonly Requirement[] | undefined) => void): string[] {
+    const errs: string[] = [];
+    const quests = this.data.quests ?? [];
+    const skillOk = (id: string): boolean => !!this.skill(id);
+    const checkFlags = (where: string, reqs: readonly Requirement[]): void => {
+      for (const r of reqs) {
+        if (r.type === 'flag' && !FLAG_ID.test(r.id)) errs.push(`${where}: malformed flag id ${r.id}`);
+        if (r.type === 'mapVisited' && !MAP_ID.test(r.id)) errs.push(`${where}: malformed map id ${r.id}`);
+      }
+    };
+    const checkObjective = (where: string, o: QuestObjective): void => {
+      if ('count' in o && !isCount(o.count)) errs.push(`${where}: count must be a whole number >= 1`);
+      switch (o.kind) {
+        case 'kill':
+          if (o.monster !== undefined && !this.monsters.has(o.monster)) errs.push(`${where}: unknown monster ${o.monster}`);
+          break;
+        case 'gather':
+          if (!QUEST_NODE_KINDS.includes(o.node)) errs.push(`${where}: unknown node kind ${o.node}`);
+          break;
+        case 'deliver':
+          if (!this.items.has(o.item)) errs.push(`${where}: unknown item ${o.item}`);
+          break;
+        case 'visit':
+          if (!MAP_ID.test(o.map)) errs.push(`${where}: malformed map id ${o.map}`);
+          break;
+        case 'talk':
+          if (o.npc.length === 0) errs.push(`${where}: empty npc id`);
+          break;
+        case 'use':
+          if (o.skill !== undefined && !skillOk(o.skill)) errs.push(`${where}: unknown skill ${o.skill}`);
+          if (o.tag !== undefined && o.tag.length === 0) errs.push(`${where}: empty tag`);
+          break;
+        case 'cast':
+          if (!MAP_ID.test(o.map)) errs.push(`${where}: malformed map id ${o.map}`);
+          if (o.element !== undefined && !this.elements.has(o.element)) errs.push(`${where}: unknown element ${o.element}`);
+          if (o.shape !== undefined && !SHAPE_KINDS.includes(o.shape)) errs.push(`${where}: unknown shape ${o.shape}`);
+          if (o.tag !== undefined && o.tag.length === 0) errs.push(`${where}: empty tag`);
+          break;
+        case 'witness':
+          if (o.skill !== undefined && !this.techniqueSources(o.skill).some((t) => t.technique.echo !== undefined)) {
+            errs.push(`${where}: ${o.skill} is not an echo technique of any monster`);
+          }
+          break;
+        case 'state':
+          if (o.label.length === 0) errs.push(`${where}: empty label`);
+          checkReqs(where, [o.requires]);
+          checkFlags(where, [o.requires]);
+          break;
+      }
+    };
+
+    for (const id of duplicates(quests.map((q) => q.id))) errs.push(`quest ${id}: duplicate id`);
+    for (const q of quests) {
+      const where = `quest ${q.id}`;
+      if (q.giver.length === 0) errs.push(`${where}: empty giver`);
+      if (q.objectives.length === 0) errs.push(`${where}: no objectives`);
+      for (const prev of q.after ?? []) {
+        if (prev === q.id) errs.push(`${where}: comes after itself`);
+        else if (!this.quests.has(prev)) errs.push(`${where}: unknown 'after' quest ${prev}`);
+      }
+      checkReqs(where, q.requires);
+      checkFlags(where, q.requires ?? []);
+      q.objectives.forEach((o, i) => checkObjective(`${where} objective ${i + 1} (${o.kind})`, o));
+      const r = q.rewards;
+      if (r.lesson !== undefined && !this.lessonIndex.has(r.lesson)) errs.push(`${where}: unknown reward lesson ${r.lesson}`);
+      if (r.skill !== undefined && !skillOk(r.skill)) errs.push(`${where}: unknown reward skill ${r.skill}`);
+      if (r.passive !== undefined && !this.passives.has(r.passive)) errs.push(`${where}: unknown reward passive ${r.passive}`);
+      if (r.element !== undefined && !this.elements.has(r.element)) errs.push(`${where}: unknown reward element ${r.element}`);
+      for (const [e, n] of Object.entries(r.essences ?? {})) {
+        if (!this.essences.has(e)) errs.push(`${where}: unknown reward essence ${e}`);
+        if (!isCount(n)) errs.push(`${where}: reward essence ${e} count must be a whole number >= 1`);
+      }
+      for (const [item, n] of Object.entries(r.items ?? {})) {
+        if (!this.items.has(item)) errs.push(`${where}: unknown reward item ${item}`);
+        if (!isCount(n)) errs.push(`${where}: reward item ${item} count must be a whole number >= 1`);
+      }
+      if (r.whisper !== undefined && !this.classIndex.has(r.whisper)) errs.push(`${where}: unknown whisper class ${r.whisper}`);
+      if (r.flag !== undefined && !FLAG_ID.test(r.flag)) errs.push(`${where}: malformed reward flag ${r.flag}`);
+      for (const key of ['coins', 'exp'] as const) {
+        const n = r[key];
+        if (n !== undefined && !(Number.isFinite(n) && n >= 0)) errs.push(`${where}: reward ${key} must be >= 0`);
+      }
+      if (q.repeatable && !(Number.isFinite(q.repeatable.cooldownMs) && q.repeatable.cooldownMs >= 0)) {
+        errs.push(`${where}: repeatable cooldownMs must be >= 0`);
+      }
+    }
+
+    // `after` chains must not loop (a looping chain can never be offered).
+    for (const q of this.quests.values()) {
+      const seen = new Set<string>();
+      const stack = [...(q.after ?? [])].filter((a) => a !== q.id);
+      while (stack.length > 0) {
+        const id = stack.pop()!;
+        if (id === q.id) {
+          errs.push(`quest ${q.id}: 'after' chain loops back to itself`);
+          break;
+        }
+        if (seen.has(id)) continue;
+        seen.add(id);
+        stack.push(...(this.quests.get(id)?.after ?? []));
+      }
+    }
+
+    for (const [lesson, list] of this.lessonQuests) {
+      const once = list.filter((q) => !q.repeatable);
+      if (once.length > 1) {
+        errs.push(`lesson ${lesson}: reward of ${once.length} non-repeatable quests (${once.map((q) => q.id).join(', ')})`);
+      }
+    }
     return errs;
   }
 }

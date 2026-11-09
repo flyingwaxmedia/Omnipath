@@ -418,7 +418,7 @@ function skillCard(host: PanelHost, s: SkillDef, variant: boolean, picking: bool
       <span class="rank">${max ? `★ Mastered${p.charges ? ` · <em>${p.charges} morph charge${p.charges > 1 ? 's' : ''}</em>` : ''}` : `Rank ${p.rank} / ${s.maxRank}`}${usable ? '' : ` · ${s.weapons?.map((w) => WEAPONS[w].icon).join('') ?? ''} only`}</span>
       <span class="bar mini ${max ? 'over' : ''}"><i style="width:${pct}%"></i></span>
     </span>
-    <span class="flags">${isNew ? '<i class="new">NEW</i>' : ''}${slot >= 0 ? `<i class="hk">${slot + 1}</i>` : ''}${host.ctrl.isAutoCast(s.id) ? '<i class="au" title="Auto-cast">⟳</i>' : ''}${morph ? '<i class="mr">✨</i>' : ''}</span>
+    <span class="flags">${isNew ? '<i class="new">NEW</i>' : ''}${slot >= 0 ? `<i class="hk">${slot + 1}</i>` : ''}${morph ? '<i class="mr">✨</i>' : ''}</span>
   </button>`;
 }
 
@@ -781,21 +781,13 @@ function renderSkill(host: PanelHost, id: string): void {
       host.render();
     }),
   );
-  host.modal.querySelector('[data-auto]')?.addEventListener('click', () => {
-    const r = ctrl.toggleAutoCast(id);
-    if (r.message) host.toast(esc(r.message));
-    host.render();
-  });
 }
 
 /** Auto-cast switch for a skill (attacks with power and buffs; movement-only skills cannot). */
 function autoHtml(host: PanelHost, s: SkillDef): string {
-  const { ctrl } = host;
   if (s.shape.kind !== 'buff' && s.power <= 0) return '';
-  const on = ctrl.isAutoCast(s.id);
-  const master = ctrl.autoCastOn();
-  return `<div class="auto-row"><button class="switch ${on ? 'on' : ''}" data-auto role="switch" aria-checked="${on}" aria-label="Auto-cast ${esc(s.name)}"><i></i></button>
-    <span><b>⟳ Auto-cast</b><small>${on ? (master ? 'Fires on its own while you fight, when ready.' : 'On, but the AUTO switch on the hotbar is paused.') : 'Off — cast it yourself from the hotbar.'}</small></span></div>`;
+  const on = host.ctrl.autoCastOn();
+  return `<p class="sub">⟳ AUTO is ${on ? '<b>on</b>: equipped skills fire by themselves when a target is in reach.' : 'off. Turn it on with the AUTO button by the attack button to auto-battle.'}</p>`;
 }
 
 function riderText(s: SkillDef): string {

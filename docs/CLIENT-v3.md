@@ -38,7 +38,7 @@ Layout per ART-DIRECTION §5 with **no joystick**:
 - left edge round buttons: quick heal (count), recall shard (count), rest;
 - bottom-left compact log (3 lines, fades) above the EXP bar;
 - bottom-centre horizontal skill bar: **8** framed slots (portrait: two rows of 4) with pixel icons (`iconUrl`), cooldown sweep, rank badge, element
-  pip, auto-cast ring + badge, spark rune; hold = auto-cast toggle (unchanged behaviour);
+  pip, AUTO ring (all slots while AUTO is on), spark rune; tap = cast;
 - bottom-right attack cluster: big round attack button (`ui_round_big`), small round buttons on its arc: AUTO, Target
   (cycle to the next nearest enemy), Potion (count);
 - full-width thin EXP bar at the very bottom with percentage.
@@ -91,7 +91,7 @@ v2 skills panel views).
   outfit preview.
 
 ## 6. Sandbox loadouts (docs/SPEC-v2.md §5.1)
-- `HOTBAR_SIZE = 8`; saves pad old 6-slot bars; keys 1–8 cast, Shift+1–8 toggles auto-cast.
+- `HOTBAR_SIZE = 8`; saves pad old 6-slot bars; keys 1–8 cast, A toggles AUTO battle (docs/CLIENT-v2.md §6.1).
 - `usable()` no longer checks the equipped weapon (only tier-0 basics are weapon-bound and never sit on the bar).
 - Every skill-bar change (assign, clear, learn auto-slot, load) calls `book.setLoadout(hotbar ids)`; on
   `classActive` the player's outfit (§5) and the HUD class line update instantly, with a short "You fight as a

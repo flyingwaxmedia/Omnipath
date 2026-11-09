@@ -4,10 +4,18 @@
 // SkillBook also uses it as its defensive copy. Storage keys and I/O belong to the game layer.
 import { classMaxRank, classXpToNext, imprintSlots, imprintUnlocked } from './classes';
 import { MASTERY, overmasteryCost, xpToNext } from './mastery';
+import { QUEST_TRACK_LIMIT, counterNeed } from './quests';
 import type { Registry } from './registry';
 import { hashSeed } from './rng';
 import { SPARK } from './spark';
-import { emptyState, type ClassProgress, type SkillBookState, type SkillProgress, type SparkState } from './state';
+import {
+  emptyState,
+  type ClassProgress,
+  type QuestState,
+  type SkillBookState,
+  type SkillProgress,
+  type SparkState,
+} from './state';
 import type { ElementId } from './types';
 
 /**
@@ -134,6 +142,25 @@ function readSpark(v: unknown, skills: Readonly<Record<string, SkillProgress>>):
   };
 }
 
+/**
+ * Quest state (docs/QUESTS.md §2); a save without one gets emptyQuestState(). Active entries keep whole,
+ * non-negative counters; tracked ids must be active (newest first, at most QUEST_TRACK_LIMIT).
+ */
+function readQuests(v: unknown): QuestState {
+  const q = isRecord(v) ? v : {};
+  const active: QuestState['active'] = {};
+  for (const [id, a] of entries(q.active)) {
+    if (!isRecord(a)) continue;
+    const progress = Array.isArray(a.progress) ? a.progress.map((x) => whole(x) ?? 0) : [];
+    active[id] = { progress, acceptedAt: finite(a.acceptedAt) ?? 0 };
+  }
+  const cooldown = numbers(q.cooldown);
+  const tracked = strings(q.tracked)
+    .filter((id) => Object.hasOwn(active, id))
+    .slice(0, QUEST_TRACK_LIMIT);
+  return { active, done: counts(q.done), cooldown, tracked };
+}
+
 /** Structural read of any object; no registry needed. */
 function readState(r: Raw): SkillBookState {
   const skills = readSkills(r.skills);
@@ -162,6 +189,7 @@ function readState(r: Raw): SkillBookState {
     spark: readSpark(r.spark, skills),
     bestiary: counts(r.bestiary),
     whispered: strings(r.whispered),
+    quests: readQuests(r.quests),
   };
 }
 
@@ -203,18 +231,27 @@ function settle(state: SkillBookState, reg: Registry): void {
       return cls !== undefined && imprintUnlocked(cls, state.classes[id]);
     })
     .slice(0, imprintSlots(reg, state));
+  // Quest counters follow the current objectives: one per objective, capped at its need (live
+  // objectives — deliver, state — keep 0).
+  for (const [id, entry] of Object.entries(state.quests?.active ?? {})) {
+    const quest = reg.quest(id);
+    if (!quest) continue;
+    entry.progress = quest.objectives.map((o, i) => Math.min(counterNeed(o), entry.progress[i] ?? 0));
+  }
 }
 
 /**
  * Normalizes any stored SkillBook state into a complete v2 SkillBookState (never throws):
  * - v1 (`version: 1`): `classes: string[]` → `{ rank: 1, xp: 0, spent: {} }` each, `activeClass` →
  *   `worn`, skills gain `overBars: 0` and `study: {}`, and every v2-only field is added.
- * - v2: any missing or malformed field is filled with its emptyState() default; malformed entries
- *   (non-numeric ranks, negative counts, non-string ids) are repaired or dropped.
+ * - v2: any missing or malformed field is filled with its emptyState() default (a save from before
+ *   quests gets emptyQuestState()); malformed entries (non-numeric ranks, negative counts, non-string
+ *   ids) are repaired or dropped.
  * - Both: a book with discovered classes always wears one (the saved one when valid, else the
  *   first), `class_worn` is set while a class is worn, charges are capped at MASTERY.maxCharges, and
  *   the copy shares no objects with `raw`.
- * - With `reg`: ranks and XP are clamped to the v2 curves (see settle above). The SkillBook
+ * - With `reg`: ranks and XP are clamped to the v2 curves and quest counters to their objectives (see
+ *   settle above). The SkillBook
  *   constructor always passes its registry, so callers may omit it.
  * Anything that is not an object (or throws while being read) yields emptyState().
  */

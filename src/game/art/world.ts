@@ -1,26 +1,13 @@
 import type Phaser from 'phaser';
 import { mulberry32 } from '../../core/rng';
 import { T, TILE_COUNT } from '../../core/world/tiles';
-import {
-  type Ctx,
-  canvasTex,
-  canvasTexAll,
-  ellipse,
-  glow,
-  groundShadow,
-  line,
-  mix,
-  outlined,
-  poly,
-  rect,
-  rgba,
-  scratch,
-  shade,
-  vgrad,
-} from './common';
+import { type Ctx, canvasTex, ellipse, line, poly, rect, rgba, scratch, shade } from './common';
+import { PAL, artRng, disc, keySeed, line as seg, outline, px } from './pixel';
 
 // World art: tileset atlas, props, structures, objects, gather nodes, portals and hidden-portal blockers.
 // Every texture key here is a contract with the client (see docs/SPEC-v2.md §7 and src/core/world/types.ts).
+// Everything below the tile section is true pixel art (docs/ART-DIRECTION.md "Lush Pixel"): integer pixels, flat
+// colour ramps lit from the top-left and a 1 px PAL.outline rim. Sizes and anchors are unchanged from v2.
 
 const TILE = 32;
 
@@ -29,8 +16,8 @@ const TILE = 32;
 export const TILE_MARGIN = 1;
 export const TILE_SPACING = 2;
 
+import { canvasTexAll, glow, groundShadow, mix, outlined, vgrad } from './common';
 const OUTLINE = 'rgba(22,18,30,0.78)';
-
 // ================================================================== tiles
 
 type Wrap = (f: () => void) => void;
@@ -683,345 +670,592 @@ function drawTiles(scene: Phaser.Scene): void {
   });
 }
 
-// ================================================================== props
-// Origin bottom-centre: the client anchors (0.5, 1) at the tile's bottom edge.
+// ================================================================== pixel kit
+// Shared by props, structures, objects, nodes and portals. Bodies are painted on a scratch canvas by sprite(),
+// which then adds the 1 px PAL.outline rim and composites over whatever (shadows, halos) is already on the texture.
 
-type Blob = readonly [number, number, number];
+const OUT = PAL.outline;
+type Ramp = readonly string[];
 
-/** Cloud-like foliage: dark underside, body, top-left highlights, leaf texture. */
-function canopy(c: Ctx, blobs: readonly Blob[], leaf: string, rnd: () => number, hiAmt = 26): void {
-  for (const [x, y, r] of blobs) ellipse(c, x, y + 2, r, r * 0.92, shade(leaf, -42));
-  for (const [x, y, r] of blobs) ellipse(c, x, y, r - 1, (r - 1) * 0.9, leaf);
-  for (const [x, y, r] of blobs) ellipse(c, x - r * 0.28, y - r * 0.32, r * 0.5, r * 0.4, shade(leaf, hiAmt));
-  for (const [x, y, r] of blobs) {
-    for (let i = 0; i < 3; i++) {
-      const a = rnd() * Math.PI * 2;
-      const d = rnd() * r * 0.7;
-      rect(c, Math.round(x + Math.cos(a) * d), Math.round(y + Math.sin(a) * d * 0.8), 2, 1, shade(leaf, -24));
+/** Material ramps, darkest -> lightest. Anchors from docs/ART-DIRECTION.md §2, extended by a shade either side. */
+const R = {
+  leaf: ['#1f3519', '#2b4a22', '#3d6630', '#548540', '#74a655', '#a2c46a'],
+  bark: ['#2e1d10', '#3d2817', '#5c3d22', '#7d5530', '#9c6d3e', '#b8874f'],
+  stone: ['#33353c', '#4a4d55', '#666a73', '#878b93', '#a9adb3', '#cfd2d5'],
+  warmStone: ['#3a342e', '#544c43', '#70665a', '#8f8475', '#aea290', '#ccc2ae'],
+  dirt: ['#5a4a34', '#7a6446', '#96805c', '#ad9a74', '#c2b18a'],
+  grass: ['#3f5a26', '#56772f', '#6c8f3a', '#86a64a', '#a2bd62'],
+  moss: ['#2b4a22', '#3d6630', '#548540', '#74a655'],
+  gold: ['#6a4818', '#a0702c', '#d0a048', '#e9c46a', '#f8e6a8'],
+  iron: ['#24252b', '#3a3c44', '#565a64', '#7c818c', '#a8adb6'],
+  crimson: ['#4a1418', '#7a1f26', '#b8323a', '#d85a58', '#f09080'],
+  blue: ['#141c3a', '#1f2c58', '#2c4380', '#3f5fa6', '#6a8acc'],
+  teal: ['#16302e', '#1f4a46', '#2c6a62', '#3f8f84', '#68b8a8'],
+  cream: ['#8a7a5a', '#b8a684', '#d6c8a4', '#efe6c8', '#fbf6e6'],
+  violet: ['#2a1c4a', '#43307a', '#6a4ea8', '#8a6cc0', '#b8a0e8', '#e4d8ff'],
+  cyan: ['#163a52', '#1f5a7a', '#2f86ac', '#4ab0d8', '#8ce0f4', '#e0fbff'],
+  flame: ['#7a1e0c', '#c8401a', '#f07a28', '#ffc04a', '#fff0a8'],
+} as const;
+
+const SHADOW = 'rgba(36,24,15,0.30)';
+
+/** Integer rectangle (rounded), the workhorse of every sprite. */
+function box(c: Ctx, x: number, y: number, w: number, h: number, color: string): void {
+  const x0 = Math.round(x);
+  const y0 = Math.round(y);
+  const ww = Math.round(x + w) - x0;
+  const hh = Math.round(y + h) - y0;
+  if (ww <= 0 || hh <= 0) return;
+  c.fillStyle = color;
+  c.fillRect(x0, y0, ww, hh);
+}
+
+/** Scanline polygon fill on pixel centres (no anti-aliasing). pts = [x0,y0,x1,y1,...]. */
+function fpoly(c: Ctx, pts: readonly number[], color: string): void {
+  const n = pts.length >> 1;
+  let y0 = Infinity;
+  let y1 = -Infinity;
+  for (let i = 0; i < n; i++) {
+    y0 = Math.min(y0, pts[i * 2 + 1]);
+    y1 = Math.max(y1, pts[i * 2 + 1]);
+  }
+  c.fillStyle = color;
+  const xs: number[] = [];
+  for (let y = Math.floor(y0); y <= Math.ceil(y1); y++) {
+    const sy = y + 0.5;
+    xs.length = 0;
+    for (let i = 0; i < n; i++) {
+      const ax = pts[i * 2];
+      const ay = pts[i * 2 + 1];
+      const bx = pts[((i + 1) % n) * 2];
+      const by = pts[((i + 1) % n) * 2 + 1];
+      if ((ay <= sy && by > sy) || (by <= sy && ay > sy)) xs.push(ax + ((sy - ay) / (by - ay)) * (bx - ax));
     }
-    rect(c, Math.round(x - r * 0.4), Math.round(y - r * 0.5), 1, 1, shade(leaf, hiAmt + 26));
+    xs.sort((a, b) => a - b);
+    for (let k = 0; k + 1 < xs.length; k += 2) {
+      const a = Math.round(xs[k]);
+      const b = Math.round(xs[k + 1]);
+      if (b > a) c.fillRect(a, y, b - a, 1);
+    }
   }
 }
 
-function trunk(c: Ctx, cx: number, top: number, base: number, w: number, bark: string): void {
-  poly(c, [cx - w / 2 - 3, base, cx - w / 2, base - 5, cx - w / 2, top, cx + w / 2, top, cx + w / 2, base - 5, cx + w / 2 + 3, base], bark);
-  rect(c, cx + w / 2 - 3, top, 3, base - top - 1, shade(bark, -24));
-  rect(c, cx - w / 2 + 1, top + 3, 1, base - top - 8, shade(bark, 18));
-  rect(c, cx - 1, top + 6, 1, 4, shade(bark, -18));
-  rect(c, cx + 1, base - 10, 1, 3, shade(bark, -18));
+/** Square-brush polyline (w px wide), for branches, ropes and stems. */
+function brush(c: Ctx, pts: readonly number[], w: number, color: string): void {
+  c.fillStyle = color;
+  for (let i = 0; i + 3 < pts.length; i += 2) {
+    const [x0, y0, x1, y1] = [pts[i], pts[i + 1], pts[i + 2], pts[i + 3]];
+    const n = Math.max(1, Math.ceil(Math.max(Math.abs(x1 - x0), Math.abs(y1 - y0))));
+    for (let s = 0; s <= n; s++) {
+      const x = x0 + ((x1 - x0) * s) / n;
+      const y = y0 + ((y1 - y0) * s) / n;
+      c.fillRect(Math.round(x - w / 2), Math.round(y - w / 2), w, w);
+    }
+  }
 }
 
-function broadTree(scene: Phaser.Scene, key: string, leaf: string, bark: string, seed: number, extra?: (c: Ctx) => void): void {
+/** Flat pixel ground shadow (hard-edged, translucent, warm). */
+function shadow(c: Ctx, cx: number, cy: number, rx: number, ry: number, a = 0.3): void {
+  disc(c, cx, cy, rx, ry, a === 0.3 ? SHADOW : `rgba(36,24,15,${a})`);
+}
+
+/** Stepped (banded) light halo — reads as pixel light, never a smooth gradient. */
+function halo(c: Ctx, cx: number, cy: number, r: number, color: string, a = 0.3, steps = 3): void {
+  for (let i = 0; i < steps; i++) {
+    const rr = r * (1 - i / (steps + 0.5));
+    disc(c, cx, cy, rr, rr * 0.92, rgba(color, a / steps));
+  }
+}
+
+/** Paint the body on a scratch canvas, rim it with the 1 px outline, composite it. */
+function sprite(c: Ctx, w: number, h: number, draw: (b: Ctx) => void, color: string = OUT): void {
+  const s = scratch(w, h);
+  draw(s.c);
+  outline(s.c, w, h, color);
+  c.drawImage(s.el, 0, 0);
+}
+
+/** Same drawing under every key (legacy aliases). */
+function texAll(scene: Phaser.Scene, keys: readonly string[], w: number, h: number, draw: (c: Ctx) => void): void {
+  for (const k of keys) canvasTex(scene, k, w, h, draw);
+}
+
+/** Four-point sparkle. */
+function twinkle(c: Ctx, x: number, y: number, color: string, arm = 1): void {
+  box(c, x - arm, y, arm * 2 + 1, 1, color);
+  box(c, x, y - arm, 1, arm * 2 + 1, color);
+}
+
+/**
+ * Foliage mass made of overlapping leaf puffs. Puffs are painted bottom-first, each with a darker underside, so every
+ * clump gets the dark lower edge of the reference style; tone steps follow the top-left light. `rim` paints a dark
+ * band around the whole cluster first so it separates from the clusters behind it.
+ */
+function leafMass(b: Ctx, cx: number, cy: number, rx: number, ry: number, ramp: Ramp, rnd: () => number, rim = true, pr = 4): void {
+  const puffs: [number, number, number][] = [];
+  const sx = pr * 1.3;
+  const sy = pr * 1.1;
+  let row = 0;
+  for (let y = cy - ry + pr * 0.7; y <= cy + ry - pr * 0.5; y += sy, row++) {
+    for (let x = cx - rx + pr * 0.7 + (row & 1) * sx * 0.5; x <= cx + rx - pr * 0.6; x += sx) {
+      const jx = x + (rnd() - 0.5) * 1.6;
+      const jy = y + (rnd() - 0.5) * 1.2;
+      const e = ((jx - cx) / Math.max(1, rx - pr * 0.6)) ** 2 + ((jy - cy) / Math.max(1, ry - pr * 0.6)) ** 2;
+      if (e > 1.08) continue;
+      puffs.push([jx, jy, pr * (0.85 + rnd() * 0.35)]);
+    }
+  }
+  if (!puffs.length) puffs.push([cx, cy, pr]);
+  if (rim) for (const [x, y, r] of puffs) disc(b, x, y + 0.6, r + 1.1, (r + 1.1) * 0.9, ramp[0]);
+  puffs.sort((p, q) => q[1] - p[1]);
+  const top = ramp.length - 1;
+  for (const [x, y, r] of puffs) {
+    const L = -((x - cx) / rx) * 0.5 - ((y - cy) / ry) * 0.95 + (rnd() - 0.5) * 0.3;
+    const t = L > 0.6 ? 4 : L > 0.12 ? 3 : L > -0.4 ? 2 : 1;
+    disc(b, x + 0.3, y + 0.9, r, r * 0.86, ramp[t - 1]);
+    disc(b, x - 0.2, y - 0.2, r - 0.7, (r - 0.7) * 0.84, ramp[t]);
+    if (t >= 2) disc(b, x - r * 0.35, y - r * 0.42, r * 0.4, r * 0.3, ramp[Math.min(top, t + 1)]);
+  }
+}
+
+/** Tree trunk with flared roots, lit left edge, shaded right edge and bark crevices. */
+function trunkPx(b: Ctx, cx: number, top: number, base: number, w: number, ramp: Ramp, rnd: () => number): void {
+  const hw = w / 2;
+  fpoly(b, [cx - hw, top, cx + hw, top, cx + hw, base - 6, cx + hw + 5, base, cx - hw - 5, base, cx - hw, base - 6], ramp[3]);
+  // roots
+  fpoly(b, [cx - hw - 1, base - 4, cx - hw - 7, base + 1, cx - hw - 2, base + 1], ramp[2]);
+  fpoly(b, [cx + hw + 1, base - 4, cx + hw + 7, base + 1, cx + hw + 2, base + 1], ramp[1]);
+  for (let y = top; y < base; y++) {
+    const flare = y > base - 6 ? (y - (base - 6)) * 0.85 : 0;
+    const x0 = Math.round(cx - hw - flare);
+    const x1 = Math.round(cx + hw + flare);
+    box(b, x0, y, 2, 1, ramp[4]);
+    box(b, x1 - 3, y, 3, 1, ramp[2]);
+    box(b, x1 - 1, y, 1, 1, ramp[1]);
+  }
+  for (let i = 0; i < Math.round(w / 2) + 1; i++) {
+    const x = Math.round(cx - hw + 2 + rnd() * (w - 4));
+    const y = Math.round(top + 2 + rnd() * (base - top - 9));
+    const len = 2 + Math.floor(rnd() * 4);
+    box(b, x, y, 1, len, ramp[1]);
+    box(b, x - 1, y + len, 1, 1, ramp[2]);
+  }
+  box(b, Math.round(cx - hw + 1), top + 3, 1, Math.max(1, base - top - 10), ramp[5] ?? ramp[4]);
+  box(b, Math.round(cx - 1), base - 3, 1, 3, ramp[1]);
+  box(b, Math.round(cx + hw + 1), base - 2, 1, 2, ramp[0]);
+}
+
+// ================================================================== props
+// Origin bottom-centre: the client anchors (0.5, 1) at the tile's bottom edge.
+
+const LEAF_DARK = ['#151320', '#201d31', '#2e2946', '#40395f', '#574d7e', '#8576b0'];
+const LEAF_DUSK = ['#1d1730', '#2b2248', '#3e3168', '#56468a', '#7462aa', '#a690d6'];
+const PINE = ['#12261c', '#1a3826', '#264e34', '#346840', '#4a8350', '#73a663'];
+const FROST_PINE = ['#122a32', '#1a3c44', '#26545a', '#356e70', '#4c8a86', '#74aaa2'];
+const SNOW = ['#7f97b0', '#a8bdd2', '#cddcea', '#eef4fa', '#ffffff'];
+const DEAD_BARK = ['#201814', '#2e241e', '#43362c', '#5a4a3c', '#74624f', '#8e7b64'];
+const DUSK_BARK = ['#1a1220', '#281c30', '#3a2a44', '#4f3b5a', '#664e72', '#7f6690'];
+const BASALT = ['#0e0c10', '#19161c', '#252128', '#332e38', '#45404c', '#5e5866'];
+
+function broadTree(scene: Phaser.Scene, key: string, leaf: Ramp, bark: Ramp, extra?: (b: Ctx, rnd: () => number) => void): void {
   canvasTex(scene, key, 48, 64, (c) => {
-    const rnd = mulberry32(seed);
-    groundShadow(c, 24, 58, 16, 4.5);
-    outlined(c, 48, 64, OUTLINE, (b) => {
-      trunk(b, 24, 34, 59, 8, bark);
-      canopy(
-        b,
-        [
-          [14, 32, 10],
-          [34, 32, 10],
-          [24, 34, 11],
-          [17, 21, 11],
-          [31, 21, 11],
-          [24, 12, 10],
-        ],
-        leaf,
-        rnd,
-      );
-      extra?.(b);
+    const rnd = artRng(keySeed(key));
+    shadow(c, 24, 60, 18, 4);
+    sprite(c, 48, 64, (b) => {
+      trunkPx(b, 24, 30, 61, 8, bark, rnd);
+      brush(b, [22, 42, 15, 33], 2, bark[3]);
+      brush(b, [26, 40, 33, 31], 2, bark[2]);
+      leafMass(b, 24, 16, 16, 12, leaf, rnd, false);
+      leafMass(b, 12, 29, 11, 9, leaf, rnd);
+      leafMass(b, 36, 28, 11, 9, leaf, rnd);
+      leafMass(b, 23, 36, 10, 6, leaf, rnd);
+      extra?.(b, rnd);
     });
   });
 }
 
-function pineTree(scene: Phaser.Scene, key: string, needle: string, snow: boolean): void {
+/** One conifer tier: zig-zag hem, lit left half, chevron needle strokes, shaded under the tier above. */
+function pineTier(b: Ctx, cx: number, top: number, bottom: number, hw: number, ramp: Ramp, snow: boolean, under: boolean): void {
+  const H = bottom - top;
+  const halfAt = (y: number) => 1 + ((y - top) / H) * hw;
+  for (let y = top; y <= bottom; y++) {
+    const half = halfAt(y);
+    const x0 = Math.round(cx - half);
+    const x1 = Math.round(cx + half);
+    for (let x = x0; x <= x1; x++) {
+      const k = (((x - cx) % 6) + 6) % 6;
+      const depth = k < 3 ? k : 5 - k;
+      if (y > bottom - 3 && y - (bottom - 3) > depth) continue;
+      const rel = (x - cx) / Math.max(1, half);
+      let tone = rel < -0.45 ? 4 : rel < 0.05 ? 3 : rel < 0.55 ? 2 : 1;
+      if (y >= bottom - 2) tone = Math.max(0, tone - 2);
+      else if (y >= bottom - 4) tone = Math.max(1, tone - 1);
+      if (under && y < top + H * 0.45) tone = Math.max(0, tone - 2);
+      px(b, x, y, ramp[tone]);
+    }
+  }
+  // chevron needle strokes: light "/" on the lit half, dark "\\" on the shaded half
+  for (let y = top + 4, r = 0; y < bottom - 4; y += 4, r++) {
+    const half = halfAt(y) - 2;
+    for (let xo = -Math.floor(half) + (r & 1) * 2; xo <= half - 1; xo += 4) {
+      const x = Math.round(cx + xo);
+      if (xo < -1) seg(b, x, y, x - 1, y + 2, ramp[5]);
+      else if (xo > 1) seg(b, x, y, x + 1, y + 2, ramp[0]);
+    }
+  }
+  if (snow) {
+    for (let y = top; y <= top + Math.round(H * 0.55); y++) {
+      const t = (y - top) / H;
+      const half = 1 + t * hw;
+      const x0 = Math.round(cx - half);
+      const x1 = Math.round(cx + half * (0.55 - t));
+      if (x1 >= x0) box(b, x0, y, x1 - x0 + 1, 1, y === top ? SNOW[4] : SNOW[3]);
+      px(b, x0, y, SNOW[2]);
+    }
+    for (let x = Math.round(cx - hw) + 1; x < cx + hw - 2; x += 5) box(b, x, bottom - 3, 2, 1, SNOW[2]);
+  }
+}
+
+function pineTree(scene: Phaser.Scene, key: string, ramp: Ramp, snow: boolean): void {
   canvasTex(scene, key, 40, 64, (c) => {
-    groundShadow(c, 20, 59, 13, 4);
-    if (snow) ellipse(c, 20, 58, 11, 3, 'rgba(240,248,255,0.85)');
-    outlined(c, 40, 64, OUTLINE, (b) => {
-      rect(b, 17, 46, 6, 13, '#5c3b1e');
-      rect(b, 20, 46, 3, 13, '#472d16');
-      const tier = (y: number, hw: number, h: number, col: string) => {
-        const pts: number[] = [20, y];
-        const teeth = 4;
-        for (let i = 0; i <= teeth * 2; i++) {
-          const t = i / (teeth * 2);
-          const x = 20 + hw - t * hw * 2;
-          pts.push(x, y + h - (i % 2 ? 3 : 0));
-        }
-        poly(b, pts, col);
-        // shaded right half
-        const rp: number[] = [20, y];
-        for (let i = 0; i <= teeth; i++) {
-          const t = i / (teeth * 2);
-          rp.push(20 + hw - t * hw * 2, y + h - (i % 2 ? 3 : 0));
-        }
-        poly(b, rp, shade(col, -22));
-        line(b, [20, y + 2, 20 - hw * 0.55, y + h - 4], shade(col, 26), 1, 'butt');
-        if (snow) {
-          poly(b, [20, y, 20 - hw * 0.62, y + h * 0.62, 20 - hw * 0.3, y + h * 0.5, 20 - hw * 0.05, y + h * 0.58, 20 + hw * 0.25, y + h * 0.42, 20 + hw * 0.5, y + h * 0.5], '#eef6ff');
-          poly(b, [20, y, 20 + hw * 0.25, y + h * 0.42, 20 + hw * 0.5, y + h * 0.5, 20 + hw * 0.12, y + h * 0.2], '#c9dcef');
-          rect(b, Math.round(20 - hw) + 1, y + h - 2, 3, 1, '#e3eefa');
-        }
-      };
-      tier(26, 17, 22, needle);
-      tier(14, 13, 18, shade(needle, 8));
-      tier(3, 9, 15, shade(needle, 16));
+    shadow(c, 20, 60, 14, 4);
+    if (snow) disc(c, 20, 60, 12, 3, 'rgba(238,244,250,0.75)');
+    sprite(c, 40, 64, (b) => {
+      box(b, 17, 48, 6, 13, DEAD_BARK[3]);
+      box(b, 17, 48, 2, 13, DEAD_BARK[4]);
+      box(b, 21, 48, 2, 13, DEAD_BARK[2]);
+      box(b, 16, 59, 8, 2, DEAD_BARK[2]);
+      pineTier(b, 20, 28, 51, 17, ramp, snow, true);
+      pineTier(b, 20, 15, 37, 13, ramp, snow, true);
+      pineTier(b, 20, 3, 24, 9, ramp, snow, false);
+      box(b, 19, 1, 2, 3, snow ? SNOW[3] : ramp[4]);
     });
   });
+}
+
+/** Chunky faceted rock: lit top, mid front-left face, shaded right face, dark foot. Coordinates in a 30x24 box. */
+function rockPx(b: Ctx, ox: number, oy: number, s: number, ramp: Ramp, mossy: boolean, rnd: () => number): void {
+  const P = (pts: number[]) => pts.map((v, i) => Math.round(i % 2 ? oy + v * s : ox + v * s));
+  fpoly(b, P([1, 21, 3, 11, 9, 5, 17, 2, 25, 4, 30, 11, 30, 21, 25, 24, 7, 24]), ramp[2]);
+  fpoly(b, P([1, 21, 3, 11, 10, 13, 12, 24, 7, 24]), ramp[3]);
+  fpoly(b, P([3, 11, 9, 5, 17, 2, 25, 4, 30, 11, 21, 13, 10, 13]), ramp[4]);
+  fpoly(b, P([21, 13, 30, 11, 30, 21, 25, 24, 20, 24]), ramp[1]);
+  fpoly(b, P([1, 21, 7, 24, 25, 24, 30, 21, 30, 23, 25, 25, 7, 25, 1, 23]), ramp[0]);
+  // lit rims and a crack
+  seg(b, ...(P([4, 11, 9, 6]) as [number, number, number, number]), ramp[5] ?? ramp[4]);
+  seg(b, ...(P([10, 5, 17, 3]) as [number, number, number, number]), ramp[5] ?? ramp[4]);
+  seg(b, ...(P([10, 13, 20, 13]) as [number, number, number, number]), ramp[3]);
+  seg(b, ...(P([15, 13, 16, 18]) as [number, number, number, number]), ramp[1]);
+  seg(b, ...(P([16, 18, 14, 22]) as [number, number, number, number]), ramp[1]);
+  for (let i = 0; i < 3; i++) {
+    const [x, y] = P([12 + rnd() * 10, 6 + rnd() * 5]);
+    px(b, x, y, ramp[3]);
+  }
+  if (mossy) {
+    const [mx, my] = P([7, 6]);
+    mossCap(b, mx, my, Math.round(9 * s));
+  }
+}
+
+/** Irregular moss cap: lit top edge, darker underside and a couple of drips. */
+function mossCap(b: Ctx, x: number, y: number, w: number): void {
+  box(b, x + 1, y, w - 3, 1, R.moss[3]);
+  box(b, x, y + 1, w, 1, R.moss[2]);
+  box(b, x + 1, y + 2, w - 2, 1, R.moss[1]);
+  px(b, x + 2, y + 1, R.moss[3]);
+  box(b, x + 2, y + 3, 1, 2, R.moss[1]);
+  box(b, x + w - 3, y + 3, 1, 1, R.moss[0]);
+  px(b, x + Math.round(w / 2), y + 3, R.moss[0]);
+}
+
+/** Grass tuft at a sprite foot (pointy 3-4 px blades). */
+function tuft(b: Ctx, x: number, y: number, ramp: Ramp = R.grass): void {
+  px(b, x, y - 1, ramp[2]);
+  px(b, x + 1, y - 3, ramp[3]);
+  box(b, x + 1, y - 2, 1, 2, ramp[2]);
+  px(b, x + 2, y - 2, ramp[1]);
+  px(b, x + 3, y - 4, ramp[4]);
+  box(b, x + 3, y - 3, 1, 3, ramp[3]);
+  px(b, x + 4, y - 1, ramp[1]);
+}
+
+/** Pointed crystal shard: lit left face, dark right face, glint edge. */
+function shard(b: Ctx, x: number, base: number, top: number, w: number, lean: number, ramp: Ramp): void {
+  fpoly(b, [x - w, base, x - w + lean, top + w + 1, x + lean, top, x, base + 1], ramp[3]);
+  fpoly(b, [x, base + 1, x + lean, top, x + w + lean, top + w + 1, x + w, base], ramp[1]);
+  fpoly(b, [x - 1, base, x - 1 + lean * 0.9, top + 2, x + lean, top, x + 1, base], ramp[2]);
+  seg(b, Math.round(x - w + 1), base - 2, Math.round(x - w + 1 + lean), top + w + 2, ramp[4]);
+  px(b, Math.round(x + lean), top + 1, ramp[5] ?? ramp[4]);
+}
+
+/** Mushroom: cap dome with spots, gill band, stem. */
+function shroom(b: Ctx, x: number, y: number, rx: number, ry: number, stemH: number, cap: Ramp, stem: Ramp = R.cream, spots = true): void {
+  box(b, x - 2, y, 4, stemH, stem[2]);
+  box(b, x - 2, y, 1, stemH, stem[3]);
+  box(b, x + 1, y, 1, stemH, stem[1]);
+  box(b, x - 3, y + stemH - 1, 6, 1, stem[1]);
+  for (let yy = -ry; yy <= 0; yy++) {
+    const half = Math.round(rx * Math.sqrt(1 - (yy / (ry + 0.5)) ** 2));
+    box(b, x - half, y + yy, half * 2 + 1, 1, cap[2]);
+    box(b, x + half - Math.max(1, Math.round(half * 0.35)), y + yy, Math.max(1, Math.round(half * 0.35)) + 1, 1, cap[1]);
+    if (yy < -ry * 0.3) box(b, x - half + 1, y + yy, Math.max(1, Math.round(half * 0.5)), 1, cap[3]);
+  }
+  box(b, x - rx + 1, y + 1, rx * 2 - 1, 1, cap[0]);
+  box(b, x - rx + 2, y + 1, rx * 2 - 3, 1, stem[1]);
+  px(b, x - Math.round(rx * 0.4), y - ry + 1, cap[4]);
+  if (spots) {
+    px(b, x + Math.round(rx * 0.3), y - Math.round(ry * 0.6), R.cream[4]);
+    px(b, x - Math.round(rx * 0.55), y - Math.round(ry * 0.25), R.cream[3]);
+    if (rx >= 5) box(b, x + Math.round(rx * 0.55) - 1, y - 1, 2, 1, R.cream[3]);
+  }
 }
 
 function drawProps(scene: Phaser.Scene): void {
-  broadTree(scene, 'tree', '#3f8a3a', '#6b4423', 11);
-  broadTree(scene, 'darktree', '#4a3d6b', '#3a2e2a', 12, (b) => {
-    for (const [x, y] of [
-      [15, 30],
-      [31, 18],
-      [26, 33],
-    ])
-      rect(b, x, y, 1, 1, '#d7b8ff');
+  broadTree(scene, 'tree', R.leaf, R.bark);
+  broadTree(scene, 'darktree', LEAF_DARK, DEAD_BARK, (b, rnd) => {
+    for (let i = 0; i < 5; i++) {
+      const x = Math.round(8 + rnd() * 32);
+      const y = Math.round(8 + rnd() * 30);
+      px(b, x, y, '#c8a8ff');
+    }
   });
-  pineTree(scene, 'pine', '#2f6b3a', false);
-  pineTree(scene, 'frostpine', '#2f5f6a', true);
+  pineTree(scene, 'pine', PINE, false);
+  pineTree(scene, 'frostpine', FROST_PINE, true);
 
   canvasTex(scene, 'deadtree', 40, 56, (c) => {
-    groundShadow(c, 20, 51, 12, 4);
-    outlined(c, 40, 56, OUTLINE, (b) => {
-      poly(b, [15, 52, 18, 46, 18, 22, 22, 22, 22, 46, 25, 52], '#4a3a30');
-      rect(b, 20, 24, 2, 26, '#3a2c24');
-      line(b, [19, 34, 11, 24, 8, 14], '#4a3a30', 4);
-      line(b, [21, 28, 29, 18, 31, 8], '#4a3a30', 4);
-      line(b, [20, 24, 19, 12], '#4a3a30', 3);
-      line(b, [11, 24, 4, 21], '#4a3a30', 2);
-      line(b, [29, 18, 36, 16], '#4a3a30', 2);
-      line(b, [8, 14, 5, 7], '#4a3a30', 2);
-      line(b, [31, 8, 34, 3], '#4a3a30', 2);
-      line(b, [19, 12, 22, 5], '#4a3a30', 2);
-      line(b, [17, 30, 12, 22], '#62503f', 1);
-      line(b, [20, 26, 27, 17], '#62503f', 1);
+    shadow(c, 20, 52, 13, 3.5);
+    sprite(c, 40, 56, (b) => {
+      const B = DEAD_BARK;
+      fpoly(b, [14, 53, 17, 47, 17, 24, 23, 22, 23, 47, 27, 53], B[3]);
+      brush(b, [19, 36, 12, 26, 8, 15], 3, B[3]);
+      brush(b, [21, 30, 29, 20, 31, 9], 3, B[2]);
+      brush(b, [20, 24, 19, 11], 3, B[3]);
+      brush(b, [12, 26, 5, 22], 2, B[3]);
+      brush(b, [29, 20, 36, 17], 2, B[2]);
+      brush(b, [8, 15, 5, 7], 2, B[3]);
+      brush(b, [8, 15, 12, 9], 2, B[3]);
+      brush(b, [31, 9, 34, 3], 2, B[2]);
+      brush(b, [31, 9, 27, 4], 2, B[2]);
+      brush(b, [19, 11, 22, 4], 2, B[3]);
+      brush(b, [19, 11, 16, 6], 1, B[3]);
+      box(b, 17, 24, 2, 28, B[4]);
+      box(b, 21, 24, 2, 28, B[1]);
+      seg(b, 18, 35, 11, 26, B[4]);
+      seg(b, 21, 29, 28, 20, B[4]);
+      seg(b, 19, 23, 18, 12, B[4]);
+      box(b, 18, 40, 1, 4, B[1]);
+      box(b, 20, 30, 1, 3, B[1]);
+      disc(b, 20, 34, 1.5, 2, B[0]);
+      fpoly(b, [17, 47, 11, 54, 16, 54], B[2]);
+      fpoly(b, [23, 47, 29, 54, 24, 54], B[1]);
     });
   });
 
   canvasTex(scene, 'bush', 32, 28, (c) => {
-    const rnd = mulberry32(14);
-    groundShadow(c, 16, 24, 12, 3);
-    outlined(c, 32, 28, OUTLINE, (b) => {
-      canopy(
-        b,
-        [
-          [10, 17, 7],
-          [22, 17, 7],
-          [16, 12, 7],
-        ],
-        '#3f8a37',
-        rnd,
-      );
+    const rnd = artRng(keySeed('bush'));
+    shadow(c, 16, 25, 13, 3);
+    sprite(c, 32, 28, (b) => {
+      leafMass(b, 16, 16, 14, 10, R.leaf, rnd, false, 3.6);
       for (const [x, y] of [
-        [9, 17],
-        [20, 19],
-        [17, 10],
-        [24, 14],
+        [8, 17],
+        [19, 20],
+        [15, 10],
+        [23, 14],
+        [11, 22],
       ]) {
-        rect(b, x, y, 2, 2, '#e04848');
-        rect(b, x, y, 1, 1, '#ff9a9a');
+        box(b, x, y, 2, 2, R.crimson[2]);
+        px(b, x, y, R.crimson[4]);
+        px(b, x + 1, y + 1, R.crimson[1]);
       }
     });
   });
 
-  const rockShape = (b: Ctx, base: string, ox: number, oy: number, s: number) => {
-    const P = (pts: number[]) => pts.map((v, i) => (i % 2 ? oy + v * s : ox + v * s));
-    poly(b, P([0, 20, 3, 7, 13, 0, 25, 4, 29, 20, 22, 23, 8, 23]), shade(base, -34));
-    poly(b, P([3, 15, 5, 7, 13, 2, 24, 6, 25, 13, 16, 16]), base);
-    poly(b, P([5, 7, 13, 2, 24, 6, 17, 8]), shade(base, 22));
-    line(b, P([16, 16, 18, 21]), shade(base, -50), 1, 'butt');
-    line(b, P([25, 13, 27, 19]), shade(base, -14), 1, 'butt');
-  };
   canvasTex(scene, 'rock', 34, 30, (c) => {
-    groundShadow(c, 17, 25, 14, 4);
-    outlined(c, 34, 30, OUTLINE, (b) => rockShape(b, '#9a968f', 2, 3, 1));
+    const rnd = artRng(keySeed('rock'));
+    shadow(c, 17, 26, 15, 3.5);
+    sprite(c, 34, 30, (b) => {
+      rockPx(b, 2, 3, 1, R.stone, true, rnd);
+      tuft(b, 2, 28);
+      tuft(b, 26, 29);
+    });
   });
+
   canvasTex(scene, 'boulder', 48, 40, (c) => {
-    groundShadow(c, 24, 34, 21, 5);
-    outlined(c, 48, 40, OUTLINE, (b) => {
-      rockShape(b, '#8f8a82', 2, 2, 1.3);
-      rockShape(b, '#9d9890', 30, 22, 0.55);
-      ellipse(b, 18, 7, 7, 2.5, '#5d8a46');
-      ellipse(b, 15, 6, 3, 1.2, '#78a85a');
+    const rnd = artRng(keySeed('boulder'));
+    shadow(c, 24, 35, 22, 4.5);
+    sprite(c, 48, 40, (b) => {
+      rockPx(b, 1, 2, 1.32, R.stone, true, rnd);
+      rockPx(b, 29, 21, 0.58, R.stone, false, rnd);
+      tuft(b, 3, 38);
+      tuft(b, 22, 39);
     });
   });
 
   canvasTex(scene, 'crystal', 32, 44, (c) => {
-    groundShadow(c, 16, 40, 12, 3.5);
-    glow(c, 16, 32, 16, '#7fe0ff', 0.35);
-    outlined(c, 32, 44, OUTLINE, (b) => {
-      const shard = (x: number, base: number, top: number, w: number, lit: string, dark: string) => {
-        poly(b, [x - w, base, x - w, top + w * 1.3, x, top, x, base + 1], lit);
-        poly(b, [x, base + 1, x, top, x + w, top + w * 1.3, x + w, base], dark);
-        line(b, [x - w + 1, base - 2, x - w + 1, top + w * 1.3 + 1], shade(lit, 40), 1, 'butt');
-      };
-      shard(9, 39, 18, 4, '#b8a0ff', '#7a5cd0');
-      shard(23, 39, 14, 4, '#9ff0ff', '#4ab0e0');
-      shard(16, 40, 4, 5, '#c8f8ff', '#5ac4ec');
-      rect(b, 4, 38, 24, 3, '#6a6a7a');
-      rect(b, 4, 38, 24, 1, '#86869a');
+    shadow(c, 16, 41, 12, 3);
+    halo(c, 16, 28, 16, '#8ce0f4', 0.32);
+    sprite(c, 32, 44, (b) => {
+      shard(b, 9, 38, 17, 4, -2, R.violet);
+      shard(b, 23, 38, 14, 4, 2, R.cyan);
+      shard(b, 16, 40, 3, 5, 0, R.cyan);
+      shard(b, 27, 40, 30, 2, 1, R.violet);
+      fpoly(b, [3, 42, 6, 37, 14, 36, 22, 37, 29, 38, 30, 42], R.stone[2]);
+      box(b, 6, 37, 8, 1, R.stone[4]);
+      box(b, 3, 41, 27, 1, R.stone[1]);
     });
-    rect(c, 13, 9, 1, 1, '#ffffff');
-    rect(c, 21, 19, 1, 1, '#ffffff');
+    px(c, 15, 7, '#ffffff');
+    px(c, 22, 18, '#ffffff');
   });
 
   canvasTex(scene, 'stalagmite', 28, 44, (c) => {
-    groundShadow(c, 14, 40, 11, 3.5);
-    outlined(c, 28, 44, OUTLINE, (b) => {
-      const cone = (x: number, base: number, top: number, w: number, col: string) => {
-        poly(b, [x - w, base, x - 1, top, x + 1, top, x + w, base], col);
-        poly(b, [x, top, x + 1, top, x + w, base, x + 1, base], shade(col, -26));
-        for (let y = base - 6; y > top + 6; y -= 7) {
+    shadow(c, 14, 41, 11, 3);
+    sprite(c, 28, 44, (b) => {
+      const cone = (x: number, base: number, top: number, w: number, ramp: Ramp) => {
+        fpoly(b, [x - w, base, x - 1, top, x + 1, top, x + w, base], ramp[2]);
+        fpoly(b, [x, top, x + 1, top, x + w, base, x + 1, base], ramp[1]);
+        fpoly(b, [x - w, base, x - 1, top, x - 1, base], ramp[3]);
+        for (let y = top + 6; y < base - 2; y += 6) {
           const t = (y - top) / (base - top);
-          rect(b, Math.round(x - w * t), y, Math.round(w * t * 2), 1, shade(col, -16));
+          box(b, Math.round(x - w * t), y, Math.round(w * t * 2), 1, ramp[1]);
+          box(b, Math.round(x - w * t), y + 1, Math.round(w * t), 1, ramp[4]);
         }
-        line(b, [x - w * 0.55, base - 2, x - 1, top + 4], shade(col, 22), 1, 'butt');
+        seg(b, Math.round(x - w * 0.6), base - 2, x - 1, top + 2, ramp[4]);
+        box(b, x - w, base - 1, w * 2, 1, ramp[0]);
       };
-      cone(19, 40, 18, 6, '#7d7064');
-      cone(11, 41, 3, 8, '#8a7c6e');
+      cone(19, 41, 17, 6, R.warmStone);
+      cone(10, 42, 3, 8, R.warmStone);
     });
   });
 
   canvasTex(scene, 'tombstone', 28, 36, (c) => {
-    groundShadow(c, 14, 32, 11, 3);
-    outlined(c, 28, 36, OUTLINE, (b) => {
-      const slab = '#9c98a4';
-      // side + top faces give it thickness
-      b.fillStyle = shade(slab, -34);
-      b.beginPath();
-      b.moveTo(22, 32);
-      b.lineTo(22, 13);
-      b.arc(15, 13, 7, 0, Math.PI, true);
-      b.lineTo(8, 32);
-      b.fill();
-      b.fillStyle = slab;
-      b.beginPath();
-      b.moveTo(20, 33);
-      b.lineTo(20, 15);
-      b.arc(13.5, 15, 6.5, 0, Math.PI, true);
-      b.lineTo(7, 33);
-      b.fill();
-      rect(b, 8, 11, 1, 20, shade(slab, 18));
-      // engraved diamond and epitaph lines
-      poly(b, [13.5, 13, 16, 16, 13.5, 19, 11, 16], '#6a6672');
-      poly(b, [13.5, 14.5, 14.5, 16, 13.5, 17.5, 12.5, 16], slab);
-      rect(b, 10, 22, 7, 1, '#6a6672');
-      rect(b, 10, 25, 7, 1, '#6a6672');
-      rect(b, 11, 28, 5, 1, '#6a6672');
-      line(b, [18, 10, 16, 14, 18, 17], '#77737f', 1, 'butt');
-      // moss and grass at the foot
-      ellipse(b, 9, 32, 3, 1.5, '#4d7a3e');
-      rect(b, 17, 31, 4, 2, '#5a8a46');
-      rect(b, 5, 31, 2, 2, '#5a8a46');
+    shadow(c, 14, 33, 11, 3);
+    sprite(c, 28, 36, (b) => {
+      const S = ['#2e2c38', '#46434f', '#625e6c', '#7f7a8a', '#9d98a8', '#bdb8c6'];
+      // side thickness (right), then the face
+      fpoly(b, [17, 9, 21, 12, 22, 33, 18, 33], S[1]);
+      for (let y = 6; y < 33; y++) {
+        const dy = y - 13;
+        const half = dy < 0 ? Math.round(7 * Math.sqrt(Math.max(0, 1 - (dy / 7.5) ** 2))) : 7;
+        box(b, 13 - half, y, half * 2 + 1, 1, S[3]);
+        box(b, 13 - half, y, 1, 1, S[4]);
+        box(b, 13 + half - 1, y, 2, 1, S[2]);
+      }
+      box(b, 9, 7, 5, 1, S[5]);
+      box(b, 7, 9, 2, 1, S[4]);
+      // carved star rune + epitaph lines
+      fpoly(b, [13, 11, 15, 15, 13, 19, 11, 15], S[1]);
+      px(b, 13, 15, S[3]);
+      box(b, 9, 22, 9, 1, S[1]);
+      box(b, 9, 23, 9, 1, S[4]);
+      box(b, 10, 26, 7, 1, S[1]);
+      box(b, 10, 27, 7, 1, S[4]);
+      seg(b, 16, 8, 14, 12, S[1]);
+      // moss + grass
+      disc(b, 8, 32, 4, 1.6, R.moss[1]);
+      box(b, 6, 31, 4, 1, R.moss[2]);
+      tuft(b, 3, 34);
+      tuft(b, 18, 34);
     });
   });
 
   canvasTex(scene, 'mushroom', 28, 30, (c) => {
-    groundShadow(c, 14, 26, 11, 3);
-    outlined(c, 28, 30, OUTLINE, (b) => {
-      const shroom = (x: number, y: number, rx: number, ry: number, stemH: number, cap: string) => {
-        rect(b, x - 2, y, 4, stemH, '#e8dcc0');
-        rect(b, x + 1, y, 1, stemH, '#c9b998');
-        ellipse(b, x, y + 1, rx, ry * 0.55, shade(cap, -50));
-        b.fillStyle = cap;
-        b.beginPath();
-        b.ellipse(x, y, rx, ry, 0, Math.PI, 0);
-        b.fill();
-        ellipse(b, x - rx * 0.35, y - ry * 0.55, rx * 0.35, ry * 0.25, shade(cap, 34));
-        rect(b, Math.round(x + rx * 0.3), Math.round(y - ry * 0.5), 2, 1, '#f6e6c8');
-        rect(b, Math.round(x - rx * 0.1), Math.round(y - ry * 0.85), 1, 1, '#f6e6c8');
-      };
-      shroom(20, 18, 5, 4, 8, '#b5572e');
-      shroom(11, 14, 8, 6, 12, '#c8642e');
-      shroom(5, 22, 3, 2.5, 4, '#b5572e');
+    shadow(c, 14, 27, 11, 2.5);
+    sprite(c, 28, 30, (b) => {
+      shroom(b, 19, 19, 5, 4, 7, R.crimson);
+      shroom(b, 10, 15, 7, 6, 11, ['#4a1c10', '#7a3218', '#a84a24', '#c86a38', '#e8a070']);
+      shroom(b, 4, 23, 3, 2, 4, R.crimson, R.cream, false);
+      tuft(b, 20, 28);
     });
   });
 
   canvasTex(scene, 'duskwillow', 56, 72, (c) => {
-    const rnd = mulberry32(17);
-    groundShadow(c, 28, 66, 20, 5);
-    glow(c, 14, 46, 9, '#ffb0e8', 0.35);
-    glow(c, 42, 42, 9, '#9fe8ff', 0.35);
-    outlined(c, 56, 72, OUTLINE, (b) => {
-      trunk(b, 28, 34, 67, 9, '#3e2a40');
-      line(b, [26, 40, 18, 30], '#3e2a40', 3);
-      line(b, [31, 38, 38, 28], '#3e2a40', 3);
-      canopy(
-        b,
-        [
-          [14, 26, 10],
-          [42, 26, 10],
-          [28, 24, 13],
-          [20, 14, 10],
-          [36, 14, 10],
-          [28, 8, 8],
-        ],
-        '#4f4486',
-        rnd,
-        22,
-      );
+    const rnd = artRng(keySeed('duskwillow'));
+    shadow(c, 28, 68, 21, 4.5);
+    halo(c, 13, 47, 9, '#ffb0e8', 0.35);
+    halo(c, 43, 43, 9, '#9fe8ff', 0.35);
+    sprite(c, 56, 72, (b) => {
+      trunkPx(b, 28, 34, 69, 9, DUSK_BARK, rnd);
+      brush(b, [26, 42, 18, 31], 3, DUSK_BARK[3]);
+      brush(b, [31, 40, 39, 30], 3, DUSK_BARK[2]);
+      leafMass(b, 28, 14, 19, 12, LEAF_DUSK, rnd, false);
+      leafMass(b, 14, 26, 11, 8, LEAF_DUSK, rnd);
+      leafMass(b, 42, 25, 11, 8, LEAF_DUSK, rnd);
       // weeping strands
-      for (let i = 0; i < 16; i++) {
-        const x = 6 + i * 2.9;
-        const top = 22 + Math.abs(i - 7.5) * 0.6;
-        const len = 14 + ((i * 7) % 11) + (i === 0 || i === 15 ? -4 : 0);
-        const col = i % 3 === 0 ? '#7b68b8' : i % 3 === 1 ? '#5c4f94' : '#6a5aa6';
-        line(b, [x, top, x + (i < 8 ? -1 : 1), top + len], col, 2, 'butt');
-        rect(b, Math.round(x + (i < 8 ? -1 : 1)) - 1, Math.round(top + len), 2, 2, i % 2 ? '#e8a0d8' : '#a8c8ff');
+      for (let i = 0; i < 17; i++) {
+        const x = 5 + Math.round(i * 2.8);
+        const top = 26 + Math.round(Math.abs(i - 8) * 0.5);
+        const len = 10 + ((i * 7) % 11) - (i === 0 || i === 16 ? 4 : 0);
+        const col = LEAF_DUSK[2 + (i % 3)];
+        const dx = i < 8 ? -1 : 1;
+        box(b, x, top, 1, Math.round(len * 0.6), col);
+        box(b, x + dx, top + Math.round(len * 0.6), 1, len - Math.round(len * 0.6), col);
+        px(b, x, top + 2, LEAF_DUSK[5]);
+        if (i % 4 === 1) box(b, x + dx, top + len, 1, 2, i % 8 === 1 ? '#f0a0d8' : '#a8e0ff');
       }
-      ellipse(b, 14, 46, 2.5, 3, '#ffd0f0');
-      ellipse(b, 42, 42, 2.5, 3, '#c8f4ff');
-      rect(b, 13, 45, 1, 1, '#ffffff');
-      rect(b, 41, 41, 1, 1, '#ffffff');
+      // glowing blossom lanterns
+      disc(b, 13, 47, 2.5, 3, '#f8b8e8');
+      box(b, 12, 45, 1, 2, '#ffffff');
+      disc(b, 43, 43, 2.5, 3, '#b8ecff');
+      box(b, 42, 41, 1, 2, '#ffffff');
     });
   });
 
   canvasTex(scene, 'basalt_spire', 32, 60, (c) => {
-    groundShadow(c, 16, 55, 14, 4);
-    glow(c, 16, 54, 12, '#ff6a20', 0.3);
-    outlined(c, 32, 60, OUTLINE, (b) => {
+    shadow(c, 16, 56, 14, 3.5);
+    halo(c, 15, 54, 12, '#ff6a20', 0.3);
+    sprite(c, 32, 60, (b) => {
       const col = (x: number, top: number, base: number, w: number) => {
-        const side = '#38353c';
-        rect(b, x, top + 3, w / 2, base - top - 3, shade(side, 12));
-        rect(b, x + w / 2, top + 3, w / 2, base - top - 3, shade(side, -12));
-        rect(b, x, top + 3, 1, base - top - 3, shade(side, 30));
-        poly(b, [x, top + 3, x + w * 0.25, top, x + w * 0.75, top, x + w, top + 3, x + w * 0.75, top + 6, x + w * 0.25, top + 6], '#5a5660');
-        rect(b, x + w * 0.25, top, w * 0.5, 1, '#77727e');
-        for (let y = top + 12; y < base - 4; y += 9) rect(b, x + 1, y, w - 2, 1, shade(side, -24));
+        box(b, x, top + 3, w, base - top - 3, BASALT[2]);
+        box(b, x, top + 3, 2, base - top - 3, BASALT[3]);
+        box(b, x + w - 3, top + 3, 3, base - top - 3, BASALT[1]);
+        box(b, x + w - 1, top + 3, 1, base - top - 3, BASALT[0]);
+        fpoly(b, [x, top + 3, x + w * 0.25, top, x + w * 0.75, top, x + w, top + 3, x + w * 0.75, top + 6, x + w * 0.25, top + 6], BASALT[4]);
+        box(b, x + w * 0.25, top, w * 0.5, 1, BASALT[5]);
+        for (let y = top + 12; y < base - 4; y += 9) {
+          box(b, x, y, w, 1, BASALT[0]);
+          box(b, x, y + 1, w - 3, 1, BASALT[3]);
+        }
       };
-      col(14, 4, 54, 10);
-      col(4, 18, 55, 10);
-      col(22, 26, 56, 9);
-      line(b, [8, 55, 10, 50, 9, 46], '#ff7a2a', 1, 'butt');
-      line(b, [25, 56, 27, 51], '#ff7a2a', 1, 'butt');
-      rect(b, 9, 50, 1, 1, '#ffd27a');
+      col(13, 4, 55, 10);
+      col(3, 18, 56, 10);
+      col(21, 27, 57, 9);
+      seg(b, 8, 55, 10, 50, R.flame[2]);
+      seg(b, 10, 50, 9, 46, R.flame[1]);
+      seg(b, 25, 56, 27, 51, R.flame[2]);
+      px(b, 9, 50, R.flame[4]);
+      px(b, 26, 53, R.flame[3]);
     });
   });
 
   canvasTex(scene, 'reeds', 28, 34, (c) => {
-    groundShadow(c, 14, 30, 10, 2.5);
-    outlined(c, 28, 34, OUTLINE, (b) => {
-      const blades: [number, number, number, string][] = [
-        [6, 30, -3, '#5a8a3a'],
-        [9, 30, 1, '#6fa048'],
-        [12, 31, -1, '#4f7a32'],
-        [15, 31, 2, '#6fa048'],
-        [18, 30, 4, '#5a8a3a'],
-        [21, 30, 2, '#78ac50'],
-        [11, 31, -5, '#78ac50'],
+    shadow(c, 14, 31, 10, 2.5);
+    sprite(c, 28, 34, (b) => {
+      const blades: [number, number, number, number][] = [
+        [5, 31, -4, 1],
+        [8, 31, -1, 2],
+        [11, 32, -3, 1],
+        [14, 32, 1, 3],
+        [17, 31, 3, 2],
+        [20, 31, 5, 3],
+        [23, 31, 2, 1],
+        [10, 32, 2, 3],
       ];
-      for (const [x, base, lean, col] of blades) line(b, [x, base, x + lean * 0.4, base - 12, x + lean, base - 18 - (x % 4)], col, 2, 'butt');
-      line(b, [13, 31, 13, 6], '#5d7a34', 1, 'butt');
-      line(b, [17, 31, 18, 3], '#5d7a34', 1, 'butt');
-      rect(b, 12, 6, 3, 7, '#6b4423');
-      rect(b, 12, 6, 1, 7, '#8a5a30');
-      rect(b, 17, 3, 3, 7, '#6b4423');
-      rect(b, 17, 3, 1, 7, '#8a5a30');
+      for (const [x, base, lean, tone] of blades) {
+        const tipY = base - 16 - ((x * 3) % 7);
+        seg(b, x, base, x + Math.round(lean * 0.4), base - 9, R.grass[tone]);
+        seg(b, x + Math.round(lean * 0.4), base - 9, x + lean, tipY, R.grass[Math.min(4, tone + 1)]);
+        px(b, x + 1, base - 1, R.grass[tone - 1 < 0 ? 0 : tone - 1]);
+      }
+      for (const [x, top] of [
+        [13, 5],
+        [18, 3],
+      ]) {
+        box(b, x, top + 7, 1, 31 - top - 7, R.grass[1]);
+        box(b, x - 1, top, 3, 7, R.bark[2]);
+        box(b, x - 1, top, 1, 7, R.bark[4]);
+        box(b, x + 1, top + 1, 1, 6, R.bark[1]);
+        px(b, x, top - 1, R.grass[3]);
+      }
     });
   });
 }
@@ -1030,513 +1264,682 @@ function drawProps(scene: Phaser.Scene): void {
 // Width = footprint x 32. The client anchors (0.5, 1) at the footprint's bottom edge + 4px,
 // so the front wall stands on the southern row and roofs overhang upward.
 
+const PLASTER = ['#6a5c48', '#968670', '#bcae8e', '#d8cbaa', '#ece2c4'];
+const ROOF_RED = ['#3a1812', '#5a281c', '#7e3828', '#a04c34', '#bc6646', '#d88a62'];
+const ROOF_GREEN = ['#14241c', '#1f3428', '#2c4a38', '#3c624a', '#527e60', '#72a07c'];
+const ROOF_BLUE = ['#161c30', '#222c46', '#304064', '#425886', '#5a74a4', '#7e96c2'];
+const THATCH = ['#3e2e14', '#5e4620', '#806230', '#a28044', '#c09c58', '#dcbc78'];
+const CANVAS = ['#6e604a', '#a08e6c', '#c8b690', '#e2d4b0', '#f2e8cc'];
+const GLASS = ['#6a4418', '#c0842e', '#eab456', '#f8da8a', '#fff4cc'];
+
 type RoofStyle = 'tile' | 'slate' | 'thatch' | 'shingle';
 
-/** Side-gabled roof seen from the front: back slope sliver, front slope with courses, ridge cap, eave. */
-function roofFront(c: Ctx, x0: number, x1: number, ridge: number, eave: number, inset: number, color: string, style: RoofStyle, rnd: () => number): void {
-  const dark = shade(color, -34);
-  const lite = shade(color, 18);
-  poly(c, [x0 + inset + 3, ridge + 1, x0 + inset + 8, ridge - 4, x1 - inset - 8, ridge - 4, x1 - inset - 3, ridge + 1], shade(color, -52));
-  poly(c, [x0 + inset, ridge, x1 - inset, ridge, x1, eave, x0, eave], color);
+/** Side-gabled roof seen from the front: back-slope sliver, courses with staggered shingles, ridge cap, eave. */
+function roofPx(b: Ctx, x0: number, x1: number, ridge: number, eave: number, inset: number, ramp: Ramp, style: RoofStyle, rnd: () => number): void {
   const span = (y: number): [number, number] => {
     const t = (y - ridge) / (eave - ridge);
     return [Math.round(x0 + inset * (1 - t)), Math.round(x1 - inset * (1 - t))];
   };
-  const step = style === 'thatch' ? 6 : style === 'slate' ? 5 : 6;
+  fpoly(b, [x0 + inset + 3, ridge + 1, x0 + inset + 8, ridge - 4, x1 - inset - 8, ridge - 4, x1 - inset - 3, ridge + 1], ramp[1]);
+  box(b, x0 + inset + 8, ridge - 4, x1 - x0 - inset * 2 - 16, 1, ramp[2]);
+  for (let y = ridge; y < eave; y++) {
+    const [l, r] = span(y);
+    box(b, l, y, r - l, 1, ramp[3]);
+  }
+  const step = style === 'slate' ? 5 : 6;
+  const tick = style === 'slate' ? 7 : style === 'shingle' ? 5 : 8;
   let row = 0;
-  for (let y = ridge + step; y < eave - 2; y += step, row++) {
-    const [xl, xr] = span(y);
+  for (let y = ridge + 2; y < eave - 2; y += step, row++) {
+    const [l, r] = span(y + 1);
     if (style === 'thatch') {
-      for (let x = xl + 1; x < xr - 1; x += 2) {
-        const len = 3 + ri(rnd, 4);
-        rect(c, x, y - len + 2, 1, len, rnd() < 0.5 ? dark : lite);
+      for (let x = l + 1; x < r - 1; x += 2) {
+        const len = 2 + Math.floor(rnd() * 4);
+        box(b, x, y + step - len, 1, len, rnd() < 0.5 ? ramp[2] : ramp[4]);
       }
-      rect(c, xl, y + 1, xr - xl, 1, shade(color, -22));
-    } else {
-      rect(c, xl, y, xr - xl, 1, dark);
-      rect(c, xl, y + 1, xr - xl, 1, lite);
-      const tick = style === 'slate' ? 7 : style === 'shingle' ? 5 : 8;
-      for (let x = xl + ((row % 2) * tick) / 2 + 2; x < xr - 2; x += tick) rect(c, Math.round(x), y + 2, 1, step - 2, shade(color, -20));
-      if (style === 'tile') for (let x = xl + ((row % 2) * tick) / 2 + 5; x < xr - 2; x += tick) rect(c, Math.round(x), y + 2, 2, 1, shade(color, 26));
+      box(b, l, y + step - 1, r - l, 1, ramp[1]);
+      for (let x = l + 1; x < r - 1; x += 3) px(b, x, y + step, ramp[2]);
+      continue;
+    }
+    box(b, l, y, r - l, 1, ramp[1]);
+    box(b, l, y + 1, r - l, 1, ramp[4]);
+    const off = (row % 2) * Math.floor(tick / 2);
+    for (let x = l + off + 2; x < r - 1; x += tick) {
+      const w = Math.min(tick - 1, r - 1 - x - 1);
+      const roll = rnd();
+      if (w > 0 && roll < 0.22) box(b, x + 1, y + 2, w, step - 2, ramp[2]);
+      else if (w > 0 && roll > 0.9) box(b, x + 1, y + 2, w, step - 2, ramp[4]);
+      box(b, x, y + 2, 1, step - 2, ramp[1]);
+      if (style === 'tile' && w > 2) px(b, x + 2, y + 2, ramp[5]);
     }
   }
-  line(c, [x0 + inset, ridge, x0, eave], shade(color, 24), 2, 'butt');
-  line(c, [x1 - inset, ridge, x1, eave], shade(color, -50), 2, 'butt');
-  rect(c, x0 + inset - 1, ridge - 2, x1 - x0 - inset * 2 + 2, 3, shade(color, -40));
-  rect(c, x0 + inset - 1, ridge - 2, x1 - x0 - inset * 2 + 2, 1, shade(color, 6));
-  rect(c, x0, eave - 2, x1 - x0, 2, shade(color, -46));
-  if (style === 'thatch') for (let x = x0 + 1; x < x1 - 1; x += 3) rect(c, x, eave - 1, 2, 2 + ri(rnd, 2), shade(color, -30));
+  // barge boards, ridge cap, eave shadow
+  seg(b, x0 + inset, ridge, x0, eave - 1, ramp[5]);
+  seg(b, x0 + inset + 1, ridge, x0 + 1, eave - 1, ramp[4]);
+  seg(b, x1 - inset - 1, ridge, x1 - 1, eave - 1, ramp[0]);
+  seg(b, x1 - inset - 2, ridge, x1 - 2, eave - 1, ramp[1]);
+  box(b, x0 + inset - 1, ridge - 2, x1 - x0 - inset * 2 + 2, 3, ramp[1]);
+  box(b, x0 + inset - 1, ridge - 2, x1 - x0 - inset * 2 + 2, 1, ramp[4]);
+  for (let x = x0 + inset + 3; x < x1 - inset - 2; x += 6) px(b, x, ridge - 1, ramp[2]);
+  box(b, x0, eave - 2, x1 - x0, 2, ramp[0]);
+  box(b, x0, eave - 3, x1 - x0, 1, ramp[2]);
+  if (style === 'thatch') for (let x = x0 + 1; x < x1 - 1; x += 3) box(b, x, eave - 1, 2, 1 + Math.floor(rnd() * 2), ramp[1]);
 }
 
-type WallKind = 'plaster' | 'stone' | 'plank' | 'log';
+type WallKind = 'plaster' | 'stone' | 'log' | 'plank';
 
-function wallFace(c: Ctx, x: number, y: number, w: number, h: number, color: string, kind: WallKind, rnd: () => number): void {
-  rect(c, x, y, w, h, color);
+/** Wall face with foundation. Timber frames for plaster, coursed blocks for stone, stacked logs, planks. */
+function wallPx(b: Ctx, x: number, y: number, w: number, h: number, kind: WallKind, rnd: () => number): void {
+  const B = R.bark;
+  const S = R.warmStone;
   switch (kind) {
     case 'plaster': {
-      for (let i = 0; i < (w * h) / 40; i++) rect(c, x + ri(rnd, w), y + ri(rnd, h), 1, 1, shade(color, rnd() < 0.5 ? -12 : 8));
-      const beam = '#6a4a2e';
-      rect(c, x, y, w, 3, beam);
-      rect(c, x, y + h - 9, w, 2, beam);
-      for (let bx = x; bx <= x + w - 3; bx += Math.max(18, Math.floor(w / Math.round(w / 26)))) rect(c, bx, y, 3, h - 7, beam);
-      rect(c, x + w - 3, y, 3, h - 7, beam);
+      box(b, x, y, w, h, PLASTER[3]);
+      for (let i = 0; i < (w * h) / 220; i++) {
+        const sx = x + 3 + Math.floor(rnd() * (w - 8));
+        const sy = y + 4 + Math.floor(rnd() * (h - 14));
+        box(b, sx, sy, 2 + Math.floor(rnd() * 3), 1, PLASTER[2]);
+        px(b, sx + 1, sy + 1, PLASTER[4]);
+      }
+      const post = (px0: number) => {
+        box(b, px0, y, 3, h - 6, B[3]);
+        box(b, px0, y, 1, h - 6, B[4]);
+        box(b, px0 + 2, y, 1, h - 6, B[1]);
+      };
+      const n = Math.max(1, Math.round(w / 26));
+      for (let i = 0; i <= n; i++) post(Math.round(x + ((w - 3) * i) / n));
+      box(b, x, y, w, 3, B[3]);
+      box(b, x, y, w, 1, B[4]);
+      box(b, x, y + 2, w, 1, B[1]);
+      box(b, x, y + h - 9, w, 3, B[3]);
+      box(b, x, y + h - 9, w, 1, B[4]);
+      box(b, x, y + h - 7, w, 1, B[1]);
       break;
     }
     case 'stone': {
-      for (let yy = y, r = 0; yy < y + h; yy += 6, r++) {
-        rect(c, x, yy, w, 1, shade(color, -26));
-        for (let xx = x + (r % 2 ? 5 : 0); xx < x + w; xx += 10) rect(c, xx, yy, 1, 6, shade(color, -26));
-        for (let xx = x + (r % 2 ? 6 : 1); xx < x + w - 3; xx += 10) rect(c, xx, yy + 1, 3, 1, shade(color, 14));
-      }
-      break;
-    }
-    case 'plank': {
-      for (let xx = x; xx < x + w; xx += 5) {
-        rect(c, xx, y, 1, h, shade(color, -26));
-        rect(c, xx + 1, y, 1, h, shade(color, 10));
+      box(b, x, y, w, h, S[1]);
+      for (let yy = y, r = 0; yy < y + h - 4; yy += 6, r++) {
+        let xx = x - (r % 2 ? 4 : 0);
+        while (xx < x + w) {
+          const bw = 7 + Math.floor(rnd() * 5);
+          const a = Math.max(x, xx);
+          const z = Math.min(x + w, xx + bw - 1);
+          if (z - a >= 2) {
+            const tone = rnd() < 0.25 ? 2 : rnd() < 0.2 ? 4 : 3;
+            box(b, a, yy, z - a, 5, S[tone]);
+            box(b, a, yy, z - a, 1, S[Math.min(5, tone + 1)]);
+            box(b, z - 1, yy + 1, 1, 4, S[tone - 1]);
+            box(b, a, yy + 4, z - a, 1, S[tone - 1]);
+          }
+          xx += bw;
+        }
       }
       break;
     }
     case 'log': {
-      for (let yy = y; yy < y + h; yy += 6) {
-        rect(c, x, yy, w, 6, shade(color, (yy / 6) % 2 ? -6 : 4));
-        rect(c, x, yy, w, 1, shade(color, 18));
-        rect(c, x, yy + 5, w, 1, shade(color, -30));
-        ellipse(c, x + 1, yy + 3, 3, 3, shade(color, 10));
-        ellipse(c, x + 1, yy + 3, 1.5, 1.5, shade(color, -20));
-        ellipse(c, x + w - 1, yy + 3, 3, 3, shade(color, -6));
-        ellipse(c, x + w - 1, yy + 3, 1.5, 1.5, shade(color, -30));
+      for (let yy = y, r = 0; yy < y + h; yy += 6, r++) {
+        box(b, x, yy, w, 6, B[r % 2 ? 3 : 2]);
+        box(b, x, yy, w, 1, B[4]);
+        box(b, x, yy + 5, w, 1, B[1]);
+        for (let k = 0; k < w / 14; k++) box(b, x + 4 + Math.floor(rnd() * (w - 10)), yy + 2 + Math.floor(rnd() * 2), 3 + Math.floor(rnd() * 3), 1, B[2]);
+        for (const ex of [x - 2, x + w - 3]) {
+          disc(b, ex + 2.5, yy + 3, 3, 3, R.cream[1]);
+          disc(b, ex + 2.5, yy + 3, 2, 2, R.cream[2]);
+          px(b, ex + 2, yy + 3, B[2]);
+        }
+      }
+      break;
+    }
+    case 'plank': {
+      box(b, x, y, w, h, B[3]);
+      for (let xx = x; xx < x + w; xx += 4) {
+        box(b, xx, y, 1, h, B[1]);
+        box(b, xx + 1, y, 1, h, B[4]);
       }
       break;
     }
   }
-  // foundation + right-side shading for volume
-  rect(c, x, y + h - 6, w, 6, '#7d776e');
-  rect(c, x, y + h - 6, w, 1, '#99938a');
-  for (let xx = x + 3; xx < x + w; xx += 8) rect(c, xx, y + h - 5, 1, 5, '#635e57');
-  rect(c, x + w - 4, y, 4, h, 'rgba(0,0,0,0.12)');
+  // foundation course
+  box(b, x - 1, y + h - 5, w + 2, 5, R.stone[2]);
+  box(b, x - 1, y + h - 5, w + 2, 1, R.stone[4]);
+  box(b, x - 1, y + h - 1, w + 2, 1, R.stone[1]);
+  for (let xx = x + 2; xx < x + w; xx += 7) box(b, xx, y + h - 4, 1, 3, R.stone[1]);
+  // right-hand corner falls into shade
+  box(b, x + w - 3, y, 3, h - 5, 'rgba(36,24,15,0.22)');
 }
 
-function door(c: Ctx, cx: number, bottom: number, w: number, h: number, wood: string, arched = true): void {
+/** Plank door in a dark frame (optionally arched) with iron straps, ring handle and a stone step. */
+function doorPx(b: Ctx, cx: number, bottom: number, w: number, h: number, ramp: Ramp = R.bark, arched = true): void {
   const x = Math.round(cx - w / 2);
-  rect(c, x - 2, bottom - h - 1, w + 4, h + 1, '#3d2a1a');
-  if (arched) ellipse(c, cx, bottom - h + w / 2, w / 2 + 2, w / 2 + 2, '#3d2a1a');
-  rect(c, x, bottom - h + (arched ? w / 2 : 1), w, h - (arched ? w / 2 : 1), wood);
-  if (arched) ellipse(c, cx, bottom - h + w / 2, w / 2, w / 2, wood);
-  for (let xx = x + 3; xx < x + w - 1; xx += 4) rect(c, xx, bottom - h + 3, 1, h - 3, shade(wood, -26));
-  rect(c, x, bottom - Math.round(h * 0.35), w, 2, '#4a4a52');
-  rect(c, x, bottom - Math.round(h * 0.75), w, 2, '#4a4a52');
-  rect(c, x + w - 4, bottom - Math.round(h * 0.5), 2, 2, '#e8c070');
-  rect(c, x - 3, bottom, w + 6, 2, '#8d877e');
-}
-
-function windowLit(c: Ctx, x: number, y: number, w: number, h: number, frame: string, glass = '#ffe9a8'): void {
-  rect(c, x - 1, y - 1, w + 2, h + 2, frame);
-  rect(c, x, y, w, h, glass);
-  rect(c, x, y, w, Math.ceil(h / 2), shade(glass, 18));
-  rect(c, x + Math.floor(w / 2), y, 1, h, frame);
-  rect(c, x, y + Math.floor(h / 2), w, 1, frame);
-  rect(c, x - 2, y + h + 1, w + 4, 2, shade(frame, -10));
-  rect(c, x + 1, y + 1, 1, 2, '#ffffff');
-}
-
-function chimney(c: Ctx, x: number, y: number, w: number, h: number, color: string): void {
-  rect(c, x, y, w, h, color);
-  rect(c, x, y, 2, h, shade(color, 20));
-  rect(c, x + w - 2, y, 2, h, shade(color, -26));
-  for (let yy = y + 5; yy < y + h; yy += 5) rect(c, x, yy, w, 1, shade(color, -30));
-  rect(c, x - 2, y - 3, w + 4, 4, shade(color, -12));
-  rect(c, x - 2, y - 3, w + 4, 1, shade(color, 14));
-  rect(c, x, y - 2, w, 2, '#1e1814');
-}
-
-function smoke(c: Ctx, x: number, y: number): void {
-  ellipse(c, x, y, 4, 3, 'rgba(210,210,215,0.55)');
-  ellipse(c, x + 3, y - 6, 5, 4, 'rgba(210,210,215,0.42)');
-  ellipse(c, x + 1, y - 13, 6, 4, 'rgba(210,210,215,0.28)');
-}
-
-/** Little gold sun-ring emblem used by the chapel and priestess. */
-function sunRing(c: Ctx, x: number, y: number, r: number, gold = '#f2d36b'): void {
-  for (let i = 0; i < 8; i++) {
-    const a = (i / 8) * Math.PI * 2;
-    line(c, [x + Math.cos(a) * r * 0.9, y + Math.sin(a) * r * 0.9, x + Math.cos(a) * r * 1.5, y + Math.sin(a) * r * 1.5], gold, i % 2 ? 1 : 1.6, 'butt');
+  const top = bottom - h;
+  const r = w / 2;
+  const rowSpan = (y: number, grow: number): [number, number] => {
+    if (!arched || y >= top + r) return [x - grow, x + w + grow];
+    const dy = top + r - y - 0.5;
+    const half = Math.sqrt(Math.max(0, (r + grow) ** 2 - dy * dy));
+    return [Math.round(cx - half), Math.round(cx + half)];
+  };
+  for (let y = top - 2; y < bottom; y++) {
+    const [a, z] = rowSpan(y, 2);
+    if (z > a) box(b, a, y, z - a, 1, '#2a1a10');
   }
-  c.strokeStyle = gold;
-  c.lineWidth = 1.6;
-  c.beginPath();
-  c.arc(x, y, r * 0.75, 0, Math.PI * 2);
-  c.stroke();
+  for (let y = top; y < bottom; y++) {
+    const [a, z] = rowSpan(y, 0);
+    if (z <= a) continue;
+    box(b, a, y, z - a, 1, ramp[3]);
+    for (let xx = x + 3; xx < x + w; xx += 4) if (xx > a && xx < z) px(b, xx, y, ramp[1]);
+    px(b, a, y, ramp[4]);
+  }
+  for (const f of [0.3, 0.72]) {
+    const yy = Math.round(bottom - h * f);
+    box(b, x, yy, w, 2, R.iron[2]);
+    box(b, x, yy, w, 1, R.iron[3]);
+    for (let xx = x + 1; xx < x + w - 1; xx += 4) px(b, xx, yy + 1, R.iron[0]);
+  }
+  box(b, x + w - 4, Math.round(bottom - h * 0.5), 2, 2, R.gold[3]);
+  px(b, x + w - 4, Math.round(bottom - h * 0.5) + 1, R.gold[1]);
+  box(b, x - 3, bottom, w + 6, 2, R.stone[3]);
+  box(b, x - 3, bottom, w + 6, 1, R.stone[4]);
+}
+
+/** Lit four-pane window: frame, warm glass with a glint, sill, optional painted shutters. */
+function windowPx(b: Ctx, x: number, y: number, w: number, h: number, shutters?: Ramp): void {
+  box(b, x - 1, y - 1, w + 2, h + 2, R.bark[1]);
+  box(b, x, y, w, h, GLASS[2]);
+  box(b, x, y, w, Math.ceil(h / 2), GLASS[3]);
+  box(b, x, y + h - 1, w, 1, GLASS[1]);
+  box(b, x + Math.floor(w / 2), y, 1, h, R.bark[1]);
+  box(b, x, y + Math.floor(h / 2), w, 1, R.bark[1]);
+  px(b, x + 1, y + 1, GLASS[4]);
+  px(b, x + 2, y + 1, GLASS[4]);
+  box(b, x - 2, y + h + 1, w + 4, 2, R.bark[3]);
+  box(b, x - 2, y + h + 1, w + 4, 1, R.bark[4]);
+  if (shutters) {
+    for (const sx of [x - 5, x + w + 1]) {
+      box(b, sx, y - 1, 4, h + 2, shutters[2]);
+      box(b, sx, y - 1, 4, 1, shutters[3]);
+      box(b, sx + 1, y + 1, 2, h - 2, shutters[1]);
+      box(b, sx + 1, y + Math.floor(h / 2), 2, 1, shutters[3]);
+    }
+  }
+}
+
+function chimneyPx(b: Ctx, x: number, y: number, w: number, h: number): void {
+  const S = R.warmStone;
+  box(b, x, y, w, h, S[3]);
+  for (let yy = y + 3, r = 0; yy < y + h; yy += 4, r++) {
+    box(b, x, yy, w, 1, S[1]);
+    for (let xx = x + (r % 2 ? 2 : 5); xx < x + w; xx += 6) box(b, xx, yy - 3, 1, 3, S[1]);
+  }
+  box(b, x, y, 2, h, S[4]);
+  box(b, x + w - 2, y, 2, h, S[2]);
+  box(b, x - 2, y - 3, w + 4, 4, S[2]);
+  box(b, x - 2, y - 3, w + 4, 1, S[5]);
+  box(b, x, y - 2, w, 1, '#1a120c');
+}
+
+/** Pixel smoke puffs (translucent, drawn outside the sprite so they get no outline). */
+function smokePx(c: Ctx, x: number, y: number): void {
+  disc(c, x, y, 3, 2.5, 'rgba(214,208,200,0.55)');
+  disc(c, x + 3, y - 6, 4, 3, 'rgba(214,208,200,0.42)');
+  disc(c, x + 1, y - 13, 5, 3.5, 'rgba(214,208,200,0.28)');
+  px(c, x - 1, y - 1, 'rgba(255,255,255,0.6)');
+}
+
+/** Omnipath emblem: a gold four-point waystar over a ring, on a cloth field (used by banners and the hall). */
+function waystar(b: Ctx, cx: number, cy: number, s: number, gold: Ramp = R.gold): void {
+  fpoly(b, [cx, cy - s, cx + 1, cy - 1, cx + s, cy, cx + 1, cy + 1, cx, cy + s, cx - 1, cy + 1, cx - s, cy, cx - 1, cy - 1], gold[3]);
+  fpoly(b, [cx, cy - s, cx + 1, cy - 1, cx + s, cy, cx, cy], gold[4]);
+  px(b, cx, cy, gold[1]);
+}
+
+/** Hanging cloth banner with the waystar, on a crossbar. */
+function bannerPx(b: Ctx, x: number, y: number, w: number, h: number, cloth: Ramp): void {
+  box(b, x - 1, y - 2, w + 2, 2, R.bark[2]);
+  box(b, x - 1, y - 2, w + 2, 1, R.bark[4]);
+  fpoly(b, [x, y, x + w, y, x + w, y + h, x + w / 2, y + h - 4, x, y + h], cloth[2]);
+  box(b, x, y, 2, h - 2, cloth[3]);
+  box(b, x + w - 2, y, 2, h - 2, cloth[1]);
+  box(b, x + 1, y + 1, w - 2, 1, R.gold[2]);
+  waystar(b, Math.round(x + w / 2), Math.round(y + h * 0.45), Math.max(2, Math.round(w / 3)));
+}
+
+/** Little lantern on a bracket (glow drawn by the caller outside the sprite). */
+function lanternPx(b: Ctx, x: number, y: number): void {
+  box(b, x - 2, y, 5, 1, R.iron[1]);
+  box(b, x - 2, y + 1, 5, 5, GLASS[3]);
+  box(b, x - 1, y + 2, 3, 3, GLASS[4]);
+  box(b, x - 2, y + 6, 5, 1, R.iron[1]);
+  px(b, x, y - 1, R.iron[2]);
 }
 
 function drawStructures(scene: Phaser.Scene): void {
-  // ---- smithy 4x3
-  canvasTexAll(scene, ['struct_smithy', 'smithy'], 128, 128, (c) => {
-    const rnd = mulberry32(201);
-    groundShadow(c, 64, 122, 62, 7, 0.32);
-    wallFace(c, 10, 70, 108, 54, '#8e8478', 'stone', rnd);
-    // open forge bay
-    rect(c, 16, 88, 40, 30, '#3b2a1f');
-    rect(c, 16, 88, 40, 3, '#5a3f2a');
-    rect(c, 18, 91, 36, 27, '#22160f');
-    glow(c, 36, 108, 18, '#ff8a2a', 0.65);
-    rect(c, 26, 104, 20, 8, '#5a5552');
-    rect(c, 28, 101, 16, 4, '#ff9a3a');
-    rect(c, 31, 99, 10, 3, '#ffd27a');
-    rect(c, 15, 86, 42, 3, '#6a4a2e');
-    door(c, 86, 118, 18, 28, '#7a4f2c');
-    windowLit(c, 102, 92, 10, 9, '#5a3a22');
-    roofFront(c, 4, 124, 24, 76, 10, '#9a3f2c', 'tile', rnd);
-    rect(c, 6, 76, 116, 3, 'rgba(0,0,0,0.28)');
-    chimney(c, 92, 8, 16, 34, '#7d776e');
-    glow(c, 100, 5, 9, '#ff8a2a', 0.6);
-    smoke(c, 101, 0);
-    // hanging anvil sign
-    rect(c, 106, 80, 14, 2, '#3d2a1a');
-    rect(c, 108, 82, 1, 3, '#3d2a1a');
-    rect(c, 117, 82, 1, 3, '#3d2a1a');
-    rect(c, 105, 85, 16, 11, '#a8794a');
-    rect(c, 105, 85, 16, 1, '#c8955e');
-    poly(c, [108, 88, 118, 88, 116, 90, 115, 90, 115, 92, 117, 93, 109, 93, 111, 92, 111, 90, 109, 90], '#2b2b30');
-    // anvil out front
-    rect(c, 30, 119, 10, 4, '#3a3a40');
-    poly(c, [24, 113, 44, 113, 44, 116, 40, 117, 40, 119, 30, 119, 30, 117, 26, 116, 22, 114], '#4a4a52');
-    rect(c, 24, 113, 20, 1, '#8a8a96');
-    // water barrel
-    rect(c, 106, 108, 10, 13, '#7a4f2c');
-    rect(c, 106, 110, 10, 1, '#3a3a40');
-    rect(c, 106, 117, 10, 1, '#3a3a40');
-    ellipse(c, 111, 108, 5, 1.6, '#3c6f9a');
+  // ---- smithy 4x3: coursed stone, open forge bay with coals, anvil sign, quench barrel
+  texAll(scene, ['struct_smithy', 'smithy'], 128, 128, (c) => {
+    const rnd = artRng(keySeed('struct_smithy'));
+    shadow(c, 64, 123, 62, 6);
+    sprite(c, 128, 128, (b) => {
+      wallPx(b, 8, 72, 112, 52, 'stone', rnd);
+      // forge bay
+      box(b, 12, 86, 46, 36, R.bark[1]);
+      box(b, 14, 90, 42, 32, '#160e09');
+      disc(b, 35, 116, 18, 9, '#4a200e');
+      disc(b, 35, 117, 12, 6, '#6e2c12');
+      for (const [tx, ty] of [
+        [18, 94],
+        [22, 93],
+        [48, 95],
+      ]) box(b, tx, ty, 1, 7, R.iron[2]);
+      box(b, 46, 93, 6, 3, R.iron[2]);
+      box(b, 24, 108, 22, 14, R.stone[2]);
+      box(b, 24, 108, 22, 1, R.stone[4]);
+      box(b, 43, 109, 3, 13, R.stone[1]);
+      box(b, 26, 105, 18, 3, R.flame[2]);
+      box(b, 28, 104, 14, 2, R.flame[3]);
+      for (const xx of [29, 33, 37, 40]) px(b, xx, 104, R.flame[4]);
+      box(b, 26, 107, 18, 1, R.flame[1]);
+      box(b, 11, 85, 48, 4, R.bark[3]);
+      box(b, 11, 85, 48, 1, R.bark[4]);
+      box(b, 11, 88, 48, 1, R.bark[1]);
+      doorPx(b, 80, 122, 16, 26);
+      windowPx(b, 96, 92, 9, 9);
+      // hanging anvil sign on a bracket
+      box(b, 110, 80, 16, 2, R.iron[1]);
+      box(b, 111, 82, 1, 3, R.iron[2]);
+      box(b, 123, 82, 1, 3, R.iron[2]);
+      box(b, 109, 85, 17, 11, R.bark[3]);
+      box(b, 109, 85, 17, 1, R.bark[4]);
+      box(b, 109, 95, 17, 1, R.bark[1]);
+      fpoly(b, [112, 88, 123, 88, 121, 90, 119, 90, 119, 92, 121, 93, 113, 93, 115, 92, 115, 90, 113, 90], R.iron[1]);
+      box(b, 112, 88, 11, 1, R.iron[3]);
+      roofPx(b, 2, 126, 22, 77, 10, ROOF_RED, 'tile', rnd);
+      box(b, 8, 77, 112, 2, 'rgba(36,24,15,0.4)');
+      chimneyPx(b, 92, 8, 14, 34);
+      // anvil out front
+      box(b, 30, 120, 10, 5, R.iron[1]);
+      fpoly(b, [23, 114, 45, 114, 45, 117, 41, 118, 41, 120, 29, 120, 29, 118, 25, 117, 21, 115], R.iron[2]);
+      box(b, 24, 114, 21, 1, R.iron[4]);
+      box(b, 24, 115, 21, 1, R.iron[3]);
+      // quench barrel
+      box(b, 104, 110, 11, 15, R.bark[3]);
+      box(b, 104, 110, 2, 15, R.bark[4]);
+      box(b, 113, 110, 2, 15, R.bark[1]);
+      for (const yy of [112, 119]) box(b, 104, yy, 11, 1, R.iron[1]);
+      box(b, 105, 109, 9, 2, PAL.water[1]);
+      px(b, 106, 109, PAL.water[3]);
+    });
+    halo(c, 99, 6, 8, '#ff9a3a', 0.45);
+    smokePx(c, 100, 2);
   });
 
-  // ---- chapel 4x4 (front-gabled, bell cote)
-  canvasTexAll(scene, ['struct_chapel', 'chapel'], 128, 176, (c) => {
-    const rnd = mulberry32(202);
-    groundShadow(c, 64, 170, 60, 7, 0.32);
-    const roof = '#4a6aa8';
-    // roof slopes going back from the gable
-    poly(c, [12, 108, 64, 66, 64, 28, 12, 70], shade(roof, 14));
-    poly(c, [116, 108, 64, 66, 64, 28, 116, 70], shade(roof, -22));
-    for (let i = 1; i < 7; i++) {
-      const t = i / 7;
-      line(c, [12, 108 - t * 38, 64, 66 - t * 38], shade(roof, -6), 1, 'butt');
-      line(c, [116, 108 - t * 38, 64, 66 - t * 38], shade(roof, -40), 1, 'butt');
-    }
-    line(c, [64, 66, 64, 28], shade(roof, -50), 2, 'butt');
-    line(c, [12, 70, 64, 28], shade(roof, 30), 2, 'butt');
-    line(c, [116, 70, 64, 28], shade(roof, -40), 2, 'butt');
-    // walls + gable
-    wallFace(c, 16, 104, 96, 68, '#e8e2d4', 'plaster', rnd);
-    rect(c, 16, 104, 96, 3, '#e8e2d4');
-    poly(c, [14, 106, 64, 64, 114, 106], '#e8e2d4');
-    poly(c, [64, 64, 114, 106, 104, 106, 64, 72], '#d6cfbf');
-    line(c, [10, 110, 64, 63, 118, 110], '#7a5a3a', 4, 'butt');
-    line(c, [10, 109, 64, 62, 118, 109], '#9a7a52', 1, 'butt');
-    // rose window
-    ellipse(c, 64, 90, 9, 9, '#7a5a3a');
-    ellipse(c, 64, 90, 7.5, 7.5, '#5a8ad8');
-    for (let i = 0; i < 6; i++) {
-      const a = (i / 6) * Math.PI * 2;
-      ellipse(c, 64 + Math.cos(a) * 4, 90 + Math.sin(a) * 4, 2.2, 2.2, i % 2 ? '#e86a8a' : '#f2d36b');
-    }
-    ellipse(c, 64, 90, 2, 2, '#fff6d0');
-    // tall stained windows
-    for (const wx of [28, 92]) {
-      rect(c, wx - 1, 124, 12, 26, '#7a5a3a');
-      ellipse(c, wx + 5, 124, 6, 6, '#7a5a3a');
-      rect(c, wx, 124, 10, 25, '#5a8ad8');
-      ellipse(c, wx + 5, 124, 5, 5, '#5a8ad8');
-      rect(c, wx, 132, 10, 6, '#e86a8a');
-      rect(c, wx, 142, 10, 7, '#f2d36b');
-      rect(c, wx + 5, 119, 1, 30, '#7a5a3a');
-      rect(c, wx, 124, 2, 6, '#bfe0ff');
-    }
-    door(c, 64, 168, 22, 32, '#8a5a32');
-    rect(c, 63, 138, 2, 30, '#5a3a22');
-    rect(c, 48, 168, 32, 3, '#b8b2a6');
-    // bell cote on the ridge
-    rect(c, 56, 30, 16, 26, '#e8e2d4');
-    rect(c, 66, 30, 6, 26, '#d0c9b9');
-    rect(c, 59, 36, 10, 12, '#3a3040');
-    ellipse(c, 64, 44, 4, 4, '#d8a83a');
-    rect(c, 63, 36, 2, 5, '#7a5a3a');
-    poly(c, [52, 32, 64, 8, 76, 32], shade(roof, 6));
-    poly(c, [64, 8, 76, 32, 64, 32], shade(roof, -26));
-    rect(c, 52, 31, 24, 2, shade(roof, -40));
-    rect(c, 63, 2, 2, 7, '#c9a03a');
-    sunRing(c, 64, 4, 3);
+  // ---- chapel 4x4: front gable, slate planes going back, rose window, bell cote with the waystar finial
+  texAll(scene, ['struct_chapel', 'chapel'], 128, 176, (c) => {
+    const rnd = artRng(keySeed('struct_chapel'));
+    shadow(c, 64, 171, 60, 6);
+    sprite(c, 128, 176, (b) => {
+      const RB = ROOF_BLUE;
+      fpoly(b, [9, 111, 64, 62, 64, 24, 9, 73], RB[3]);
+      fpoly(b, [119, 111, 64, 62, 64, 24, 119, 73], RB[1]);
+      for (let i = 1; i < 8; i++) {
+        const dy = Math.round((i / 8) * 38);
+        seg(b, 10, 111 - dy, 63, 62 - dy, RB[2]);
+        seg(b, 11, 112 - dy, 63, 63 - dy, RB[4]);
+        seg(b, 118, 111 - dy, 65, 62 - dy, RB[0]);
+      }
+      seg(b, 64, 62, 64, 24, RB[5]);
+      seg(b, 65, 62, 65, 24, RB[0]);
+      seg(b, 9, 73, 64, 24, RB[5]);
+      seg(b, 119, 73, 65, 24, RB[0]);
+      // walls + gable
+      wallPx(b, 16, 106, 96, 66, 'plaster', rnd);
+      fpoly(b, [15, 108, 64, 63, 113, 108], PLASTER[3]);
+      fpoly(b, [64, 63, 113, 108, 102, 108, 64, 72], PLASTER[2]);
+      brush(b, [11, 111, 64, 61, 117, 111], 3, R.bark[2]);
+      seg(b, 10, 109, 63, 60, R.bark[4]);
+      seg(b, 65, 60, 118, 109, R.bark[1]);
+      // rose window
+      disc(b, 64, 88, 10, 10, R.bark[1]);
+      disc(b, 64, 88, 8, 8, R.blue[3]);
+      for (let i = 0; i < 6; i++) {
+        const a = (i / 6) * Math.PI * 2 - Math.PI / 2;
+        disc(b, 64 + Math.cos(a) * 4.5, 88 + Math.sin(a) * 4.5, 2.2, 2.2, i % 2 ? PAL.rose : R.gold[3]);
+      }
+      disc(b, 64, 88, 2, 2, R.gold[4]);
+      box(b, 59, 82, 2, 2, R.blue[4]);
+      // tall stained windows
+      for (const wx of [26, 92]) {
+        disc(b, wx + 5, 128, 7, 7, R.bark[1]);
+        box(b, wx - 2, 128, 14, 25, R.bark[1]);
+        disc(b, wx + 5, 128, 5, 5, R.blue[3]);
+        box(b, wx, 128, 10, 23, R.blue[3]);
+        box(b, wx, 134, 10, 6, PAL.rose);
+        box(b, wx, 143, 10, 7, R.gold[3]);
+        box(b, wx + 5, 123, 1, 28, R.bark[1]);
+        box(b, wx, 128, 2, 5, R.blue[4]);
+        box(b, wx - 3, 152, 16, 2, R.stone[4]);
+      }
+      doorPx(b, 64, 170, 22, 32, R.bark, true);
+      box(b, 63, 140, 2, 30, R.bark[1]);
+      // bell cote on the ridge
+      box(b, 56, 30, 16, 26, PLASTER[3]);
+      box(b, 67, 30, 5, 26, PLASTER[1]);
+      box(b, 56, 30, 1, 26, PLASTER[4]);
+      box(b, 59, 36, 10, 13, '#1e1828');
+      disc(b, 64, 44, 4, 4, R.gold[2]);
+      box(b, 61, 42, 2, 2, R.gold[4]);
+      box(b, 63, 36, 2, 4, R.bark[2]);
+      fpoly(b, [51, 33, 64, 9, 77, 33], RB[3]);
+      fpoly(b, [64, 9, 77, 33, 64, 33], RB[1]);
+      seg(b, 52, 32, 63, 10, RB[5]);
+      box(b, 51, 32, 26, 2, RB[0]);
+      box(b, 63, 3, 2, 7, R.gold[2]);
+      waystar(b, 64, 3, 3);
+    });
   });
 
-  // ---- hut 3x3 (thatch, logs)
-  canvasTexAll(scene, ['struct_hut', 'hut'], 96, 100, (c) => {
-    const rnd = mulberry32(203);
-    groundShadow(c, 48, 94, 44, 6, 0.3);
-    wallFace(c, 14, 60, 68, 36, '#8c6a46', 'log', rnd);
-    door(c, 50, 92, 16, 22, '#6a4426');
-    ellipse(c, 27, 74, 5, 5, '#4a3020');
-    ellipse(c, 27, 74, 3.5, 3.5, '#ffe9a8');
-    rect(c, 26, 70, 1, 8, '#4a3020');
-    // domed thatch
-    const thatch = '#c9a24a';
-    c.fillStyle = shade(thatch, -40);
-    c.beginPath();
-    c.moveTo(2, 70);
-    c.quadraticCurveTo(6, 10, 48, 8);
-    c.quadraticCurveTo(90, 10, 94, 70);
-    c.closePath();
-    c.fill();
-    c.fillStyle = thatch;
-    c.beginPath();
-    c.moveTo(4, 66);
-    c.quadraticCurveTo(8, 12, 48, 10);
-    c.quadraticCurveTo(88, 12, 92, 66);
-    c.closePath();
-    c.fill();
-    for (let i = 0; i < 260; i++) {
-      const x = 8 + rnd() * 80;
-      const y = 14 + rnd() * 50;
-      const edge = Math.abs(x - 48) / 44;
-      if (y < 12 + edge * edge * 50) continue;
-      rect(c, Math.round(x), Math.round(y), 1, 3 + ri(rnd, 3), rnd() < 0.5 ? shade(thatch, -26) : shade(thatch, 22));
-    }
-    for (let y = 26; y < 64; y += 12) line(c, [10 + (64 - y) * 0.1, y, 86 - (64 - y) * 0.1, y], shade(thatch, -34), 1, 'butt');
-    for (let x = 4; x < 92; x += 3) rect(c, x, 64 + ri(rnd, 2), 2, 4, shade(thatch, -30));
-    ellipse(c, 30, 30, 9, 4, '#7a8a3a');
-    ellipse(c, 66, 46, 7, 3, '#6b7d3a');
-    ellipse(c, 38, 20, 10, 4, shade(thatch, 30));
-    rect(c, 46, 6, 6, 5, '#5a4630');
-    smoke(c, 49, 2);
+  // ---- hut 3x3: stacked logs under a domed thatch
+  texAll(scene, ['struct_hut', 'hut'], 96, 100, (c) => {
+    const rnd = artRng(keySeed('struct_hut'));
+    shadow(c, 48, 95, 44, 5);
+    sprite(c, 96, 100, (b) => {
+      wallPx(b, 14, 60, 68, 36, 'log', rnd);
+      doorPx(b, 52, 94, 16, 22, R.bark, true);
+      disc(b, 27, 75, 5, 5, R.bark[1]);
+      disc(b, 27, 75, 3.5, 3.5, GLASS[2]);
+      box(b, 25, 73, 2, 2, GLASS[4]);
+      box(b, 27, 71, 1, 8, R.bark[1]);
+      box(b, 23, 75, 8, 1, R.bark[1]);
+      // thatch dome
+      const T = THATCH;
+      for (let y = 6; y <= 70; y++) {
+        const dy = (70 - y) / 64;
+        const half = Math.round(47 * Math.sqrt(Math.max(0, 1 - dy * dy)));
+        box(b, 48 - half, y, half * 2, 1, T[3]);
+        box(b, 48 - half, y, Math.max(1, Math.round(half * 0.35)), 1, T[4]);
+        box(b, 48 + half - Math.max(1, Math.round(half * 0.4)), y, Math.max(1, Math.round(half * 0.4)), 1, T[2]);
+      }
+      for (let band = 16; band < 70; band += 9) {
+        const dy = (70 - band) / 64;
+        const half = Math.round(47 * Math.sqrt(Math.max(0, 1 - dy * dy)));
+        for (let x = 48 - half + 1; x < 48 + half - 1; x += 2) {
+          const len = 3 + Math.floor(rnd() * 4);
+          box(b, x, band - len, 1, len, rnd() < 0.5 ? T[2] : T[5]);
+        }
+        box(b, 48 - half, band, half * 2, 1, T[1]);
+        for (let x = 48 - half + 1; x < 48 + half - 1; x += 3) px(b, x, band + 1, T[2]);
+      }
+      for (let x = 2; x < 94; x += 3) box(b, x, 68 + Math.floor(rnd() * 2), 2, 3, T[1]);
+      mossCap(b, 22, 30, 12);
+      mossCap(b, 60, 46, 9);
+      box(b, 44, 4, 8, 4, T[1]);
+      box(b, 45, 4, 6, 2, '#1a120c');
+    });
+    smokePx(c, 48, 2);
   });
 
-  // ---- hall 6x4 (timber guild hall with central gable)
+  // ---- hall 6x4: timber guild hall, slate roof, central gable porch, waystar banners and lanterns
   canvasTex(scene, 'struct_hall', 192, 156, (c) => {
-    const rnd = mulberry32(204);
-    groundShadow(c, 96, 150, 92, 8, 0.32);
-    wallFace(c, 10, 84, 172, 68, '#ddc9a0', 'plaster', rnd);
-    for (const wx of [22, 48, 134, 160]) windowLit(c, wx, 104, 12, 14, '#5a3a22');
-    roofFront(c, 2, 190, 26, 90, 14, '#3f6f5a', 'slate', rnd);
-    rect(c, 4, 90, 184, 3, 'rgba(0,0,0,0.28)');
-    chimney(c, 30, 14, 12, 26, '#8a837a');
-    chimney(c, 152, 10, 12, 28, '#8a837a');
-    smoke(c, 37, 8);
-    // central gable porch
-    poly(c, [64, 96, 96, 50, 128, 96], '#ddc9a0');
-    poly(c, [96, 50, 128, 96, 118, 96, 96, 60], '#c8b48c');
-    line(c, [60, 99, 96, 48, 132, 99], '#5a3a22', 4, 'butt');
-    line(c, [60, 98, 96, 47, 132, 98], '#7a5a3a', 1, 'butt');
-    ellipse(c, 96, 76, 6, 6, '#5a3a22');
-    ellipse(c, 96, 76, 4.5, 4.5, '#ffe9a8');
-    rect(c, 95, 71, 1, 10, '#5a3a22');
-    rect(c, 70, 96, 52, 3, '#5a3a22');
-    door(c, 96, 148, 28, 34, '#7a4f2c');
-    rect(c, 95, 118, 2, 30, '#4a2f1a');
-    // banners
-    for (const bx of [68, 118]) {
-      rect(c, bx - 1, 100, 10, 2, '#5a3a22');
-      poly(c, [bx, 102, bx + 8, 102, bx + 8, 124, bx + 4, 120, bx, 124], '#2f7f8f');
-      rect(c, bx, 102, 2, 20, '#3f95a6');
-      poly(c, [bx + 4, 106, bx + 6, 111, bx + 4, 116, bx + 2, 111], '#f2d36b');
-    }
-    // lanterns
-    for (const lx of [78, 114]) {
-      glow(c, lx, 128, 8, '#ffcf6a', 0.5);
-      rect(c, lx - 2, 125, 4, 6, '#ffd77a');
-      rect(c, lx - 3, 124, 6, 1, '#3a3a40');
-      rect(c, lx - 3, 131, 6, 1, '#3a3a40');
-    }
-    rect(c, 76, 148, 40, 3, '#9a948a');
+    const rnd = artRng(keySeed('struct_hall'));
+    shadow(c, 96, 151, 92, 6);
+    sprite(c, 192, 156, (b) => {
+      wallPx(b, 8, 84, 176, 68, 'plaster', rnd);
+      for (const wx of [20, 44, 136, 160]) windowPx(b, wx, 102, 12, 14, R.teal);
+      roofPx(b, 2, 190, 26, 91, 14, ROOF_GREEN, 'slate', rnd);
+      box(b, 8, 91, 176, 2, 'rgba(36,24,15,0.4)');
+      chimneyPx(b, 30, 14, 12, 26);
+      chimneyPx(b, 150, 10, 12, 28);
+      // central gable porch
+      fpoly(b, [62, 99, 96, 50, 130, 99], PLASTER[3]);
+      fpoly(b, [96, 50, 130, 99, 120, 99, 96, 60], PLASTER[2]);
+      brush(b, [59, 101, 96, 48, 133, 101], 3, R.bark[2]);
+      seg(b, 58, 99, 95, 46, R.bark[4]);
+      seg(b, 97, 46, 134, 99, R.bark[1]);
+      disc(b, 96, 76, 7, 7, R.bark[1]);
+      disc(b, 96, 76, 5, 5, GLASS[2]);
+      box(b, 93, 73, 2, 2, GLASS[4]);
+      box(b, 96, 71, 1, 10, R.bark[1]);
+      box(b, 91, 76, 11, 1, R.bark[1]);
+      box(b, 68, 96, 56, 4, R.bark[3]);
+      box(b, 68, 96, 56, 1, R.bark[4]);
+      box(b, 68, 99, 56, 1, R.bark[1]);
+      doorPx(b, 96, 150, 28, 34, R.bark, true);
+      box(b, 95, 118, 2, 32, R.bark[1]);
+      bannerPx(b, 70, 104, 9, 22, R.blue);
+      bannerPx(b, 113, 104, 9, 22, R.blue);
+      lanternPx(b, 85, 124);
+      lanternPx(b, 107, 124);
+      box(b, 76, 150, 40, 2, R.stone[3]);
+    });
+    halo(c, 85, 127, 7, '#ffcf6a', 0.5);
+    halo(c, 107, 127, 7, '#ffcf6a', 0.5);
+    smokePx(c, 37, 8);
   });
 
-  // ---- house 3x3
+  // ---- house 3x3: timber frame cottage, tiled roof, flower box
   canvasTex(scene, 'struct_house', 96, 108, (c) => {
-    const rnd = mulberry32(205);
-    groundShadow(c, 48, 102, 44, 6, 0.3);
-    wallFace(c, 10, 62, 76, 42, '#eadcbc', 'plaster', rnd);
-    windowLit(c, 20, 72, 14, 11, '#5a3a22');
-    rect(c, 18, 85, 18, 4, '#7a4f2c');
-    for (let i = 0; i < 6; i++) rect(c, 19 + i * 3, 83 + (i % 2), 2, 2, i % 2 ? '#ff6a6a' : '#ffd84d');
-    door(c, 62, 100, 16, 24, '#6a8a4a');
-    roofFront(c, 2, 94, 20, 66, 8, '#b5653a', 'tile', rnd);
-    rect(c, 4, 66, 88, 3, 'rgba(0,0,0,0.28)');
-    chimney(c, 18, 8, 10, 24, '#8a837a');
-    smoke(c, 23, 3);
+    const rnd = artRng(keySeed('struct_house'));
+    shadow(c, 48, 103, 44, 5);
+    sprite(c, 96, 108, (b) => {
+      wallPx(b, 10, 62, 76, 42, 'plaster', rnd);
+      windowPx(b, 20, 72, 13, 11, R.teal);
+      box(b, 17, 85, 19, 4, R.bark[3]);
+      box(b, 17, 85, 19, 1, R.bark[4]);
+      for (let i = 0; i < 6; i++) {
+        box(b, 18 + i * 3, 83 + (i % 2), 2, 2, i % 2 ? PAL.rose : PAL.crimson);
+        px(b, 18 + i * 3, 83 + (i % 2), i % 2 ? '#f8b8c0' : R.crimson[4]);
+      }
+      box(b, 18, 85, 17, 1, R.leaf[3]);
+      doorPx(b, 62, 102, 16, 24, R.teal, true);
+      roofPx(b, 2, 94, 20, 67, 8, ROOF_RED, 'tile', rnd);
+      box(b, 10, 67, 76, 2, 'rgba(36,24,15,0.4)');
+      chimneyPx(b, 18, 8, 10, 24);
+    });
+    smokePx(c, 23, 3);
   });
 
-  // ---- tent 3x2
+  // ---- tent 3x2: striped canvas, open flap, pennant, guy ropes
   canvasTex(scene, 'struct_tent', 96, 72, (c) => {
-    groundShadow(c, 48, 66, 44, 6, 0.3);
-    const cloth = '#e8dcc0';
-    const stripe = '#c0503a';
-    // roof slopes running back from the front triangle
-    poly(c, [8, 66, 48, 16, 48, 6, 10, 52], shade(cloth, -6));
-    poly(c, [88, 66, 48, 16, 48, 6, 86, 52], shade(cloth, -44));
-    for (let i = 1; i < 4; i++) {
-      const t = i / 4;
-      line(c, [8 + 2 * t, 66 - 14 * t, 48, 16 - 10 * t], stripe, 3, 'butt');
-      line(c, [88 - 2 * t, 66 - 14 * t, 48, 16 - 10 * t], shade(stripe, -40), 3, 'butt');
-    }
-    // front face
-    poly(c, [8, 66, 48, 16, 88, 66], cloth);
-    for (const sx of [-24, -12, 12, 24]) {
-      const x = 48 + sx;
-      poly(c, [48 + sx * 0.08, 18, 48 + sx * 0.08 + 2, 18, x + 2, 66, x - 2, 66], sx < 0 ? stripe : shade(stripe, -16));
-    }
-    poly(c, [48, 16, 88, 66, 80, 66, 48, 24], 'rgba(0,0,0,0.12)');
-    // open flap
-    poly(c, [36, 66, 48, 32, 60, 66], '#2a1e18');
-    poly(c, [48, 32, 60, 66, 66, 66, 52, 34], shade(cloth, -18));
-    poly(c, [48, 32, 36, 66, 31, 64, 45, 36], shade(cloth, 10));
-    line(c, [8, 66, 48, 16, 88, 66], '#8a6a4a', 1, 'butt');
-    // pole + pennant + ropes
-    rect(c, 47, 2, 2, 16, '#6a4a2e');
-    poly(c, [49, 3, 58, 6, 49, 9], '#2f7f8f');
-    line(c, [48, 16, 2, 62], 'rgba(90,70,50,0.8)', 1, 'butt');
-    line(c, [48, 16, 94, 62], 'rgba(90,70,50,0.8)', 1, 'butt');
-    rect(c, 1, 61, 2, 4, '#6a4a2e');
-    rect(c, 93, 61, 2, 4, '#6a4a2e');
+    shadow(c, 48, 66, 44, 5);
+    sprite(c, 96, 72, (b) => {
+      const CL = CANVAS;
+      const ST = R.crimson;
+      fpoly(b, [8, 67, 48, 16, 48, 6, 10, 53], CL[3]);
+      fpoly(b, [88, 67, 48, 16, 48, 6, 86, 53], CL[1]);
+      for (let i = 1; i < 4; i++) {
+        const t = i / 4;
+        brush(b, [9 + 2 * t, 67 - 14 * t, 47, 16 - 10 * t], 2, ST[2]);
+        brush(b, [87 - 2 * t, 67 - 14 * t, 49, 16 - 10 * t], 2, ST[1]);
+      }
+      fpoly(b, [8, 67, 48, 16, 88, 67], CL[3]);
+      for (const sx of [-26, -13, 13, 26]) {
+        const x = 48 + sx;
+        fpoly(b, [48 + sx * 0.08 - 1, 18, 48 + sx * 0.08 + 1, 18, x + 2, 67, x - 2, 67], sx < 0 ? ST[2] : ST[1]);
+      }
+      fpoly(b, [48, 16, 88, 67, 80, 67, 48, 24], CL[2]);
+      seg(b, 9, 66, 47, 17, CL[4]);
+      // open flap
+      fpoly(b, [36, 67, 48, 32, 60, 67], '#1e140e');
+      fpoly(b, [48, 32, 60, 67, 67, 67, 52, 34], CL[1]);
+      fpoly(b, [48, 32, 36, 67, 30, 65, 45, 36], CL[4]);
+      seg(b, 31, 65, 45, 36, CL[2]);
+      box(b, 6, 66, 84, 1, CL[0]);
+      // pole + pennant
+      box(b, 47, 1, 2, 17, R.bark[3]);
+      px(b, 47, 1, R.bark[4]);
+      fpoly(b, [49, 2, 59, 5, 49, 8], R.blue[3]);
+      px(b, 52, 5, R.gold[3]);
+      // ropes + stakes
+      seg(b, 47, 17, 3, 63, R.bark[2]);
+      seg(b, 49, 17, 92, 63, R.bark[2]);
+      box(b, 2, 62, 2, 5, R.bark[3]);
+      box(b, 92, 62, 2, 5, R.bark[1]);
+    });
   });
 
-  // ---- ruin 4x3 (roofless, broken walls, toppled column)
+  // ---- ruin 4x3: flagstone floor, jagged walls, a standing broken column, fallen drums, ivy, rubble
   canvasTex(scene, 'struct_ruin', 128, 104, (c) => {
-    const rnd = mulberry32(206);
-    groundShadow(c, 64, 98, 60, 6, 0.22);
-    const stone = '#a39d92';
-    // old floor
-    rect(c, 12, 40, 104, 56, '#8a857b');
+    const rnd = artRng(keySeed('struct_ruin'));
+    shadow(c, 64, 98, 60, 5, 0.22);
+    const S = R.warmStone;
+    // floor is flat ground (no outline)
+    box(c, 12, 40, 104, 56, S[1]);
     for (let y = 40; y < 96; y += 12)
       for (let x = 12 + ((y / 12) % 2) * 6; x < 116; x += 12) {
-        rect(c, x, y, 11, 11, shade('#8a857b', (rnd() - 0.5) * 14));
-        rect(c, x, y, 11, 1, '#9a958b');
+        const w = Math.min(11, 116 - x);
+        const tone = rnd() < 0.3 ? 2 : 3;
+        box(c, x, y, w, 11, S[tone]);
+        box(c, x, y, w, 1, S[tone + 1]);
+        box(c, x + w - 1, y + 1, 1, 10, S[tone - 1]);
       }
-    for (let i = 0; i < 18; i++) rect(c, 14 + ri(rnd, 100), 42 + ri(rnd, 52), 3, 2, rnd() < 0.5 ? '#5d8a46' : '#6b665d');
-    // broken wall: lit top + front face + jagged silhouette
-    const wallSeg = (x: number, y: number, w: number, h: number, jag: number[]) => {
-      const top: number[] = [];
-      jag.forEach((d, i) => top.push(x + (i / (jag.length - 1)) * w, y + d));
-      poly(c, [...top, x + w, y + h, x, y + h], stone);
-      for (let yy = y + 4; yy < y + h; yy += 6) {
-        rect(c, x, yy, w, 1, shade(stone, -28));
-        for (let xx = x + ((yy / 6) % 2 ? 4 : 0); xx < x + w; xx += 9) rect(c, xx, yy, 1, 6, shade(stone, -28));
-      }
-      // repaint jagged top above courses + lit cap
-      for (let i = 0; i < jag.length - 1; i++) {
-        const ax = x + (i / (jag.length - 1)) * w;
-        const bx = x + ((i + 1) / (jag.length - 1)) * w;
-        line(c, [ax, y + jag[i] + 1, bx, y + jag[i + 1] + 1], shade(stone, 26), 2, 'butt');
-      }
-      rect(c, x + w - 3, y + Math.max(...jag), 3, h - Math.max(...jag), shade(stone, -20));
-      rect(c, x, y + h - 2, w, 2, shade(stone, -40));
-    };
-    wallSeg(10, 18, 108, 26, [10, 2, 6, 0, 4, 12, 16, 8, 3, 9, 14]);
-    wallSeg(8, 34, 8, 62, [0, 2]);
-    wallSeg(112, 54, 8, 42, [4, 0]);
-    wallSeg(8, 76, 34, 22, [0, 2, 8, 12]);
-    wallSeg(88, 82, 32, 16, [9, 4, 0, 2]);
-    // ivy
-    for (const [x, y, n] of [
-      [22, 26, 9],
-      [70, 22, 7],
-      [12, 50, 10],
-      [96, 86, 5],
-    ] as const)
-      for (let i = 0; i < n; i++) rect(c, x + ri(rnd, 8), y + i * 2, 2, 2, i % 3 ? '#4f7a3a' : '#6a9a4a');
-    // standing broken column + fallen drums
-    rect(c, 28, 52, 10, 30, '#bab4a8');
-    rect(c, 34, 52, 4, 30, '#9e988c');
-    rect(c, 29, 52, 1, 30, '#d0cabe');
-    poly(c, [26, 54, 30, 48, 34, 51, 38, 47, 40, 54], '#c6c0b4');
-    rect(c, 25, 80, 16, 4, '#9e988c');
-    rect(c, 72, 69, 18, 10, '#b4aea2');
-    rect(c, 72, 69, 18, 2, '#c8c2b6');
-    rect(c, 72, 77, 18, 2, '#8a8478');
-    ellipse(c, 90, 74, 3, 5, '#8a8478');
-    ellipse(c, 72, 74, 3, 5, '#d0cabe');
-    ellipse(c, 72, 74, 1.5, 2.5, '#b4aea2');
-    for (let i = 0; i < 10; i++) {
-      const x = 46 + ri(rnd, 60);
-      const y = 84 + ri(rnd, 10);
-      rect(c, x, y, 3, 2, '#9e988c');
-      rect(c, x, y, 2, 1, '#c6c0b4');
+    for (let i = 0; i < 16; i++) {
+      const x = 14 + Math.floor(rnd() * 98);
+      const y = 42 + Math.floor(rnd() * 50);
+      if (rnd() < 0.6) {
+        box(c, x, y, 3, 1, R.moss[2]);
+        px(c, x + 1, y - 1, R.moss[3]);
+      } else box(c, x, y, 2, 1, S[1]);
     }
+    sprite(c, 128, 104, (b) => {
+      const wallSeg = (x: number, y: number, w: number, h: number, jag: number[]) => {
+        const top: number[] = [];
+        jag.forEach((d, i) => top.push(x + (i / (jag.length - 1)) * w, y + d));
+        fpoly(b, [...top, x + w, y + h, x, y + h], S[3]);
+        for (let yy = y + 4, r = 0; yy < y + h; yy += 6, r++) {
+          box(b, x, yy, w, 1, S[1]);
+          for (let xx = x + (r % 2 ? 4 : 0); xx < x + w; xx += 9) box(b, xx, yy, 1, 6, S[1]);
+          for (let xx = x + (r % 2 ? 5 : 1); xx < x + w - 3; xx += 9) box(b, xx, yy + 1, 3, 1, S[4]);
+        }
+        for (let i = 0; i < jag.length - 1; i++) {
+          const ax = x + (i / (jag.length - 1)) * w;
+          const bx = x + ((i + 1) / (jag.length - 1)) * w;
+          seg(b, Math.round(ax), Math.round(y + jag[i]), Math.round(bx), Math.round(y + jag[i + 1]), S[5]);
+          seg(b, Math.round(ax), Math.round(y + jag[i] + 1), Math.round(bx), Math.round(y + jag[i + 1] + 1), S[4]);
+        }
+        box(b, x + w - 3, y + Math.max(...jag) + 1, 3, h - Math.max(...jag) - 1, S[2]);
+        box(b, x, y + h - 2, w, 2, S[1]);
+      };
+      wallSeg(10, 18, 108, 26, [10, 2, 6, 0, 4, 12, 16, 8, 3, 9, 14]);
+      wallSeg(8, 34, 8, 62, [0, 2]);
+      wallSeg(112, 54, 8, 42, [4, 0]);
+      wallSeg(8, 76, 34, 22, [0, 2, 8, 12]);
+      wallSeg(88, 82, 32, 16, [9, 4, 0, 2]);
+      for (const [x, y, n] of [
+        [22, 26, 9],
+        [70, 22, 7],
+        [11, 48, 10],
+        [96, 86, 5],
+      ] as const)
+        for (let i = 0; i < n; i++) {
+          const ix = x + Math.floor(rnd() * 7);
+          box(b, ix, y + i * 2, 2, 2, i % 3 ? R.leaf[2] : R.leaf[4]);
+          px(b, ix + 1, y + i * 2 + 1, R.leaf[1]);
+        }
+      // standing broken column
+      box(b, 28, 52, 10, 30, S[3]);
+      box(b, 28, 52, 2, 30, S[5]);
+      box(b, 35, 52, 3, 30, S[2]);
+      for (let yy = 58; yy < 80; yy += 7) box(b, 28, yy, 10, 1, S[1]);
+      fpoly(b, [26, 54, 30, 48, 33, 51, 37, 46, 40, 54], S[4]);
+      box(b, 25, 80, 16, 4, S[2]);
+      box(b, 25, 80, 16, 1, S[4]);
+      // fallen drum
+      box(b, 72, 69, 18, 10, S[3]);
+      box(b, 72, 69, 18, 2, S[4]);
+      box(b, 72, 77, 18, 2, S[1]);
+      disc(b, 90, 74, 3, 5, S[2]);
+      disc(b, 72, 74, 3, 5, S[4]);
+      disc(b, 72, 74, 1.5, 2.5, S[3]);
+      for (let i = 0; i < 10; i++) {
+        const x = 46 + Math.floor(rnd() * 60);
+        const y = 85 + Math.floor(rnd() * 9);
+        box(b, x, y, 3, 2, S[2]);
+        box(b, x, y, 2, 1, S[4]);
+      }
+    });
   });
 
-  // ---- tower 2x3 (round stone tower, cone roof)
+  // ---- tower 2x3: round coursed tower, arrow slits, cone roof, pennant
   canvasTex(scene, 'struct_tower', 64, 160, (c) => {
-    const rnd = mulberry32(207);
-    groundShadow(c, 32, 154, 28, 6, 0.32);
-    const stone = '#a29c90';
-    const body = c.createLinearGradient(8, 0, 56, 0);
-    body.addColorStop(0, shade(stone, 18));
-    body.addColorStop(0.45, stone);
-    body.addColorStop(1, shade(stone, -46));
-    c.fillStyle = body;
-    c.fillRect(9, 44, 46, 108);
-    ellipse(c, 32, 152, 23, 5, shade(stone, -30));
-    rect(c, 9, 140, 46, 12, shade(stone, -10));
-    for (let y = 50, r = 0; y < 150; y += 7, r++) {
-      c.strokeStyle = 'rgba(40,36,32,0.35)';
-      c.lineWidth = 1;
-      c.beginPath();
-      c.ellipse(32, y, 23, 3, 0, 0, Math.PI);
-      c.stroke();
-      for (let x = 12 + (r % 2) * 5; x < 54; x += 10) rect(c, x, y + 1 + Math.round(Math.sin(((x - 9) / 46) * Math.PI) * 3), 1, 6, 'rgba(40,36,32,0.3)');
-    }
-    for (let i = 0; i < 30; i++) rect(c, 11 + ri(rnd, 40), 50 + ri(rnd, 96), 2, 1, 'rgba(255,255,255,0.12)');
-    // windows + door
-    for (const y of [64, 96]) {
-      rect(c, 29, y, 5, 12, '#2a2430');
-      ellipse(c, 31.5, y, 2.5, 2.5, '#2a2430');
-      rect(c, 30, y + 2, 1, 6, '#ffe9a8');
-    }
-    door(c, 32, 150, 14, 22, '#6a4426');
-    // cone roof
-    ellipse(c, 32, 46, 28, 7, shade('#4a5a8a', -40));
-    poly(c, [4, 46, 32, 0, 60, 46], '#4a5a8a');
-    poly(c, [32, 0, 60, 46, 40, 50], shade('#4a5a8a', -30));
-    poly(c, [32, 0, 4, 46, 14, 49], shade('#4a5a8a', 18));
-    for (let y = 12; y < 46; y += 7) {
-      const hw = (y / 46) * 28;
-      line(c, [32 - hw, y, 32 + hw, y], 'rgba(20,24,40,0.35)', 1, 'butt');
-    }
-    c.fillStyle = shade('#4a5a8a', -10);
-    c.beginPath();
-    c.ellipse(32, 46, 28, 6, 0, 0, Math.PI);
-    c.fill();
-    line(c, [32, 0, 32, -1], '#3a3a40', 1);
-    rect(c, 31, 0, 2, 4, '#3a3a40');
-    poly(c, [33, 0, 42, 2, 33, 5], '#c0503a');
+    const rnd = artRng(keySeed('struct_tower'));
+    shadow(c, 32, 155, 28, 5);
+    sprite(c, 64, 160, (b) => {
+      const S = R.warmStone;
+      for (let x = 9; x < 55; x++) {
+        const t = (x - 9) / 46;
+        const tone = t < 0.16 ? 4 : t < 0.5 ? 3 : t < 0.8 ? 2 : 1;
+        const sag = Math.round(Math.sin(t * Math.PI) * 3);
+        box(b, x, 44, 1, 108 + sag, S[tone]);
+        for (let y = 50, r = 0; y < 150; y += 7, r++) {
+          px(b, x, y + sag, S[Math.max(0, tone - 2)]);
+          if ((x + (r % 2) * 5) % 10 === 0) box(b, x, y + sag + 1, 1, 6, S[Math.max(0, tone - 1)]);
+          else if ((x + (r % 2) * 5) % 10 === 1 && tone >= 3) px(b, x, y + sag + 1, S[5]);
+        }
+      }
+      for (let i = 0; i < 12; i++) box(b, 12 + Math.floor(rnd() * 20), 52 + Math.floor(rnd() * 90), 2, 1, S[5]);
+      box(b, 9, 146, 46, 6, S[2]);
+      box(b, 9, 146, 46, 1, S[4]);
+      for (const y of [66, 98]) {
+        box(b, 29, y, 5, 12, '#1e1828');
+        box(b, 30, y - 1, 3, 1, '#1e1828');
+        box(b, 30, y + 2, 2, 7, GLASS[3]);
+        box(b, 28, y + 12, 7, 1, S[4]);
+      }
+      doorPx(b, 32, 152, 14, 22, R.bark, true);
+      // cone roof
+      const RB = ROOF_BLUE;
+      for (let y = 0; y <= 46; y++) {
+        const half = Math.round((y / 46) * 29);
+        for (let x = 32 - half; x <= 32 + half; x++) {
+          const t = half ? (x - (32 - half)) / (half * 2) : 0.5;
+          const tone = t < 0.22 ? 4 : t < 0.55 ? 3 : t < 0.8 ? 2 : 1;
+          px(b, x, y, RB[tone]);
+        }
+        if (y % 6 === 5) box(b, 32 - half, y, half * 2 + 1, 1, RB[1]);
+      }
+      for (let x = 4; x <= 60; x++) {
+        const t = (x - 32) / 29;
+        const yy = 46 + Math.round(Math.sqrt(Math.max(0, 1 - t * t)) * 5);
+        box(b, x, 46, 1, yy - 46, RB[1]);
+        px(b, x, yy, RB[0]);
+      }
+      seg(b, 31, 1, 5, 45, RB[5]);
+      box(b, 31, 0, 2, 3, R.iron[2]);
+      fpoly(b, [33, 0, 43, 2, 33, 5], R.blue[3]);
+      px(b, 36, 2, R.gold[3]);
+    });
   });
 
-  // ---- well 1x1
+  // ---- well 1x1: stone ring, plank roof, rope and bucket
   canvasTex(scene, 'struct_well', 32, 48, (c) => {
-    groundShadow(c, 16, 44, 14, 3.5, 0.3);
-    const stone = '#a29c90';
-    // ring front face (cylinder)
-    rect(c, 3, 34, 26, 9, shade(stone, -14));
-    ellipse(c, 16, 43, 13, 3.5, shade(stone, -30));
-    rect(c, 3, 34, 26, 8, shade(stone, -14));
-    for (let x = 5; x < 29; x += 6) rect(c, x, 35, 1, 7, shade(stone, -40));
-    rect(c, 3, 38, 26, 1, shade(stone, -40));
-    // rim + water
-    ellipse(c, 16, 34, 13, 5, stone);
-    ellipse(c, 16, 34, 13, 5, stone);
-    ellipse(c, 16, 33, 13, 4.5, shade(stone, 16));
-    ellipse(c, 16, 34, 9, 3, '#1c3550');
-    ellipse(c, 14, 33.5, 3, 1, '#4a7aa8');
-    // posts, crank, roof
-    rect(c, 3, 12, 3, 24, '#6a4426');
-    rect(c, 26, 12, 3, 24, '#4e3019');
-    rect(c, 4, 18, 24, 2, '#5a3a22');
-    rect(c, 27, 17, 4, 2, '#3a3a40');
-    line(c, [16, 20, 16, 27], '#c8b48c', 1, 'butt');
-    rect(c, 13, 27, 6, 5, '#7a4f2c');
-    rect(c, 13, 28, 6, 1, '#3a3a40');
-    poly(c, [0, 14, 16, 3, 32, 14, 29, 15, 16, 6, 3, 15], '#8a3b2a');
-    poly(c, [0, 14, 16, 3, 16, 6, 3, 15], '#a8503a');
-    rect(c, 15, 2, 2, 3, '#5a3a22');
+    shadow(c, 16, 44, 14, 3);
+    sprite(c, 32, 48, (b) => {
+      const S = R.warmStone;
+      box(b, 3, 34, 26, 9, S[3]);
+      box(b, 3, 34, 3, 9, S[4]);
+      box(b, 24, 34, 5, 9, S[2]);
+      for (let x = 7; x < 29; x += 6) box(b, x, 35, 1, 7, S[1]);
+      box(b, 3, 38, 26, 1, S[1]);
+      box(b, 3, 42, 26, 1, S[1]);
+      disc(b, 16, 34, 13, 4.5, S[4]);
+      disc(b, 16, 34.5, 10, 3, S[1]);
+      disc(b, 16, 35, 9, 2.5, PAL.water[0]);
+      box(b, 12, 35, 3, 1, PAL.water[2]);
+      box(b, 3, 12, 3, 24, R.bark[3]);
+      box(b, 3, 12, 1, 24, R.bark[4]);
+      box(b, 26, 12, 3, 24, R.bark[2]);
+      box(b, 4, 18, 24, 2, R.bark[2]);
+      box(b, 4, 18, 24, 1, R.bark[4]);
+      box(b, 27, 17, 4, 2, R.iron[2]);
+      box(b, 16, 20, 1, 8, CANVAS[2]);
+      box(b, 13, 27, 7, 5, R.bark[3]);
+      box(b, 13, 27, 7, 1, R.bark[4]);
+      box(b, 13, 29, 7, 1, R.iron[1]);
+      fpoly(b, [0, 15, 16, 3, 32, 15, 29, 16, 16, 6, 3, 16], ROOF_RED[3]);
+      fpoly(b, [0, 15, 16, 3, 16, 6, 3, 16], ROOF_RED[4]);
+      seg(b, 1, 14, 15, 4, ROOF_RED[5]);
+      box(b, 15, 1, 2, 3, R.bark[2]);
+    });
   });
 }
-
 // ================================================================== objects
 
 function flame(c: Ctx, x: number, base: number, h: number): void {
