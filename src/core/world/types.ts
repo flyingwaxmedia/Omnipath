@@ -35,10 +35,16 @@ export interface PortalGate {
   hint: string;
 }
 
-/** Hidden portals stay invisible until the player casts a matching skill within 3 tiles. */
+/**
+ * Hidden portals stay invisible until the player casts a matching skill within 3 tiles.
+ * Matching is ANY-OF: the skill reveals the portal if it has `tag`, OR its element is `element`
+ * or one of `elements`, OR its shape kind is `shape`.
+ */
 export interface PortalReveal {
   tag?: string;
   element?: ElementId;
+  /** Additional elements that also reveal (any-of). */
+  elements?: ElementId[];
   shape?: ShapeKind;
   /** Flavour of the blocker drawn on top until revealed. */
   look: 'shimmer' | 'cracked_rock' | 'brambles' | 'fog' | 'glyph' | 'rift';

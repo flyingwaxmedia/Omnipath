@@ -125,7 +125,12 @@ const DATA: GameData = {
     sk({ id: 'cleave', tags: ['blade', 'heavy'] }),
     sk({ id: 'searing', tags: ['blade'], element: 'fire' }),
     sk({ id: 'smite', tags: ['blade'], element: 'holy' }),
-    sk({ id: 'vanish', weapons: ['dagger'], tags: ['stealth', 'buff'], shape: { kind: 'buff', stat: 'speed', amount: 10, duration: 3000 } }),
+    sk({
+      id: 'vanish',
+      weapons: ['dagger'],
+      tags: ['stealth', 'buff'],
+      shape: { kind: 'buff', stat: 'speed', amount: 10, duration: 3000 },
+    }),
     sk({ id: 'orb', weapons: ['staff'], tags: ['arcane'] }),
   ],
   morphs: [],
@@ -379,7 +384,10 @@ describe('class tree', () => {
     const p = cp(2);
     expect(canBuyNode(BLADEMASTER, p, 'nope')).toMatchObject({ ok: false });
     expect(canBuyNode(BLADEMASTER, p, 'n3')).toEqual({ ok: false, reason: 'Requires node n1 at rank 1.' });
-    expect(canBuyNode(BLADEMASTER, p, 'cap')).toEqual({ ok: false, reason: 'Spend 6 points in the blademaster tree first.' });
+    expect(canBuyNode(BLADEMASTER, p, 'cap')).toEqual({
+      ok: false,
+      reason: 'Spend 6 points in the blademaster tree first.',
+    });
     expect(buyNode(BLADEMASTER, p, 'n1')).toEqual({ ok: true });
     expect(buyNode(BLADEMASTER, p, 'n3')).toEqual({ ok: true });
     expect(p.spent).toEqual({ n1: 1, n3: 1 });

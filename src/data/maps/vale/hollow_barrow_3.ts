@@ -1,0 +1,100 @@
+import type { MapDef } from '../../../core/world/types';
+
+// Hollow Barrow III — the Still Hall, the barrow's rest floor: no dead walk here. The stair from the galleries opens
+// onto a round cobbled hall where a campfire burns beside the waystone. North, between two grave-wardens, the Regent's
+// vault door bears a black sun and a white moon; east, daylight falls down a shaft onto a mossy sun spring; south-west
+// an offering room keeps a forgotten chest; south, a guarded stair descends to the Regent's Hall.
+const map: MapDef = {
+  id: 'vale.hollow_barrow.3',
+  name: 'Hollow Barrow III',
+  kind: 'dungeon',
+  region: 'vale',
+  biome: 'crypt',
+  seed: 33497,
+  levelBand: null,
+  safety: 'pve',
+  worldCell: { x: 2, y: 4 },
+  landmark: 'The Still Hall: a campfire in a round cobbled hall, beneath a vault door sealed with a black sun and a white moon.',
+  flags: ['dark', 'indoor'],
+  layout: [
+    '       ######       ',
+    '       #xxxx#       ',
+    '       #xxxx#       ',
+    '       #TxxT#       ',
+    '       #xxxx#       ',
+    '     ###xxxx####### ',
+    '     #xxxxxxxx###m##',
+    '######xx++++xx##mmm#',
+    '#xxxxxx++++++xxxmmm#',
+    '#xxxxxx++++++xxxmmm#',
+    '#xxxxxx++++++xxxmmm#',
+    '######xx++++xx##mmm#',
+    '   ##xxxxxxxxx###m##',
+    '####xx##xxxx####### ',
+    '#xxxxx##TxxT#       ',
+    '#xxxx###xxxx#       ',
+    '#,xxx# #TxxT#       ',
+    '#x,xx# #xxxx#       ',
+    '#xxxx# #xxxx#       ',
+    '###### ######       ',
+  ],
+  portals: [
+    {
+      id: 'up',
+      tx: 2,
+      ty: 18,
+      w: 2,
+      h: 2,
+      facing: 'w',
+      kind: 'stairs',
+      to: { map: 'vale.hollow_barrow.2', portal: 'down' },
+      label: 'Up to Hollow Barrow II',
+    },
+    {
+      id: 'down',
+      tx: 19,
+      ty: 36,
+      w: 2,
+      h: 2,
+      facing: 's',
+      kind: 'stairs',
+      to: { map: 'vale.hollow_barrow.4', portal: 'up' },
+      label: "Down to the Regent's Hall",
+    },
+    {
+      id: 'vault',
+      tx: 19,
+      ty: 2,
+      w: 2,
+      h: 2,
+      facing: 'n',
+      kind: 'door',
+      to: { map: 'vale.barrow_vault', portal: 'door' },
+      label: 'The Sealed Vault',
+      gate: {
+        elements: ['shadow', 'holy'],
+        hint: 'A black sun and a white moon are carved into the seal. It yields only to one attuned to both shadow and holy light.',
+      },
+    },
+  ],
+  spawns: [],
+  nodes: [{ id: 'spring_shaft', kind: 'sun_spring', tx: 34, ty: 18 }],
+  objects: [
+    { id: 'waystone', kind: 'waystone', tx: 15, ty: 14 },
+    { id: 'campfire', kind: 'campfire', tx: 20, ty: 18 },
+    {
+      id: 'chest',
+      kind: 'chest',
+      tx: 4,
+      ty: 33,
+      loot: {
+        coins: 60,
+        items: { umbral_spore: 2 },
+        essences: { reprise: 1 },
+        hint: 'A brittle note in the offering bowl: "The Regent sealed his treasury with the night and with the dawn. Only one who carries both, shadow and holy light, may open it."',
+      },
+    },
+  ],
+};
+
+export default map;

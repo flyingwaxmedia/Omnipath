@@ -24,7 +24,17 @@ import {
 } from '../src/core/passives';
 import { Registry } from '../src/core/registry';
 import { emptyState, type SkillBookState, type SkillProgress } from '../src/core/state';
-import type { ClassDef, ClassTier, ElementDef, Family, GameData, MonsterDef, PassiveDef, PassiveEffect, SkillDef } from '../src/core/types';
+import type {
+  ClassDef,
+  ClassTier,
+  ElementDef,
+  Family,
+  GameData,
+  MonsterDef,
+  PassiveDef,
+  PassiveEffect,
+  SkillDef,
+} from '../src/core/types';
 
 // ------------------------------------------------------------------ inline fixture
 
@@ -54,7 +64,13 @@ const sk = (s: Pick<SkillDef, 'id' | 'tags'> & Partial<SkillDef>): SkillDef => (
   ...s,
 });
 
-const passive = (id: string, source: PassiveDef['source'], effect: PassiveEffect, maxRank = 3, tag?: string): PassiveDef => ({
+const passive = (
+  id: string,
+  source: PassiveDef['source'],
+  effect: PassiveEffect,
+  maxRank = 3,
+  tag?: string,
+): PassiveDef => ({
   id,
   name: id,
   icon: `i_${id}`,
@@ -86,7 +102,12 @@ const monster = (id: string, family: Family): MonsterDef => ({
 });
 
 /** A class with a templated tree + imprint (classTreeTemplate), returning its passives too. */
-function templated(id: string, tier: ClassTier, tag: string, extra: Partial<ClassDef> = {}): { cls: ClassDef; passives: PassiveDef[] } {
+function templated(
+  id: string,
+  tier: ClassTier,
+  tag: string,
+  extra: Partial<ClassDef> = {},
+): { cls: ClassDef; passives: PassiveDef[] } {
   const t = classTreeTemplate({ classId: id, className: id, tier, tag, stat: 'atk', icon: 'i' });
   return {
     cls: {
@@ -124,7 +145,12 @@ const DATA: GameData = {
     sk({ id: 'slash', tier: 0, tags: ['blade', 'melee', 'basic'] }),
     sk({ id: 'whirlwind', tags: ['blade', 'spin', 'melee'], shape: { kind: 'spin', radius: 60 } }),
     sk({ id: 'cleave', tags: ['blade', 'heavy', 'melee'] }),
-    sk({ id: 'orb', weapons: ['staff'], tags: ['arcane', 'projectile'], shape: { kind: 'projectile', speed: 300, range: 300 } }),
+    sk({
+      id: 'orb',
+      weapons: ['staff'],
+      tags: ['arcane', 'projectile'],
+      shape: { kind: 'projectile', speed: 300, range: 300 },
+    }),
     sk({ id: 'palm', weapons: undefined, tags: ['spirit', 'melee'] }),
     ...DRILLS,
   ],
@@ -241,7 +267,8 @@ describe('activePassives', () => {
   });
 
   it('includes learned passives clamped to maxRank and skips unknown or derived ids', () => {
-    const state = stateWith({}, { passives: { forgehand: 9, res_fire_wind: 1, ghost: 2, tag_blade: 5, cls_blademaster_1: 3, devotion: 0 } });
+    const passives = { forgehand: 9, res_fire_wind: 1, ghost: 2, tag_blade: 5, cls_blademaster_1: 3, devotion: 0 };
+    const state = stateWith({}, { passives });
     const learned = activePassives(reg, state);
     expect(learned.map((p) => [p.def.id, p.rank, p.source])).toEqual([
       ['forgehand', 3, 'learned'],
@@ -417,7 +444,16 @@ describe('aggregate and readers', () => {
     const state = stateWith(
       { palm: 10, slash: 5 },
       {
-        passives: { forgehand: 2, devotion: 1, patience: 2, still_mind: 3, echo_ear: 1, sprite_bane: 2, res_fire_wind: 1, res_any_burn: 1 },
+        passives: {
+          forgehand: 2,
+          devotion: 1,
+          patience: 2,
+          still_mind: 3,
+          echo_ear: 1,
+          sprite_bane: 2,
+          res_fire_wind: 1,
+          res_any_burn: 1,
+        },
         bestiary: { sprite_0: 100, sprite_1: 30 },
         classes: { blademaster: { rank: 3, xp: 0, spent: { n2: 1, n4: 2 } } },
         worn: 'blademaster',

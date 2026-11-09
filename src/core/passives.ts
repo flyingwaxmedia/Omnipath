@@ -55,7 +55,14 @@ export const IMPRINT_STRENGTH: Readonly<Record<ClassTier, number>> = { 1: 1, 2: 
  * kills (cap `familyCap`), and +`hpPct`% max HP per species at ≥ `hpKills` kills (cap `hpCap`).
  * Elites and wardens count as their own species.
  */
-export const BESTIARY_BONUS = { familyKills: 25, familyPct: 1, familyCap: 10, hpKills: 100, hpPct: 1, hpCap: 10 } as const;
+export const BESTIARY_BONUS = {
+  familyKills: 25,
+  familyPct: 1,
+  familyCap: 10,
+  hpKills: 100,
+  hpPct: 1,
+  hpCap: 10,
+} as const;
 
 /** Where an active passive comes from. */
 export type ActivePassiveSource = 'tag' | 'learned' | 'class' | 'imprint';
@@ -147,8 +154,6 @@ export function tagPassiveTotalFor(rank: number): number {
 
 // ------------------------------------------------------------------ active passives
 
-const clampRank = (rank: number, ...maxima: number[]): number => Math.min(rank, ...maxima);
-
 /**
  * Every passive in effect, in source order:
  * - tag: `tag_<tag>` defs present in the registry, ranked by tagPassiveRank(tagTotals);
@@ -165,13 +170,13 @@ export function activePassives(reg: Registry, state: Readonly<SkillBookState>): 
   for (const tag of TAG_PASSIVE_TAGS) {
     const def = reg.passive(tagPassiveId(tag));
     const rank = tagPassiveRank(totals[tag]);
-    if (def && rank > 0) out.push({ def, rank: clampRank(rank, def.maxRank), strength: 1, source: 'tag' });
+    if (def && rank > 0) out.push({ def, rank: Math.min(rank, def.maxRank), strength: 1, source: 'tag' });
   }
 
   for (const [id, rank] of Object.entries(state.passives)) {
     const def = reg.passive(id);
     if (!def || DERIVED_SOURCES.includes(def.source) || rank <= 0) continue;
-    out.push({ def, rank: clampRank(rank, def.maxRank), strength: 1, source: 'learned' });
+    out.push({ def, rank: Math.min(rank, def.maxRank), strength: 1, source: 'learned' });
   }
 
   const worn = wornClass(reg, state);
@@ -182,7 +187,7 @@ export function activePassives(reg: Registry, state: Readonly<SkillBookState>): 
       const bought = progress.spent[node.id] ?? 0;
       const def = reg.passive(node.ref);
       if (!def || bought <= 0) continue;
-      out.push({ def, rank: clampRank(bought, node.maxRank, def.maxRank), strength: 1, source: 'class' });
+      out.push({ def, rank: Math.min(bought, node.maxRank, def.maxRank), strength: 1, source: 'class' });
     }
   }
 
@@ -206,7 +211,10 @@ export function activePassives(reg: Registry, state: Readonly<SkillBookState>): 
  * Bestiary damage bonus per family: +1% per species of that family with ≥ 25 kills, capped at 10%.
  * Species unknown to the registry are ignored. Families with no qualifying species are absent.
  */
-export function bestiaryFamilyPct(reg: Registry, state: Pick<SkillBookState, 'bestiary'>): Partial<Record<Family, number>> {
+export function bestiaryFamilyPct(
+  reg: Registry,
+  state: Pick<SkillBookState, 'bestiary'>,
+): Partial<Record<Family, number>> {
   const out: Partial<Record<Family, number>> = {};
   for (const [species, kills] of Object.entries(state.bestiary)) {
     const monster = reg.monster(species);
@@ -258,7 +266,8 @@ function addEffect(t: PassiveTotals, effect: PassiveEffect, pct: number, fromTag
     case 'vsStatus': {
       const entry = t.vsStatus.find((s) => s.element === effect.element && s.status === effect.status);
       if (entry) entry.pct += pct;
-      else t.vsStatus.push(effect.element ? { element: effect.element, status: effect.status, pct } : { status: effect.status, pct });
+      else if (effect.element) t.vsStatus.push({ element: effect.element, status: effect.status, pct });
+      else t.vsStatus.push({ status: effect.status, pct });
       return;
     }
     case 'stat':
