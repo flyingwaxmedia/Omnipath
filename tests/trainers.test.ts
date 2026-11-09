@@ -222,7 +222,7 @@ describe('lessonsFor', () => {
 
 describe('lessonState', () => {
   it('a free-of-requirements lesson is available; affordability follows coins', () => {
-    expect(lessonState(reg, ctxOf(), 'hale_rising_kick')).toEqual({
+    expect(lessonState(reg, ctxOf(), 'hale_rising_kick')).toMatchObject({
       owned: false,
       available: true,
       affordable: false,
@@ -274,7 +274,7 @@ describe('lessonState', () => {
   it('a repeatable passive lesson stays open until the passive reaches max rank', () => {
     const id = 'hale_sure_footing';
     const taken = { lessons: ['hale_rising_kick', id], coins: 999, items: { herb: 99 } };
-    expect(lessonState(reg, ctxOf({ ...taken, passives: { sure_footing: 1 } }), id)).toEqual({
+    expect(lessonState(reg, ctxOf({ ...taken, passives: { sure_footing: 1 } }), id)).toMatchObject({
       owned: false,
       available: true,
       affordable: true,
@@ -292,7 +292,7 @@ describe('lessonState', () => {
 
   it('a repeatable essence purchase is never owned', () => {
     const p = ctxOf({ lessons: ['brann_heavy'], flags: { forge_success: 3 }, coins: 50, items: { ore: 2 } });
-    expect(lessonState(reg, p, 'brann_heavy')).toEqual({ owned: false, available: true, affordable: true, missing: [] });
+    expect(lessonState(reg, p, 'brann_heavy')).toMatchObject({ owned: false, available: true, affordable: true, missing: [] });
   });
 
   it('an element lesson is owned once the element is attuned', () => {
@@ -301,7 +301,7 @@ describe('lessonState', () => {
   });
 
   it('an unknown lesson can never be taken', () => {
-    expect(lessonState(reg, ctxOf({ coins: 999 }), 'nope')).toEqual({
+    expect(lessonState(reg, ctxOf({ coins: 999 }), 'nope')).toMatchObject({
       owned: false,
       available: false,
       affordable: false,

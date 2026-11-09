@@ -2,7 +2,10 @@
 // Omnipath Playwright smoke test (docs/CLIENT-v2.md §8).
 //
 //   npm run build && npx vite preview --port 4173 --strictPort &
-//   node scripts/playtest.mjs http://localhost:4173/ [--shots <dir>] [--quick]
+//   node scripts/playtest.mjs http://localhost:4173/ [--shots <dir>] [--quick] [--portals [--landscape]]
+//
+// --portals additionally walks EVERY portal pair by real taps (HUD-aware, phone portrait or --landscape), checking
+// arrivals and return portals (~25 min).
 //
 // Starts a new game, opens every panel (and tab), walks Hearthvale -> Greenmeadow through a real portal, fights,
 // reveals a hidden portal by casting, opens a Prism Gate, warps through every map via window.omnipath.debug, checks
@@ -94,7 +97,9 @@ try {
   await page.click('.wcard[data-w="sword"]');
   await page.click('.title-screen .go');
   await waitFor(async () => (await page.evaluate(() => !!window.omnipath?.debug)), 10000, 'game start');
-  await page.waitForTimeout(800);
+  // Mirelle's intro opens ~350 ms after the scene starts: wait for it so closeModal() cannot race it (flaky under load).
+  await waitFor(async () => (await info()).panel === 'dialog', 5000, 'intro dialog');
+  await page.waitForTimeout(200);
   await shot('01-intro');
   await closeModal();
   const st0 = await info();
@@ -204,6 +209,19 @@ try {
   if (islet2?.open) ok('dash reveals the hidden islet portal');
   else fail('islet not revealed by a dash cast');
   await shot('08-mirror-lake');
+  // Regression: the islet sits on the north border under the vitals panel; the HUD-safe camera bounds must let the
+  // player see and TAP it on a portrait phone (it was untappable before).
+  await dbg('place', islet.x, islet.y + 2 * 32);
+  await page.waitForTimeout(1200);
+  const isletTappable = await page.evaluate(([x, y]) => {
+    const s = window.omnipath.scene;
+    const cam = s.cameras.main;
+    const sx = (x - cam.worldView.x) * cam.zoom;
+    const sy = (y - cam.worldView.y) * cam.zoom;
+    return document.elementFromPoint(sx, sy) === s.game.canvas;
+  }, [islet.x, islet.y]);
+  if (isletTappable) ok('HUD-safe camera: the north-border islet is visible and tappable on a portrait phone');
+  else fail('islet portal is hidden under the HUD on a portrait phone');
 
   // ------------------------------------------------------------ Prism Gate: closed, then open with 3 elements
   await warp('vale.stormbreak_approach', 'west');
@@ -308,6 +326,64 @@ try {
   await closeModal();
   if ((await page.evaluate(() => window.omnipath.session.player.coins)) > coins0) ok('chest loot');
 
+  // ------------------------------------------------------------ regressions found in the v2 playtest pass
+  const sceneState = () =>
+    page.evaluate(() => {
+      const s = window.omnipath.scene;
+      return { paused: s.scene.isPaused(), open: window.omnipath.ui.isOpen, warping: s.warping, map: s.mapId };
+    });
+  // 1) A dialog opening during a warp's fade must not freeze the fade, and the next map must start paused under it.
+  for (let i = 0; i < 3; i++) {
+    await page.evaluate((k) => {
+      window.omnipath.debug.warp(k % 2 ? 'vale.hearthvale' : 'vale.greenmeadow');
+      setTimeout(() => window.omnipath.ui.dialog('Test', '🧪', 'A dialog opened mid-warp.', [{ label: 'OK' }]), 40 + 40 * k);
+    }, i);
+    await page.waitForTimeout(900);
+    const st = await sceneState();
+    if (st.warping) fail(`warp ${i}: stuck mid-fade with a dialog open`);
+    if (st.open && !st.paused) fail(`warp ${i}: the new map runs behind an open dialog`);
+    await closeModal();
+  }
+  ok('warps complete when a dialog opens mid-fade; the next map pauses under it');
+  // 2) A channel must not complete while a panel pauses the world (scene time jumps across pauses).
+  await warp('vale.greystone_quarry');
+  const ore0 = await flag('ore_mined');
+  const started = await approach("v.kind === 'node' && v.def.kind === 'ore' && v.ready");
+  if (started) {
+    await waitFor(() => page.evaluate(() => !!window.omnipath.scene.interactions.channel), 4000, 'mining channel starts');
+    await page.evaluate(() => window.omnipath.ui.open('codex'));
+    await page.waitForTimeout(2000);
+    await page.evaluate(() => window.omnipath.ui.close());
+    await page.waitForTimeout(100);
+    if ((await flag('ore_mined')) > ore0) fail('a mining channel completed while a panel was open');
+    else if (await waitFor(async () => (await flag('ore_mined')) > ore0, 4000, 'mining completes after the panel')) ok('channels pause with the world');
+  }
+  // 3) Discovery cards wait for the fight to end (a Class Rank card popped up mid-warden-fight).
+  await page.evaluate(() => {
+    const s = window.omnipath.scene;
+    s.combat.lastHurt = s.time.now;
+    window.omnipath.ui.discovery({ icon: '🧪', kicker: 'TEST CARD', title: 'Held mid-fight', body: 'Shown after the fight.' });
+  });
+  await page.waitForTimeout(300);
+  const heldOpen = (await info()).open;
+  await waitFor(async () => (await info()).open, 9000, 'held card shows after the fight');
+  if (!heldOpen) ok('discovery cards are held while fighting and shown after');
+  else fail('a discovery card interrupted combat');
+  await closeModal();
+  // 4) Zone banner and map-entry toasts must not overlap (portrait here; landscape in the layout pass).
+  const bannerToast = async () => {
+    await page.evaluate(() => window.omnipath.ui.toast('You awaken at the Windcrest Hill waystone.'));
+    await page.evaluate(() => window.omnipath.ui.banner('Stormbreak Approach', 'Lv 8–10'));
+    await page.waitForTimeout(700);
+    return page.evaluate(() => {
+      const b = document.querySelector('.zone-banner b')?.getBoundingClientRect();
+      const ts = [...document.querySelectorAll('.toast')].map((t) => t.getBoundingClientRect());
+      return !!b && ts.some((t) => t.bottom > b.top && t.top < b.bottom && t.right > b.left && t.left < b.right);
+    });
+  };
+  if (await bannerToast()) fail('portrait: a toast covers the zone banner');
+  else ok('zone banner clear of toasts (portrait)');
+
   // Death -> respawn at the save point (50% HP).
   await warp('vale.greenmeadow');
   await page.evaluate(() => {
@@ -383,6 +459,7 @@ try {
     await page.setViewportSize({ width: w, height: h });
     await page.waitForTimeout(400);
     await shot(`13-${name}`);
+    if (await bannerToast()) fail(`${name}: a toast covers the zone banner`);
     // Every visible HUD and panel button must be a >= 44 px touch target.
     const smallButtons = () =>
       page.evaluate(() =>
@@ -452,6 +529,143 @@ try {
   await ctx2.close();
 } catch (e) {
   fail(`exception: ${e?.stack ?? e}`);
+}
+
+// ------------------------------------------------------------ --portals: walk every portal pair by tapping
+// Like a player: only taps canvas pixels no HUD element covers (and no monster stands on), following the real path,
+// then checks the destination map, the arrival tile and the return portal. Slow (~25 min at phone size).
+if (args.includes('--portals')) {
+  const size = args.includes('--landscape') ? { width: 844, height: 390 } : { width: 390, height: 844 };
+  const ctx3 = await browser.newContext({ viewport: size, deviceScaleFactor: 1, hasTouch: true, isMobile: true });
+  const p3 = await ctx3.newPage();
+  p3.on('pageerror', (e) => fail(`page error (portals): ${e.message}`));
+  const inf = () => p3.evaluate(() => window.omnipath.debug.info());
+  const settle = async () => {
+    for (let i = 0; i < 30 && (await p3.evaluate(() => !!window.omnipath.scene?.warping)); i++) await p3.waitForTimeout(100);
+  };
+  const close3 = async () => {
+    for (let i = 0; i < 8 && (await inf()).open; i++) {
+      await p3.evaluate(() => window.omnipath.ui.close());
+      await p3.waitForTimeout(120);
+    }
+  };
+  /** Page point to tap toward a portal rect: inside it if visible, else the farthest visible point of the path. */
+  const tapPoint = (rect, jitter) =>
+    p3.evaluate(
+      ([rc, j]) => {
+        const s = window.omnipath.scene;
+        const cam = s.cameras.main;
+        const T = 32;
+        const conv = (x, y) => ({ x: (x - cam.worldView.x) * cam.zoom, y: (y - cam.worldView.y) * cam.zoom });
+        const free = (x, y) => {
+          const p = conv(x, y);
+          if (p.x < 1 || p.y < 1 || p.x > innerWidth - 1 || p.y > innerHeight - 1) return null;
+          if (document.elementFromPoint(p.x, p.y) !== s.game.canvas) return null;
+          if (s.combat.monsters.some((m) => m.alive && Math.hypot(m.x - x, m.y - m.radius - y) < m.radius + 24)) return null;
+          return { x: Math.round(p.x), y: Math.round(p.y) };
+        };
+        if (!j)
+          for (const fy of [0.5, 0.25, 0.75])
+            for (const fx of [0.5, 0.25, 0.75]) {
+              const q = free((rc.tx + rc.w * fx) * T, (rc.ty + rc.h * fy) * T);
+              if (q) return q;
+            }
+        const pl = s.player;
+        const path = [{ x: pl.x, y: pl.y }, ...(s.pathTo((rc.tx + rc.w / 2) * T, (rc.ty + rc.h / 2) * T) ?? [])];
+        for (let i = path.length - 1; i >= 1; i--) {
+          const a = path[i - 1];
+          const b = path[i];
+          const L = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+          const n = Math.max(1, Math.ceil(L / 16));
+          for (let k = n; k >= 0; k--) {
+            const x = a.x + ((b.x - a.x) * k) / n + (-(b.y - a.y) / L) * j;
+            const y = a.y + ((b.y - a.y) * k) / n + ((b.x - a.x) / L) * j;
+            if (Math.hypot(x - pl.x, y - pl.y) < 20) continue;
+            const q = free(x, y);
+            if (q) return q;
+          }
+        }
+        return null;
+      },
+      [rect, jitter],
+    );
+  try {
+    await p3.goto(base);
+    await p3.waitForSelector('.title-screen .new', { timeout: 20000 });
+    await p3.click('.title-screen .new');
+    await p3.click('.title-screen .go');
+    await p3.waitForFunction(() => !!window.omnipath?.debug, null, { timeout: 15000 });
+    await p3.waitForTimeout(800);
+    await close3();
+    await p3.evaluate(() => {
+      const d = window.omnipath.debug;
+      d.setLevel(40);
+      for (const e of ['fire', 'water', 'earth', 'wind', 'shadow', 'holy']) d.element(e);
+      window.omnipath.session.book.incFlag('warden_thunderhoof');
+    });
+    await close3();
+    let walked = 0;
+    for (const mapId of ALL_MAPS) {
+      const ports = await p3.evaluate(async (m) => {
+        window.omnipath.debug.warp(m);
+        await new Promise((r) => setTimeout(r, 900));
+        return window.omnipath.scene.portals.map((v) => ({ id: v.def.id, to: v.def.to, rect: { tx: v.def.tx, ty: v.def.ty, w: v.def.w, h: v.def.h } }));
+      }, mapId);
+      for (const pt of ports) {
+        await p3.evaluate(([m, id]) => {
+          const w = window.omnipath.session.world;
+          if (!w.revealed.includes(`${m}#${id}`)) w.revealed.push(`${m}#${id}`);
+          window.omnipath.debug.warp(m);
+        }, [mapId, pt.id]);
+        await p3.waitForTimeout(900);
+        await close3();
+        await p3.evaluate(() => window.omnipath.debug.heal());
+        let jitter = 0;
+        let still = 0;
+        let last = null;
+        const until = Date.now() + 45000;
+        while (Date.now() < until) {
+          await settle();
+          if ((await inf()).map !== mapId) break;
+          if ((await inf()).open) {
+            jitter = jitter ? -jitter * 1.5 : 48; // tapped a sign / NPC on the way: aim beside it
+            await close3();
+            continue;
+          }
+          const q = await tapPoint(pt.rect, jitter);
+          if (!q) break;
+          await p3.touchscreen.tap(q.x, q.y);
+          await p3.waitForTimeout(500);
+          for (let i = 0; i < 40 && (await p3.evaluate(() => window.omnipath.scene.player.path.length)); i++) await p3.waitForTimeout(150);
+          const now = await inf();
+          still = last && Math.hypot(now.x - last.x, now.y - last.y) < 4 ? still + 1 : 0;
+          last = now;
+          if (still >= 2) jitter = jitter ? -jitter * 1.5 : 48;
+          if (still >= 6) break;
+        }
+        await settle();
+        await p3.waitForTimeout(400);
+        const arr = await p3.evaluate((to) => {
+          const s = window.omnipath.scene;
+          const a = s.cm.arrivals?.[to.portal] ?? null;
+          const tx = Math.floor(s.player.x / 32);
+          const ty = Math.floor(s.player.y / 32);
+          const back = s.portals.find((v) => v.def.id === to.portal)?.def.to;
+          return { map: s.mapId, a, px: s.player.x, py: s.player.y, coll: s.cm.coll[ty * s.cm.w + tx], back };
+        }, pt.to);
+        const label = `${mapId}#${pt.id} -> ${pt.to.map}#${pt.to.portal}`;
+        if (arr.map !== pt.to.map) fail(`${label}: could not walk in by tapping (still in ${arr.map})`);
+        else if (arr.a && Math.hypot(arr.a.x - arr.px, arr.a.y - arr.py) > 64) fail(`${label}: arrived away from the arrival point`);
+        else if (arr.coll & 5) fail(`${label}: arrived on a blocked/portal tile`);
+        else if (!arr.back || arr.back.map !== mapId || arr.back.portal !== pt.id) fail(`${label}: return portal mismatch`);
+        else walked++;
+      }
+    }
+    ok(`walked ${walked} portals by tapping (${size.width}x${size.height})`);
+  } catch (e) {
+    fail(`portals: exception ${e?.stack ?? e}`);
+  }
+  await ctx3.close();
 }
 
 await browser.close();

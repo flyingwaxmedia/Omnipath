@@ -41,8 +41,11 @@ import {
   abandonQuest as abandonQuestFor,
   acceptQuest as acceptQuestFor,
   advanceQuests,
+  creditLessonQuests,
   objectiveProgress,
+  objectivesDone,
   questList,
+  questMarker as questMarkerFor,
   questStatus as questStatusFor,
   questsFor,
   questTurnIn,
@@ -51,6 +54,7 @@ import {
   type ObjectiveProgress,
   type QuestContext,
   type QuestEvent,
+  type QuestMarker,
   type QuestNames,
   type QuestStatus,
   type QuestView,
@@ -68,7 +72,7 @@ import {
   type SparkWindow,
 } from './spark';
 import { emptyQuestState, emptyState, type QuestState, type SkillBookState, type SkillProgress } from './state';
-import { lessonState as lessonStateFor, type LessonState, type TrainerContext } from './trainers';
+import { lessonOwned as lessonOwnedFor, lessonState as lessonStateFor, type LessonState, type TrainerContext } from './trainers';
 import {
   PRIMAL_ELEMENTS,
   type ClassDef,
@@ -91,7 +95,7 @@ import {
 } from './types';
 
 export type { SkillBookState, SkillProgress } from './state';
-export type { ObjectiveProgress, QuestEvent, QuestNames, QuestStatus, QuestView } from './quests';
+export type { ObjectiveProgress, QuestEvent, QuestMarker, QuestNames, QuestStatus, QuestView } from './quests';
 
 // ------------------------------------------------------------------ inventory
 
@@ -240,14 +244,21 @@ export interface QuestGameRewards {
 }
 
 /**
- * Result of SkillBook.turnInQuest. On success `rewards` is the quest's full payload (its book-side
- * rewards are already applied) and `gameRewards` what the game must still add; on failure both are empty.
+ * Result of SkillBook.turnInQuest. On success `rewards` is the quest's reward payload (its book-side
+ * rewards are already applied; a lesson the player already owned is left out) and `gameRewards` what the
+ * game must still add; on failure both are empty.
  */
 export interface QuestTurnInResult {
   ok: boolean;
   message: string;
   rewards: QuestReward;
   gameRewards: QuestGameRewards;
+  /**
+   * Set when an event listener threw while the turn-in applied its rewards or announced them. The
+   * turn-in still completed (every reward step ran, 'questCompleted' was emitted, `gameRewards` must be
+   * applied); the caller should log or rethrow this after applying them.
+   */
+  listenerError?: unknown;
 }
 
 /** A tracked quest for the Pursuits tracker: status plus objective progress. */
@@ -502,8 +513,6 @@ export class SkillBook {
   level = 1;
   /** Game clock in ms (learn timestamps, sparkWindow). Set by the game layer; core never reads wall time. */
   now: () => number = () => 0;
-  /** The game's bag (item requirements, lesson costs, quest deliveries). Defaults to an empty inventory. */
-  inv: Inventory = EMPTY_INVENTORY;
   /** NPC and map display names for quest texts ('Speak with Fisher Pell'); ids are prettified without them. */
   names: QuestNames = {};
 
@@ -525,6 +534,9 @@ export class SkillBook {
    * objectives (state, deliver) that flip announce questProgress / questReady. Filled on first sight.
    */
   private readonly questSeen = new Map<string, string>();
+  /** Flag ids that quest `state` objectives read (`flag` ids and `visited:<map>`), built on first use. */
+  private questFlagIds?: ReadonlySet<string>;
+  private invStore: Inventory = EMPTY_INVENTORY;
 
   /**
    * @param state Any saved book (v2, or v1 — migrated by migrateBookState with this registry). It is
@@ -539,6 +551,21 @@ export class SkillBook {
     this.pendingDiscovery = true;
     this.ctx = this.makeContext();
     for (const p of this.passives()) if (p.source === 'tag') this.tagRanks.set(p.def.id, p.rank);
+    this.primeQuests();
+  }
+
+  /**
+   * The game's bag (item requirements, lesson costs, quest deliveries). Defaults to an empty inventory.
+   * Assigning it re-reads, silently, which quest objectives are met with that bag, so the first change
+   * after a load (the last herb picked up) still announces 'questProgress' / 'questReady'.
+   */
+  get inv(): Inventory {
+    return this.invStore;
+  }
+
+  set inv(inv: Inventory) {
+    this.invStore = inv;
+    this.primeQuests();
   }
 
   // ---------------------------------------------------------------- queries
@@ -658,13 +685,14 @@ export class SkillBook {
   /**
    * Adds `n` to a flag (world progress: `visited:<mapId>`, `ore_mined`, relic flags…) and returns the
    * new value. Runs class discovery when some class requirement reads this flag, and on the first
-   * call after construction (catch-up for a loaded save); other flags (kills, talks…) skip it.
+   * call after construction (catch-up for a loaded save); other flags (kills, talks…) skip it, and
+   * re-check active quests only when some quest `state` objective reads the flag.
    */
   incFlag(id: string, n = 1): number {
     const value = this.flag(id) + n;
     this.state.flags[id] = value;
     if (this.pendingDiscovery || this.flagsReadByClasses().has(id)) this.evaluateClasses();
-    else this.syncQuests();
+    else if (this.flagsReadByQuests().has(id)) this.syncQuests();
     return value;
   }
 
@@ -1022,8 +1050,10 @@ export class SkillBook {
   /**
    * Takes a lesson: it must be unowned, available and affordable; the cost is paid through `inv`,
    * then the grant applied (skill / passive rank / essences / element, source `lesson:<id>`), the
-   * lesson recorded and 'lesson' emitted. A skill grant also whispers a related class. A `questOnly`
-   * lesson is refused with 'Learned through <quest name>': it is taught only as a quest reward.
+   * lesson recorded and 'lesson' emitted. A skill grant also whispers a related class. The
+   * non-repeatable quest teaching the lesson counts as completed (quests.creditLessonQuests), so its
+   * follow-ups open. A `questOnly` lesson is refused with 'Learned through <quest name>': it is taught
+   * only as a quest reward.
    */
   takeLesson(lessonId: string): BookOutcome {
     const entry = this.reg.lesson(lessonId);
@@ -1041,6 +1071,7 @@ export class SkillBook {
       return { ok: false, message: `You cannot afford ${lesson.name}.` };
     }
     this.teachLesson(entry);
+    creditLessonQuests(this.reg, this.state, [lesson.id]);
     this.evaluateClasses();
     return { ok: true, message: `Learned ${lesson.name}.` };
   }
@@ -1058,6 +1089,14 @@ export class SkillBook {
       : questsFor(this.reg, this.state, this.ctx, npcId);
   }
 
+  /**
+   * Marker over NPC `npcId`'s head (quests.questMarker): '?' a ready quest can be turned in here, '!' it
+   * offers an available quest, '…' a quest it gives or takes is in progress, null otherwise.
+   */
+  questMarker(npcId: string): QuestMarker | null {
+    return questMarkerFor(this.reg, this.state, this.ctx, npcId);
+  }
+
   /** Status of a quest (quests.questStatus; unknown ids are 'locked'). */
   questStatus(id: string): QuestStatus {
     return questStatusFor(this.reg, this.state, this.ctx, id);
@@ -1069,11 +1108,13 @@ export class SkillBook {
   }
 
   /**
-   * Accepts an available quest (counters from 0, `acceptedAt` = now(), tracked newest first). Emits
-   * 'questAccepted', and 'questReady' at once when every objective is already met (deliver / state).
+   * Accepts an available quest (counters from 0, `acceptedAt` = now(), tracked newest first). With
+   * `npc` (the NPC the player is talking to), the quest must be that NPC's to give — an authoritative
+   * server should always pass it. Emits 'questAccepted', and 'questReady' at once when every objective
+   * is already met (deliver / state, or a witness objective for an echo already known).
    */
-  acceptQuest(id: string): BookOutcome {
-    const res = acceptQuestFor(this.reg, this.state, this.ctx, id);
+  acceptQuest(id: string, npc?: string): BookOutcome {
+    const res = acceptQuestFor(this.reg, this.state, this.ctx, id, npc);
     const quest = this.reg.quest(id);
     if (!res.ok || !quest) return res;
     this.questSeen.delete(id);
@@ -1091,12 +1132,16 @@ export class SkillBook {
 
   /**
    * Turns in a ready quest (quests.turnInQuest: objectives checked, delivered items spent through `inv`,
-   * completion recorded, repeatable cooldown started on now()). With `npc`, it must be the quest's turn-in
-   * NPC. The book then applies its rewards — the lesson's grant exactly as takeLesson would (recorded
-   * in `state.lessons`, 'lesson' emitted), skill, passive rank, element and essences (source
-   * `quest:<id>`), class whisper and flag (to ≥ 1) — and emits 'questCompleted'. Coins, items and exp
-   * come back in `gameRewards` for the game to add. Talking to the turn-in NPC also counts as a 'talk'
-   * for other active quests.
+   * completion recorded, repeatable cooldown started on now()). With `npc` (the NPC the player is
+   * talking to), it must be the quest's turn-in NPC — an authoritative server should always pass it. The
+   * book then applies its rewards — the lesson's grant exactly as takeLesson would (recorded in
+   * `state.lessons`, 'lesson' emitted; a lesson the player already owns teaches nothing, emits nothing
+   * and is left out of `rewards`), skill, passive rank, element and essences (source `quest:<id>`),
+   * class whisper and flag (to ≥ 1) — and emits 'questCompleted'. Coins, items and exp come back in
+   * `gameRewards` for the game to add. With `npc`, handing the quest in also counts as a 'talk' with
+   * that NPC for other active quests. A listener that throws does not cut the turn-in short: every
+   * reward step still runs, 'questCompleted' is still emitted, and the first error is returned in
+   * `listenerError`.
    */
   turnInQuest(id: string, npc?: string): QuestTurnInResult {
     const res = turnInQuestFor(this.reg, this.state, this.ctx, id, npc);
@@ -1106,23 +1151,37 @@ export class SkillBook {
     }
     this.questSeen.delete(id);
     const rewards = res.rewards;
-    this.applyQuestRewards(quest, rewards);
     const gameRewards: QuestGameRewards = {
       coins: rewards.coins ?? 0,
       items: { ...(rewards.items ?? {}) },
       exp: rewards.exp ?? 0,
     };
     const count = own(this.questState().done, id) ?? 1;
-    this.events.emit('questCompleted', { quest, rewards, gameRewards, count });
-    this.notifyQuest({ type: 'talk', npc: questTurnIn(quest) });
-    return { ok: true, message: res.message, rewards, gameRewards };
+    // The completion is already committed (items spent, done +1): a throwing UI listener must not
+    // lose the rest of it, so each step is guarded and the first error is handed back.
+    let failure: { error: unknown } | undefined;
+    const guard = (step: () => void): void => {
+      try {
+        step();
+      } catch (error) {
+        failure ??= { error };
+      }
+    };
+    this.applyQuestRewards(quest, rewards, guard);
+    guard(() => this.events.emit('questCompleted', { quest, rewards, gameRewards, count }));
+    if (npc !== undefined) guard(() => this.notifyQuest({ type: 'talk', npc }));
+    const out: QuestTurnInResult = { ok: true, message: res.message, rewards, gameRewards };
+    if (failure) out.listenerError = failure.error;
+    return out;
   }
 
   /**
    * Reports something the player did to every active quest (quests.QuestEvent: kill, gather, visit,
    * talk, use, cast, witness). The game calls it alongside the matching book call (recordKill,
    * recordUse, witness…) — the book never counts those on its own. Emits 'questProgress' for each quest
-   * whose counters moved and 'questReady' for each that became ready; returns the ready ids.
+   * whose counters moved and 'questReady' for each that became ready; returns the ready ids. It then
+   * re-checks the other active quests' live objectives on the cheap done-ness path (a bag that changed
+   * with the event, e.g. a gather); the game still calls refreshQuests after other bag changes.
    */
   notifyQuest(event: QuestEvent): string[] {
     const res = advanceQuests(this.reg, this.state, event, this.ctx);
@@ -1401,6 +1460,7 @@ export class SkillBook {
       spendItems: (items) => book.inv.spend({ items }),
       npcName: (id) => book.names.npc?.(id),
       mapName: (id) => book.names.map?.(id),
+      lessonOwned: (id) => lessonOwnedFor(book.reg, ctx, id),
     };
     return ctx;
   }
@@ -1422,6 +1482,22 @@ export class SkillBook {
       this.classFlagIds = ids;
     }
     return this.classFlagIds;
+  }
+
+  /** Flag ids read by some quest `state` objective: `flag` ids and `visited:<map>` for `mapVisited`. */
+  private flagsReadByQuests(): ReadonlySet<string> {
+    if (!this.questFlagIds) {
+      const ids = new Set<string>();
+      for (const quest of this.reg.quests.values()) {
+        for (const o of quest.objectives) {
+          if (o.kind !== 'state') continue;
+          if (o.requires.type === 'flag') ids.add(o.requires.id);
+          else if (o.requires.type === 'mapVisited') ids.add(VISITED_FLAG_PREFIX + o.requires.id);
+        }
+      }
+      this.questFlagIds = ids;
+    }
+    return this.questFlagIds;
   }
 
   private discovered(classId: string): boolean {
@@ -1498,18 +1574,27 @@ export class SkillBook {
     return (this.state.quests ??= emptyQuestState());
   }
 
-  /** Applies a turned-in quest's book-side rewards, then runs discovery once. */
-  private applyQuestRewards(quest: QuestDef, r: QuestReward): void {
+  /**
+   * Applies a turned-in quest's book-side rewards (`r`, the turn-in payload), then runs discovery once.
+   * Every step runs through `step` (turnInQuest guards each, so a throwing listener cannot skip the
+   * rest). A lesson the payload left out because the player already owned it is still recorded as taken
+   * (non-repeatable lessons), without a grant or a 'lesson' event.
+   */
+  private applyQuestRewards(quest: QuestDef, r: QuestReward, step: (fn: () => void) => void = (fn) => fn()): void {
     const source = `quest:${quest.id}`;
     const lesson = r.lesson !== undefined ? this.reg.lesson(r.lesson) : undefined;
-    if (lesson) this.teachLesson(lesson);
-    if (r.skill !== undefined && this.reg.skill(r.skill)) this.learn(r.skill, source);
-    if (r.passive !== undefined && this.reg.passive(r.passive)) this.learnPassive(r.passive, source);
-    if (r.element !== undefined && this.reg.element(r.element)) this.learnElement(r.element, source);
-    for (const [id, n] of Object.entries(r.essences ?? {})) if (this.reg.essence(id)) this.addEssence(id, n, source);
-    if (r.whisper !== undefined) this.whisperClass(r.whisper, 'trainer');
+    if (lesson) step(() => this.teachLesson(lesson));
+    const owned = r.lesson === undefined && quest.rewards.lesson !== undefined ? this.reg.lesson(quest.rewards.lesson) : undefined;
+    if (owned && !owned.lesson.repeatable) this.remember(this.state.lessons, owned.lesson.id);
+    if (r.skill !== undefined && this.reg.skill(r.skill)) step(() => this.learn(r.skill!, source));
+    if (r.passive !== undefined && this.reg.passive(r.passive)) step(() => this.learnPassive(r.passive!, source));
+    if (r.element !== undefined && this.reg.element(r.element)) step(() => this.learnElement(r.element!, source));
+    for (const [id, n] of Object.entries(r.essences ?? {})) {
+      if (this.reg.essence(id)) step(() => this.addEssence(id, n, source));
+    }
+    if (r.whisper !== undefined) step(() => this.whisperClass(r.whisper!, 'trainer'));
     if (r.flag !== undefined) this.state.flags[r.flag] = Math.max(1, this.flag(r.flag));
-    this.evaluateClasses();
+    step(() => this.evaluateClasses());
   }
 
   /**
@@ -1524,16 +1609,33 @@ export class SkillBook {
     for (const id of Object.keys(active)) {
       const quest = this.reg.quest(id);
       if (!quest) continue;
-      const progress = this.questProgress(id);
-      const key = doneKey(progress);
+      const key = this.doneKeyOf(id);
       const prev = this.questSeen.get(id);
       if (prev === key) continue;
       this.questSeen.set(id, key);
       const ready = !key.includes('0');
-      if (prev !== undefined) this.events.emit('questProgress', { quest, progress });
+      if (prev !== undefined) this.events.emit('questProgress', { quest, progress: this.questProgress(id) });
       if (ready && (prev !== undefined || id === fresh)) this.events.emit('questReady', { quest, turnIn: questTurnIn(quest) });
     }
     for (const id of [...this.questSeen.keys()]) if (!Object.hasOwn(active, id)) this.questSeen.delete(id);
+  }
+
+  /** Done-ness key of an active quest's objectives, without building any text (see doneKey). */
+  private doneKeyOf(id: string): string {
+    return objectivesDone(this.reg, this.state, this.ctx, id)
+      .map((d) => (d ? '1' : '0'))
+      .join('');
+  }
+
+  /**
+   * Records, without emitting, which objectives of every active quest are met now (construction and
+   * each `inv` assignment), so the next change is announced even when it is the first since a load.
+   */
+  private primeQuests(): void {
+    this.questSeen.clear();
+    for (const id of Object.keys(this.state.quests?.active ?? {})) {
+      if (this.reg.quest(id)) this.questSeen.set(id, this.doneKeyOf(id));
+    }
   }
 
   private grantLesson(lesson: LessonDef): void {

@@ -402,6 +402,12 @@
     top: calc(140px + var(--safe-t));
   }
 
+  /* Toasts start at 196 px here (see below): keep the zone name under the first two so map-entry toasts ("You
+     awaken at…", "Heading for…") no longer cover it (playtest). */
+  .zone-banner {
+    top: calc(282px + var(--safe-t));
+  }
+
   .hud .vitals {
     width: 172px;
   }
@@ -600,8 +606,11 @@
     top: calc(60px + var(--safe-t));
   }
 
+  /* Landscape phones: the top strip belongs to vitals, menu row, minimap and toasts — show the zone name as a
+     lower third above the hotbar instead (playtest: it collided with map-entry toasts and hid under the vitals). */
   .zone-banner {
-    top: 16%;
+    top: auto;
+    bottom: calc(92px + var(--safe-b));
   }
 }
 

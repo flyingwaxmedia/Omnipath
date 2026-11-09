@@ -15,6 +15,7 @@ import { NPCS } from '../src/data/npcs';
 import { QUESTS } from '../src/data/quests';
 import { WEAPONS } from '../src/data/weapons';
 import { MAPS } from '../src/data/world';
+import { FUSED_ELEMENT_RECIPES } from '../src/data/recipes/elements';
 
 const reg = createRegistry();
 const QUEST_BY_ID = new Map(QUESTS.map((q) => [q.id, q]));
@@ -212,6 +213,11 @@ describe('quest coverage', () => {
       if (q.rewards.lesson !== undefined && !reg.lesson(q.rewards.lesson)) problems.push(`${q.id}: unknown lesson ${q.rewards.lesson}`);
     }
     expect(problems).toEqual([]);
+  });
+
+  it('lesson blurbs describe what a lesson teaches, never its price (lessons are quest rewards)', () => {
+    const priced = GAME_DATA.trainers.flatMap((t) => t.lessons).filter((l) => /purchase|traded?\b|barter|coin|bring /i.test(l.blurb));
+    expect(priced.map((l) => l.id)).toEqual([]);
   });
 
   it('repeatable lessons (essence trades, passive ranks) are repeatable bounties; one-off lessons are one-off quests', () => {
@@ -420,6 +426,31 @@ describe('quest chains', () => {
     expect(missing).toEqual([]);
   });
 
+  it('Riftmarch pacing: Korrin opens one trade at a time and the far roads wait for the level they ask', () => {
+    const korrinStarts = QUESTS.filter((q) => q.giver === 'korrin' && (q.after ?? []).length === 0).map((q) => q.id);
+    expect(korrinStarts).toEqual(['korrin_split_grain']);
+    const minLevel = (id: string): number =>
+      Math.max(0, ...(QUEST_BY_ID.get(id)!.requires ?? []).flatMap((r) => (r.type === 'level' ? [r.min] : [])));
+    // Gated at (or within two levels of) the bottom of the band of the hardest map they send the player to.
+    expect(minLevel('korrin_far_roads')).toBeGreaterThanOrEqual(14);
+    expect(minLevel('korrin_walk_the_roads')).toBeGreaterThanOrEqual(15);
+    expect(minLevel('dask_dusk_bloom')).toBeGreaterThanOrEqual(18);
+    expect(QUEST_BY_ID.get('dask_dusk_bloom')!.after).toContain('dask_lovely_handwriting');
+  });
+
+  it('every Tier I class with a single-parent Tier II child (not hidden) has a Tamsin quest whispering it', () => {
+    const missing: string[] = [];
+    for (const child of reg.classes) {
+      if (child.tier !== 2 || child.hidden || (child.parents ?? []).length !== 1) continue;
+      const parent = child.parents![0].id;
+      const quest = QUESTS.find(
+        (q) => q.giver === 'tamsin' && q.rewards.whisper === child.id && (q.requires ?? []).some((r) => r.type === 'class' && r.id === parent),
+      );
+      if (!quest) missing.push(`${parent} -> ${child.id}`);
+    }
+    expect(missing).toEqual([]);
+  });
+
   it("follow-up quests come from the same NPC's chain, or from a waykeeper handing over to another stone", () => {
     const bad: string[] = [];
     for (const q of QUESTS) {
@@ -454,10 +485,27 @@ describe('quest writing', () => {
     expect(bad).toEqual([]);
   });
 
-  it('uses original names only', () => {
-    const banned = /\b(ragnarok|kafra|zeny|prontera|poring|mvp|glimmer|blue magic)\b/i;
+  it('uses original names only (quests, and the monster / class / item names they show)', () => {
+    const banned = /\b(ragnarok|kafra|zeny|prontera|poring|mvp|glimmer|blue magic|rimefang|stormreaver)\b/i;
     const hits = QUESTS.filter((q) => banned.test([q.name, q.summary, q.chain ?? '', ...Object.values(q.dialog)].join(' '))).map((q) => q.id);
     expect(hits).toEqual([]);
+    const names = [...reg.monsters.values(), ...reg.classes, ...reg.items.values()].map((d) => d.name);
+    expect(names.filter((n) => banned.test(n))).toEqual([]);
+  });
+
+  it('never spells out a fusion pair: no beat names both elements of a fused-element recipe beside an altar', () => {
+    const elementName = (ref: string): string => reg.element(ref.slice('el:'.length) as never)!.name.toLowerCase();
+    const bad: string[] = [];
+    for (const q of QUESTS) {
+      for (const text of [q.summary, ...Object.values(q.dialog)]) {
+        const t = text.toLowerCase();
+        if (!/altar|fus/.test(t)) continue;
+        for (const r of FUSED_ELEMENT_RECIPES) {
+          if (t.includes(elementName(r.a)) && t.includes(elementName(r.b))) bad.push(`${q.id}: ${r.a} + ${r.b}`);
+        }
+      }
+    }
+    expect(bad).toEqual([]);
   });
 
   it('rewards stay in scale: bounded coins and exp, bounties pay less than story quests', () => {
@@ -467,8 +515,24 @@ describe('quest writing', () => {
       const exp = q.rewards.exp ?? 0;
       if (coins > 500 || exp > 600) bad.push(`${q.id}: ${coins} coins / ${exp} exp`);
       if (q.repeatable && coins > 150) bad.push(`${q.id}: bounty pays ${coins} coins`);
+      // A lesson is the prize (trainer lessons once cost coins): little or no coin on top of it.
+      if (q.rewards.lesson !== undefined && coins > (q.repeatable ? 0 : 10)) bad.push(`${q.id}: lesson quest pays ${coins} coins`);
+      // Korrin pays in essence, never in coin (his dialog says so).
+      if (q.giver === 'korrin' && coins > 0) bad.push(`${q.id}: Korrin pays ${coins} coins`);
     }
     expect(bad).toEqual([]);
+  });
+
+  it('Hearth Vale story quests leave a good share of the levelling to fighting (< 60% of the exp to level 12)', () => {
+    // Player level curve (src/game/session.ts expToNext): floor(24 * L^1.6) exp from level L to L + 1.
+    let toTwelve = 0;
+    for (let level = 1; level < 12; level++) toTwelve += Math.floor(24 * Math.pow(level, 1.6));
+    // Tamsin's class-imprint quests each need a different class worn: count the best-paying one only.
+    const imprint = (q: QuestDef): boolean => q.giver === 'tamsin' && q.id.endsWith('_imprint');
+    const story = QUESTS.filter((q) => giverRegion(q) === 'vale' && !q.repeatable);
+    const exp = (q: QuestDef): number => q.rewards.exp ?? 0;
+    const vale = story.filter((q) => !imprint(q)).reduce((n, q) => n + exp(q), 0) + Math.max(0, ...story.filter(imprint).map(exp));
+    expect(vale).toBeLessThan(0.6 * toTwelve);
   });
 });
 
@@ -573,7 +637,7 @@ describe('quest playthroughs (SkillBook)', () => {
     expect(book.questStatus('hale_first_drill')).toBe('ready');
     const res = book.turnInQuest('hale_first_drill', 'hale');
     expect(res.ok).toBe(true);
-    expect(res.gameRewards.coins).toBe(20);
+    expect(res.gameRewards.coins).toBe(QUEST_BY_ID.get('hale_first_drill')!.rewards.coins);
     expect(book.has('rising_kick')).toBe(true);
     expect(book.questStatus('hale_first_drill')).toBe('done');
     for (const next of ['hale_whole_body', 'hale_footwork', 'hale_crack_it_open']) expect(book.questStatus(next), next).toBe('available');
@@ -629,5 +693,77 @@ describe('quest playthroughs (SkillBook)', () => {
     expect(book.questStatus('mirelle_same_purse')).toBe('ready');
     expect(book.turnInQuest('mirelle_same_purse', 'mirelle').ok).toBe(false);
     expect(book.turnInQuest('mirelle_same_purse', 'mirelle_2').ok).toBe(true);
+  });
+  it('Stand in Its Way cannot soft-lock: marks banked before accepting, or the echo already learned', () => {
+    // A rank-3 dash anchors the echo; two marks are banked in the quarry before Gus offers the quest.
+    const banked = newBook().book;
+    banked.state.quests!.done.miner_gus_good_haul = 1;
+    banked.learn('shoulder_charge', 'test');
+    banked.state.skills.shoulder_charge.rank = 3;
+    const witness = (book: SkillBook): void => {
+      const before = book.state.witness.boulder_roll ?? 0;
+      book.witness('boulder_roll');
+      // The game reports a mark to the quests only when one was earned.
+      if ((book.state.witness.boulder_roll ?? 0) > before) book.notifyQuest({ type: 'witness', skill: 'boulder_roll' });
+    };
+    witness(banked);
+    witness(banked);
+    expect(banked.acceptQuest('miner_gus_stand_in_its_way').ok).toBe(true);
+    witness(banked); // third mark: the echo is learned
+    expect(banked.has('boulder_roll')).toBe(true);
+    expect(banked.questStatus('miner_gus_stand_in_its_way')).toBe('ready');
+    expect(banked.turnInQuest('miner_gus_stand_in_its_way', 'miner_gus').ok).toBe(true);
+    // Learned long before Gus asked.
+    const early = newBook().book;
+    early.state.quests!.done.miner_gus_good_haul = 1;
+    early.learn('boulder_roll', 'echo:boulderback');
+    early.acceptQuest('miner_gus_stand_in_its_way');
+    expect(early.questStatus('miner_gus_stand_in_its_way')).toBe('ready');
+  });
+
+  it('a passive drill stops being offered once its passive is at max rank (no fourth round)', () => {
+    const { book, bag, clock } = newBook();
+    book.state.quests!.done.hale_first_drill = 1;
+    const cooldown = QUEST_BY_ID.get('hale_footwork')!.repeatable!.cooldownMs;
+    const max = reg.passive('sure_footing')!.maxRank;
+    for (let round = 1; round <= max; round++) {
+      expect(book.acceptQuest('hale_footwork').ok, `round ${round}`).toBe(true);
+      kill(book, 'jellop', 10);
+      bag.herb = 4;
+      expect(book.turnInQuest('hale_footwork', 'hale').rewards.lesson).toBe('hale_sure_footing');
+      clock.t += cooldown;
+    }
+    expect(book.state.passives.sure_footing).toBe(max);
+    expect(book.questStatus('hale_footwork')).toBe('done');
+    expect(book.acceptQuest('hale_footwork').ok).toBe(false);
+    expect(book.quests('hale').filter((v) => v.status === 'available').map((v) => v.quest.id)).not.toContain('hale_footwork');
+  });
+
+  it('a lesson bought at the trainer credits its quest instead of being taught twice', () => {
+    const { book } = newBook();
+    book.inv = { count: () => 0, coins: () => 999, spend: () => true };
+    expect(book.takeLesson('hale_rising_kick').ok).toBe(true);
+    expect(book.questStatus('hale_first_drill')).toBe('done');
+    expect(book.questStatus('hale_whole_body')).toBe('available');
+  });
+
+  it("Thin the Pack needs ten Emberkits besides the Alpha", () => {
+    const { book } = newBook();
+    book.state.quests!.done.scout_rhea_eyes_on_ash = 1;
+    book.acceptQuest('scout_rhea_thin_the_pack');
+    kill(book, 'emberkit', 9);
+    kill(book, 'emberkit_alpha', 1);
+    expect(book.questStatus('scout_rhea_thin_the_pack')).toBe('active');
+    kill(book, 'emberkit', 1);
+    expect(book.questStatus('scout_rhea_thin_the_pack')).toBe('ready');
+  });
+
+  it('Crack It Open counts an infused basic attack as the basic attack', () => {
+    const { book } = newBook();
+    book.state.quests!.done.hale_first_drill = 1;
+    book.acceptQuest('hale_crack_it_open');
+    const blazing = reg.skill(`${WEAPONS.sword.basic}@fire`)!;
+    book.notifyQuest({ type: 'use', skill: blazing });
+    expect(book.questProgress('hale_crack_it_open')[1].text).toBe('Use basic skills 1/30');
   });
 });

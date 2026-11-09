@@ -5,10 +5,14 @@ import {
   advanceQuests,
   notifyQuest,
   objectiveProgress,
+  objectivesDone,
   questStatus,
+  questsFor,
+  turnInQuest,
   type QuestContext,
 } from '../src/core/quests';
 import { Registry } from '../src/core/registry';
+import { migrateBookState } from '../src/core/save';
 import { SkillBook, type Inventory, type SkillBookEvents } from '../src/core/skillbook';
 import { emptyQuestState, emptyState, type SkillBookState } from '../src/core/state';
 import type {
@@ -253,7 +257,7 @@ const DATA: GameData = {
   ],
   monsters: [jellop, jellopKing, pip, boar, boarAlpha, brinewisp],
   items: [
-    { id: 'fish', name: 'Lake Fish', icon: 'f', kind: 'material', desc: '' },
+    { id: 'fish', name: 'Lake Fish', plural: 'Lake Fish', icon: 'f', kind: 'material', desc: '' },
     { id: 'ore', name: 'Iron Ore', icon: 'o', kind: 'material', desc: '' },
     { id: 'herb', name: 'Meadow Herb', icon: 'h', kind: 'material', desc: '' },
   ],
@@ -873,10 +877,9 @@ describe('turn-in and rewards', () => {
     expect(held.coins).toBe(100);
     expect(book.state.lessons).toEqual([]);
     expect(book.takeLesson('hale_free')).toEqual({ ok: true, message: 'Learned Keen Eye.' });
-    // A quest rewarding an already taken lesson changes nothing more (passive already at max).
-    book.acceptQuest('tamsin_free');
-    book.notifyQuest({ type: 'talk', npc: 'hale' });
-    expect(book.turnInQuest('tamsin_free').ok).toBe(true);
+    // The quest teaching an already taken lesson counts as completed: it is never offered for nothing.
+    expect(book.questStatus('tamsin_free')).toBe('done');
+    expect(book.acceptQuest('tamsin_free').ok).toBe(false);
     expect(book.state.passives.keen_eye).toBe(1);
     expect(book.state.lessons).toEqual(['hale_free']);
   });
@@ -1020,5 +1023,321 @@ describe('determinism and persistence', () => {
     const { book } = newBook({}, old as SkillBookState);
     expect(book.state.quests).toEqual(emptyQuestState());
     expect(book.acceptQuest('hale_kick_drill').ok).toBe(true);
+  });
+});
+
+// ------------------------------------------------------------------ review fixes (quest review Q-1..Q-14, QC-7)
+
+/** The fixture plus extra quests (each test names what it adds). */
+function withQuests(...extra: QuestDef[]): Registry {
+  return new Registry({ ...DATA, quests: [...QUESTS, ...extra] });
+}
+
+/** A book on another registry, with a settable bag. */
+function bookOn(r: Registry, items: Record<string, number> = {}, state?: SkillBookState) {
+  const b = new SkillBook(r, state);
+  const { held, inventory } = bag(0, items);
+  b.inv = inventory;
+  return { book: b, held };
+}
+
+describe('review fixes', () => {
+  const echoQuest = q({ id: 'gus_echo', giver: 'gus', objectives: [{ kind: 'witness', skill: 'bubble_lance', count: 2 }], rewards: { coins: 5 } });
+
+  it('Q-1: a witness objective for an echo already known is met (no soft-lock once the echo is learned)', () => {
+    const r = withQuests(echoQuest);
+    // Learned before accepting: ready at once.
+    const early = bookOn(r).book;
+    early.learn('bubble_lance', 'test');
+    const ready = listen(early, 'questReady');
+    expect(early.acceptQuest('gus_echo').ok).toBe(true);
+    expect(early.questStatus('gus_echo')).toBe('ready');
+    expect(ready.map((e) => e.quest.id)).toEqual(['gus_echo']);
+    expect(early.questProgress('gus_echo')[0].text).toBe('Witness Bubble Lance 2/2 ✓');
+    // Learned mid-quest (marks banked before accepting): the flip is announced and the quest turns in.
+    const mid = bookOn(r).book;
+    mid.acceptQuest('gus_echo');
+    mid.notifyQuest({ type: 'witness', skill: 'bubble_lance' });
+    const flips = listen(mid, 'questReady');
+    mid.learn('bubble_lance', 'echo:brinewisp');
+    expect(flips.map((e) => e.quest.id)).toEqual(['gus_echo']);
+    expect(mid.turnInQuest('gus_echo', 'gus').ok).toBe(true);
+  });
+
+  it('Q-2: the first live-objective flip after a reload is announced', () => {
+    const r = withQuests(
+      q({ id: 'gus_fish', giver: 'gus', objectives: [{ kind: 'deliver', item: 'fish', count: 2 }] }),
+      q({ id: 'gus_learn', giver: 'gus', objectives: [{ kind: 'state', requires: { type: 'skill', id: 'whirlwind' }, label: 'Learn Whirlwind' }] }),
+    );
+    const first = bookOn(r).book;
+    first.acceptQuest('gus_fish');
+    first.acceptQuest('gus_learn');
+    const saved = first.serialize();
+    // As the game does: build the book, then hand it the (already loaded) bag.
+    const loaded = new SkillBook(r, saved);
+    const { held, inventory } = bag();
+    loaded.inv = inventory;
+    const ready = listen(loaded, 'questReady');
+    const progress = listen(loaded, 'questProgress');
+    held.items.fish = 2;
+    loaded.refreshQuests();
+    loaded.learn('whirlwind', 'test');
+    expect(ready.map((e) => e.quest.id)).toEqual(['gus_fish', 'gus_learn']);
+    expect(progress.map((e) => e.quest.id)).toEqual(['gus_fish', 'gus_learn']);
+    // A bag that already satisfied the delivery when it was handed over is not re-announced.
+    const again = new SkillBook(r, loaded.serialize());
+    const quiet = listen(again, 'questReady');
+    again.inv = bag(0, { fish: 2 }).inventory;
+    again.refreshQuests();
+    expect(quiet).toEqual([]);
+  });
+
+  it('Q-3 / QC-2: an owned lesson is not granted again; an exhausted drill is done', () => {
+    // Skill lesson already known: the turn-in pays the rest, emits no 'lesson', leaves the lesson out.
+    const { book } = newBook();
+    book.learn('rising_kick', 'test');
+    const lessons = listen(book, 'lesson');
+    const learned = listen(book, 'learned');
+    book.acceptQuest('hale_kick_drill');
+    for (let i = 0; i < 3; i++) book.notifyQuest({ type: 'kill', monster: jellop });
+    const res = book.turnInQuest('hale_kick_drill', 'hale');
+    expect(res.ok).toBe(true);
+    expect(res.rewards.lesson).toBeUndefined();
+    expect(res.gameRewards).toEqual({ coins: 15, items: { herb: 2 }, exp: 40 });
+    expect(lessons).toEqual([]);
+    expect(learned).toEqual([]);
+    expect(book.state.lessons).toEqual(['hale_kick']); // still counts as taken (lesson requirements)
+    // Passive drill: once the passive is at max, the bounty has nothing left and is 'done'.
+    book.state.passives.sure_footing = 2;
+    const runFootwork = (): void => {
+      expect(book.acceptQuest('hale_footwork').ok).toBe(true);
+      for (let i = 0; i < 2; i++) book.notifyQuest({ type: 'use', skill: skill('rising_kick') });
+      expect(book.turnInQuest('hale_footwork', 'hale').ok).toBe(true);
+    };
+    runFootwork();
+    expect(book.state.passives.sure_footing).toBe(3);
+    expect(book.questStatus('hale_footwork')).toBe('done');
+    expect(book.acceptQuest('hale_footwork')).toEqual({ ok: false, message: 'Footwork has nothing more to teach you.' });
+    expect(book.quests('hale').find((v) => v.quest.id === 'hale_footwork')?.status).toBe('done');
+    // A drill already active when its passive maxes still turns in, without the lesson.
+    const other = newBook().book;
+    other.state.quests!.done.hale_kick_drill = 1;
+    other.acceptQuest('hale_footwork');
+    other.state.passives.sure_footing = 3;
+    for (let i = 0; i < 2; i++) other.notifyQuest({ type: 'use', skill: skill('rising_kick') });
+    const passives = listen(other, 'passive');
+    const out = other.turnInQuest('hale_footwork', 'hale');
+    expect(out.ok).toBe(true);
+    expect(out.rewards.lesson).toBeUndefined();
+    expect(passives).toEqual([]);
+    // The pure engine without lessonOwned keeps the old payload.
+    const state = emptyState();
+    acceptQuest(reg, state, bareCtx(), 'hale_kick_drill');
+    for (let i = 0; i < 3; i++) notifyQuest(reg, state, { type: 'kill', monster: jellop }, bareCtx());
+    expect(turnInQuest(reg, state, bareCtx(), 'hale_kick_drill').rewards.lesson).toBe('hale_kick');
+  });
+
+  it('Q-5: accepting checks the giver; only a turn-in at an NPC counts as talking to it', () => {
+    const r = withQuests(
+      q({ id: 'gus_errand', giver: 'gus', turnIn: 'brann', objectives: [{ kind: 'visit', map: 'vale.greenmeadow' }] }),
+      q({ id: 'oru_word', giver: 'oru', objectives: [{ kind: 'talk', npc: 'brann' }] }),
+    );
+    const { book } = bookOn(r);
+    expect(book.acceptQuest('gus_errand', 'oru')).toEqual({ ok: false, message: 'Ask Gus about that.' });
+    expect(book.acceptQuest('gus_errand', 'gus').ok).toBe(true);
+    expect(book.acceptQuest('oru_word').ok).toBe(true);
+    book.notifyQuest({ type: 'visit', map: 'vale.greenmeadow' });
+    // Turned in without saying where: no talk with Brann happened.
+    expect(book.turnInQuest('gus_errand').ok).toBe(true);
+    expect(book.questStatus('oru_word')).toBe('active');
+    // Turned in at Brann: that is a talk with Brann.
+    const second = bookOn(r).book;
+    second.acceptQuest('gus_errand', 'gus');
+    second.acceptQuest('oru_word', 'oru');
+    second.notifyQuest({ type: 'visit', map: 'vale.greenmeadow' });
+    expect(second.turnInQuest('gus_errand', 'brann').ok).toBe(true);
+    expect(second.questStatus('oru_word')).toBe('ready');
+  });
+
+  it('Q-6: questsFor reads only that NPC\'s quests and keeps the sort; questMarker summarises them', () => {
+    const { book, held } = newBook();
+    expect(book.questMarker('hale')).toBe('!');
+    expect(book.questMarker('nobody')).toBeNull();
+    book.acceptQuest('pell_net', 'pell');
+    expect(book.questMarker('pell')).toBe('…');
+    expect(book.questMarker('brann')).toBe('!'); // an offer outranks a quest in progress
+    held.items.fish = 5;
+    book.notifyQuest({ type: 'talk', npc: 'oru' });
+    book.notifyQuest({ type: 'visit', map: 'vale.lake_islet' });
+    expect(book.questMarker('brann')).toBe('?');
+    expect(book.questMarker('pell')).toBe('…'); // ready, but handed in elsewhere
+    expect(book.quests('brann').map((v) => `${v.quest.id}:${v.status}`)).toEqual(['pell_net:ready', 'brann_throw:available']);
+    // The pure query with an empty bag: the delivery is unmet, so the offer sorts first.
+    expect(questsFor(reg, book.state, bareCtx(), 'brann').map((v) => `${v.quest.id}:${v.status}`)).toEqual([
+      'brann_throw:available',
+      'pell_net:active',
+    ]);
+  });
+
+  it('Q-7: a flag read by a quest state objective still announces readiness; objectivesDone matches the texts', () => {
+    const r = withQuests(q({ id: 'gus_forge', giver: 'gus', objectives: [{ kind: 'state', requires: { type: 'flag', id: 'forge_success', min: 2 }, label: 'Forge twice' }] }));
+    const { book } = bookOn(r);
+    book.evaluateClasses(); // the first incFlag after construction always runs discovery; skip that catch-up
+    book.acceptQuest('gus_forge');
+    const ready = listen(book, 'questReady');
+    book.incFlag('kills');
+    book.incFlag('forge_success');
+    expect(ready).toEqual([]);
+    book.incFlag('forge_success');
+    expect(ready.map((e) => e.quest.id)).toEqual(['gus_forge']);
+    expect(objectivesDone(r, book.state, bareCtx({ flag: (id) => book.flag(id) }), 'gus_forge')).toEqual([true]);
+    expect(objectivesDone(r, book.state, bareCtx(), 'nope')).toEqual([]);
+  });
+
+  it('Q-8: one item delivered by two objectives is rejected by validate and needs the sum', () => {
+    const dup = q({
+      id: 'gus_double',
+      giver: 'gus',
+      objectives: [
+        { kind: 'deliver', item: 'fish', count: 3 },
+        { kind: 'deliver', item: 'fish', count: 3 },
+      ],
+    });
+    const r = withQuests(dup);
+    expect(r.validate()).toEqual(['quest gus_double: delivers fish in more than one objective']);
+    const { book, held } = bookOn(r, { fish: 3 });
+    book.acceptQuest('gus_double');
+    expect(book.questStatus('gus_double')).toBe('active');
+    held.items.fish = 6;
+    expect(book.questStatus('gus_double')).toBe('ready');
+    expect(book.turnInQuest('gus_double', 'gus').ok).toBe(true);
+    expect(held.items.fish).toBe(0);
+  });
+
+  it('Q-9: lessons taken before (or outside) quests credit the quest that teaches them', () => {
+    const migrated = migrateBookState({ version: 2, lessons: ['hale_kick', 'hale_footing'] }, reg);
+    expect(migrated.quests?.done).toEqual({ hale_kick_drill: 1 }); // repeatable hale_footwork is not credited
+    const { book } = newBook({}, migrated);
+    expect(book.questStatus('hale_kick_drill')).toBe('done');
+    expect(book.questStatus('hale_footwork')).toBe('available');
+    // An active quest is left to finish.
+    const active = migrateBookState({ lessons: ['hale_kick'], quests: { active: { hale_kick_drill: { progress: [1] } } } }, reg);
+    expect(active.quests?.done).toEqual({});
+    expect(active.quests?.active.hale_kick_drill.progress).toEqual([1]);
+  });
+
+  it('Q-10: a species objective must not also count its elite (validate), and rank filters keep them apart', () => {
+    const both = q({
+      id: 'gus_pack',
+      giver: 'gus',
+      objectives: [
+        { kind: 'kill', monster: 'boar', count: 2 },
+        { kind: 'kill', monster: 'boar_alpha', count: 1 },
+      ],
+    });
+    expect(withQuests(both).validate()).toEqual(['quest gus_pack: a boar_alpha kill also counts toward objective 1 (boar)']);
+    const fixed = q({ ...both, objectives: [{ kind: 'kill', monster: 'boar', rank: 'common', count: 2 }, both.objectives[1]] });
+    const r = withQuests(fixed);
+    expect(r.validate()).toEqual([]);
+    const { book } = bookOn(r);
+    book.acceptQuest('gus_pack');
+    book.notifyQuest({ type: 'kill', monster: boar });
+    book.notifyQuest({ type: 'kill', monster: boarAlpha });
+    expect(book.questStatus('gus_pack')).toBe('active');
+    book.notifyQuest({ type: 'kill', monster: boar });
+    expect(book.questStatus('gus_pack')).toBe('ready');
+  });
+
+  it('Q-11: a throwing listener does not cut a turn-in short', () => {
+    const { book } = newBook({ fish: 5 });
+    book.acceptQuest('pell_net');
+    book.notifyQuest({ type: 'talk', npc: 'oru' });
+    book.notifyQuest({ type: 'visit', map: 'vale.lake_islet' });
+    book.events.on('learned', () => {
+      throw new Error('UI toast crashed');
+    });
+    const completed = listen(book, 'questCompleted');
+    const res = book.turnInQuest('pell_net', 'brann');
+    expect(res.ok).toBe(true);
+    expect((res.listenerError as Error).message).toBe('UI toast crashed');
+    expect(completed).toHaveLength(1);
+    expect(book.has('palm_strike')).toBe(true);
+    expect(book.hasElement('water')).toBe(true);
+    expect(book.state.essences.split).toBe(1);
+    expect(book.state.whispered).toContain('tidecaller');
+    expect(book.flag('pell_net_done')).toBe(1);
+    // Without a throwing listener there is no error field.
+    const calm = newBook().book;
+    calm.acceptQuest('hale_kick_drill');
+    for (let i = 0; i < 3; i++) calm.notifyQuest({ type: 'kill', monster: jellop });
+    expect(calm.turnInQuest('hale_kick_drill', 'hale')).not.toHaveProperty('listenerError');
+  });
+
+  it('Q-12: without a context, quests with deliver or state objectives are never reported ready', () => {
+    const state = emptyState();
+    acceptQuest(reg, state, bareCtx(), 'pell_net');
+    notifyQuest(reg, state, { type: 'talk', npc: 'oru' });
+    const res = advanceQuests(reg, state, { type: 'visit', map: 'vale.lake_islet' });
+    expect(res).toEqual({ progressed: ['pell_net'], ready: [] });
+    // Counter-only quests still report.
+    acceptQuest(reg, state, bareCtx(), 'hale_kick_drill');
+    let ready: string[] = [];
+    for (let i = 0; i < 3; i++) ready = notifyQuest(reg, state, { type: 'kill', monster: jellop });
+    expect(ready).toEqual(['hale_kick_drill']);
+  });
+
+  it('Q-13: migration drops impossible quest entries; unknown quests can be abandoned', () => {
+    const m = migrateBookState(
+      {
+        quests: {
+          done: { hale_kick_drill: 1 },
+          active: { hale_kick_drill: { progress: [3] }, gone_quest: { progress: [] }, pell_net: { progress: [] } },
+          tracked: ['gone_quest', 'hale_kick_drill', 'pell_net'],
+        },
+      },
+      reg,
+    );
+    expect(Object.keys(m.quests!.active)).toEqual(['gone_quest', 'pell_net']);
+    expect(m.quests!.tracked).toEqual(['pell_net']);
+    const { book } = newBook({}, m);
+    expect(book.questStatus('hale_kick_drill')).toBe('done');
+    expect(book.abandonQuest('gone_quest')).toEqual({ ok: true, message: 'Abandoned that quest.' });
+    expect(book.state.quests!.active).not.toHaveProperty('gone_quest');
+  });
+
+  it('Q-14: delivery texts use the plural (ItemDef.plural for mass nouns)', () => {
+    const r = withQuests(q({ id: 'gus_herbs', giver: 'gus', objectives: [{ kind: 'deliver', item: 'herb', count: 3 }, { kind: 'deliver', item: 'ore', count: 1 }] }));
+    const { book } = bookOn(r);
+    book.acceptQuest('gus_herbs');
+    expect(texts(book, 'gus_herbs')).toEqual(['Bring 3 Meadow Herbs (0 in bag)', 'Bring 1 Iron Ore (0 in bag)']);
+    expect(objectiveProgress(reg, emptyState(), bareCtx(), 'pell_net')[0].text).toBe('Bring 5 Lake Fish (0 in bag)');
+    const state = emptyState();
+    acceptQuest(r, state, bareCtx(), 'gus_herbs');
+    const rich = bareCtx({ itemCount: () => 9, spendItems: () => false });
+    expect(turnInQuest(r, state, rich, 'gus_herbs').message).toBe('You need 3 Meadow Herbs, 1 Iron Ore.');
+  });
+
+  it('QC-7: use / cast tags also match the authored skill a variant rolls up to', () => {
+    const r = withQuests(
+      q({ id: 'gus_basics', giver: 'gus', objectives: [{ kind: 'use', tag: 'basic', count: 2 }, { kind: 'cast', tag: 'basic', map: 'vale.hearthvale', count: 1 }] }),
+    );
+    const blazing = r.skill('slash@fire')!;
+    expect(blazing.tags).not.toContain('basic');
+    const { book } = bookOn(r);
+    book.acceptQuest('gus_basics');
+    book.notifyQuest({ type: 'use', skill: blazing });
+    book.notifyQuest({ type: 'use', skill: r.skill('slash')! });
+    book.notifyQuest({ type: 'cast', skill: blazing, map: 'vale.hearthvale' });
+    expect(book.questStatus('gus_basics')).toBe('ready');
+    // Unrelated skills still do not count.
+    expect(objectiveProgress(r, book.state, bareCtx(), 'gus_basics').map((p) => p.have)).toEqual([2, 1]);
+  });
+
+  it('lessonState says whether a lesson is quest-only and which quest teaches it', () => {
+    const { book } = newBook();
+    expect(book.lessonState('hale_kick')).toMatchObject({ questOnly: true, quest: 'hale_kick_drill' });
+    expect(book.lessonState('hale_free')).toMatchObject({ questOnly: false, quest: 'tamsin_free' });
+    expect(book.lessonState('hale_secret')).toMatchObject({ questOnly: true });
+    expect(book.lessonState('hale_secret')).not.toHaveProperty('quest');
   });
 });

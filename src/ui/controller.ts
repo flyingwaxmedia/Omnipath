@@ -64,4 +64,6 @@ export interface GameController {
   navigateTo(mapId: string): Outcome;
   setPaused(paused: boolean): void;
   newGame(): void;
+  /** Fighting right now (dealt or took damage in the last few seconds). Discovery cards wait until it is false. */
+  inCombat?(): boolean;
 }

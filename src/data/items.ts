@@ -3,7 +3,8 @@ import type { ItemDef } from '../core/types';
 export type { ItemDef } from '../core/types';
 
 // Items (SPEC-v2 §8). Bag counts live in PlayerSave.bag (item id -> count).
-// - material: gathered from nodes (SPEC §7.4); `price` is what a Waykeeper pays per unit. Trainer lessons spend them.
+// - material: gathered from nodes (SPEC §7.4); `price` is what a Waykeeper pays per unit. Quest deliveries spend them.
+// `plural` names a count other than 1 where the English plural does not fit ('Lake Fish', 'Iron Ore').
 // - relic: warden drops; obtaining one sets the flag of the same id (gates the weapon capstones / Tier III classes).
 // - shard: grants its element on pickup. tome: teaches its skill on pickup.
 // - consumable: `amount` for heal / sp is a percentage of max HP / SP; `price` is the shop price.
@@ -12,6 +13,7 @@ export const ITEMS: ItemDef[] = [
   {
     id: 'ore',
     name: 'Iron Ore',
+    plural: 'Iron Ore',
     icon: '🪨',
     kind: 'material',
     desc: 'Rough ore from Greystone Quarry. Brann forges with it; the earth itself seems to notice who digs.',
@@ -20,9 +22,10 @@ export const ITEMS: ItemDef[] = [
   {
     id: 'fish',
     name: 'Lake Fish',
+    plural: 'Lake Fish',
     icon: '🐟',
     kind: 'material',
-    desc: 'A silver fish from Mirror Lake. Fisher Pell trades lessons for them.',
+    desc: 'A silver fish from Mirror Lake. Fisher Pell always has a use for them.',
     price: 4,
   },
   {
@@ -54,12 +57,13 @@ export const ITEMS: ItemDef[] = [
     name: 'Ember Shard',
     icon: '🔸',
     kind: 'material',
-    desc: 'A glowing chip from an ember vent. Quartermaster Vey trades for them.',
+    desc: 'A glowing chip from an ember vent. Quartermaster Vey always wants more for the kit.',
     price: 6,
   },
   {
     id: 'sun_water',
     name: 'Sun Water',
+    plural: 'Sun Water',
     icon: '🏺',
     kind: 'material',
     desc: 'Warm water from a sun spring. Springs hide in quiet, out-of-the-way places.',
@@ -70,9 +74,10 @@ export const ITEMS: ItemDef[] = [
   {
     id: 'storm_wood',
     name: 'Stormwood',
+    plural: 'Stormwood',
     icon: '🪵',
     kind: 'material',
-    desc: 'Wood from a lightning-struck tree. The grain crackles. Korrin trades essences for it.',
+    desc: 'Wood from a lightning-struck tree. The grain crackles. Korrin the Wayfinder asks for it.',
     price: 8,
   },
   {
@@ -124,6 +129,7 @@ export const ITEMS: ItemDef[] = [
   {
     id: 'tome_quickstep',
     name: 'Tome of Quickstep',
+    plural: 'Tomes of Quickstep',
     icon: '📘',
     kind: 'tome',
     skill: 'quickstep',
@@ -132,6 +138,7 @@ export const ITEMS: ItemDef[] = [
   {
     id: 'tome_static_field',
     name: 'Tome of Static Field',
+    plural: 'Tomes of Static Field',
     icon: '📙',
     kind: 'tome',
     skill: 'static_field',

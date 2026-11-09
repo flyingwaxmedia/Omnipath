@@ -52,7 +52,7 @@ export const QUESTS: QuestDef[] = [
       { kind: 'kill', monster: 'jellop', count: 6 },
       state(basicRank(3), 'Raise your basic attack to rank 3'),
     ],
-    rewards: { lesson: 'hale_rising_kick', coins: 20, exp: 40 },
+    rewards: { lesson: 'hale_rising_kick', coins: 10, exp: 30 },
   },
   {
     id: 'hale_whole_body',
@@ -73,7 +73,7 @@ export const QUESTS: QuestDef[] = [
       { kind: 'kill', monster: 'pipsprout', count: 6 },
       { kind: 'deliver', item: 'herb', count: 3 },
     ],
-    rewards: { lesson: 'hale_shoulder_charge', coins: 30, exp: 60 },
+    rewards: { lesson: 'hale_shoulder_charge', coins: 10, exp: 40 },
   },
   {
     id: 'hale_footwork',
@@ -92,7 +92,7 @@ export const QUESTS: QuestDef[] = [
       { kind: 'kill', monster: 'jellop', count: 10 },
       { kind: 'deliver', item: 'herb', count: 4 },
     ],
-    rewards: { lesson: 'hale_sure_footing', coins: 10, exp: 40 },
+    rewards: { lesson: 'hale_sure_footing', exp: 40 },
     repeatable: bounty(20),
   },
   {
@@ -115,7 +115,7 @@ export const QUESTS: QuestDef[] = [
       { kind: 'use', tag: 'basic', count: 30 },
       { kind: 'kill', monster: 'puddlewisp', count: 10 },
     ],
-    rewards: { coins: 60, exp: 120, items: { healing_draught: 2 } },
+    rewards: { coins: 60, exp: 80, items: { healing_draught: 2 } },
   },
 
   // ================================================================ hearthvale · Brann the Smith
@@ -134,7 +134,7 @@ export const QUESTS: QuestDef[] = [
         'Three true pieces, and fire in your hands to show for it. Now a smith\'s trick for when the anvil is too far away: the Hammer Toss. Fire and a well-worked skill belong together on the altar, but that lesson is yours to find.',
     },
     objectives: [state({ type: 'flag', id: 'forge_success', min: 3 }, 'Forge 3 fine pieces at the anvil')],
-    rewards: { lesson: 'brann_hammer_toss', coins: 20, exp: 60 },
+    rewards: { lesson: 'brann_hammer_toss', coins: 10, exp: 40 },
   },
   {
     id: 'brann_big_hammer',
@@ -154,7 +154,7 @@ export const QUESTS: QuestDef[] = [
       { kind: 'use', tag: 'heavy', count: 20 },
       { kind: 'deliver', item: 'ore', count: 6 },
     ],
-    rewards: { lesson: 'brann_forgehand', coins: 20, exp: 80 },
+    rewards: { lesson: 'brann_forgehand', exp: 80 },
     repeatable: bounty(20),
   },
   {
@@ -165,11 +165,11 @@ export const QUESTS: QuestDef[] = [
     summary: 'Raise a blade skill to rank 5, mine 20 ore and break 8 Craglings to learn where armor gives.',
     dialog: {
       offer:
-        'A blade that has seen real use can learn where armor is weakest. Bring a blade technique to rank five, mine me twenty ore, and crack eight Craglings at the quarry while you are there. Stone plate has seams just like steel.',
+        'A blade that has seen real use can learn where armor is weakest. Bring a blade technique to rank five, show me you can mine twenty ore, and crack eight Craglings at the quarry while you are there. Stone plate has seams just like steel.',
       progress:
         'Hit the Craglings along their cracks, and fire bites stone deepest. Twenty ore is two passes of the quarry rock faces; they grow back while you work.',
       complete:
-        'That ore will make good practice plate. Here is the strike that finds the gap: Crack Armor. It stuns whatever it does not break.',
+        'You know where the rock gives now, and so does your blade. Here is the strike that finds the gap: Crack Armor. It stuns whatever it does not break.',
     },
     after: ['brann_heat_in_hands'],
     objectives: [
@@ -177,7 +177,7 @@ export const QUESTS: QuestDef[] = [
       { kind: 'gather', node: 'ore', count: 20 },
       { kind: 'kill', monster: 'cragling', count: 8 },
     ],
-    rewards: { lesson: 'brann_crack_armor', coins: 40, exp: 120 },
+    rewards: { lesson: 'brann_crack_armor', coins: 10, exp: 80 },
   },
   {
     id: 'brann_anvil_dust',
@@ -196,7 +196,7 @@ export const QUESTS: QuestDef[] = [
       { kind: 'kill', monster: 'cragling', count: 10 },
       { kind: 'deliver', item: 'ore', count: 4 },
     ],
-    rewards: { lesson: 'brann_essence_heavy', coins: 30, exp: 60 },
+    rewards: { lesson: 'brann_essence_heavy', exp: 60 },
     repeatable: bounty(15),
   },
 
@@ -215,7 +215,7 @@ export const QUESTS: QuestDef[] = [
         'Three lights, and they sit well together. Kneel, and take the fourth: holy light, strong against shadow and the restless dead. Those who carry it on a blade are called the Oathsworn.',
     },
     objectives: [state({ type: 'elementsKnown', count: 3, primalOnly: true }, 'Attune three primal elements')],
-    rewards: { element: 'holy', whisper: 'paladin', coins: 40, exp: 100 },
+    rewards: { element: 'holy', whisper: 'paladin', coins: 40, exp: 60 },
   },
   {
     id: 'alba_quiet_hours',
@@ -234,7 +234,7 @@ export const QUESTS: QuestDef[] = [
       { kind: 'kill', monster: 'pipsprout', count: 8 },
       { kind: 'deliver', item: 'herb', count: 5 },
     ],
-    rewards: { lesson: 'alba_devotion', coins: 10, exp: 50 },
+    rewards: { lesson: 'alba_devotion', exp: 50 },
     repeatable: bounty(20),
   },
   {
@@ -248,7 +248,7 @@ export const QUESTS: QuestDef[] = [
         'The light in you can close wounds as well as open them, but first it must learn what it is for. The restless dead drift through Gloomwood, south of town; lay six of them to rest and bring me four herbs for dressings. Holy light bites deep into shadow.',
       progress: 'Hollowshades drift between the Gloomwood trees, and worse sleeps in the barrow beneath. Herbs grow in the meadow if you have none.',
       complete:
-        'You came back lighter than you left. Here is Mending Light, a short prayer that closes your wounds as you fight. Use it when the road wears you thin.',
+        'You came back lighter than you left. Here is Mending Light, a short prayer that closes your wounds as you fight. The light whispered me a riddle while you were gone; it is yours too.',
     },
     after: ['alba_three_lights'],
     requires: [{ type: 'element', id: 'holy' }],
@@ -256,7 +256,7 @@ export const QUESTS: QuestDef[] = [
       { kind: 'kill', family: 'revenant', count: 6 },
       { kind: 'deliver', item: 'herb', count: 4 },
     ],
-    rewards: { lesson: 'alba_mending_light', coins: 40, exp: 120 },
+    rewards: { lesson: 'alba_mending_light', whisper: 'moonwarden', coins: 10, exp: 80 },
   },
   {
     id: 'alba_pale_glade',
@@ -270,7 +270,7 @@ export const QUESTS: QuestDef[] = [
       progress:
         'Raise any skill to rank five, then join it with holy light at the altar here in town. Cast it beside the glyph in Gloomwood and the way will show itself.',
       complete:
-        'You walked the pale glade and came back changed; I can see it on you. Now let the light out all at once: Radiant Burst. The glade remembers its guests, so listen for what it whispers.',
+        'You walked the pale glade and came back changed; I can see it on you. Now let the light out all at once: Radiant Burst. The glade remembers its guests, so go back whenever you need its quiet.',
     },
     after: ['alba_rest_the_restless'],
     objectives: [
@@ -278,7 +278,7 @@ export const QUESTS: QuestDef[] = [
       { kind: 'visit', map: 'vale.moonlit_glade' },
       { kind: 'deliver', item: 'sun_water', count: 2 },
     ],
-    rewards: { lesson: 'alba_radiant_burst', whisper: 'moonwarden', coins: 60, exp: 200 },
+    rewards: { lesson: 'alba_radiant_burst', coins: 10, exp: 130 },
   },
 
   // ================================================================ mirror_lake · Fisher Pell
@@ -298,7 +298,7 @@ export const QUESTS: QuestDef[] = [
       { kind: 'gather', node: 'fishing', count: 5 },
       { kind: 'deliver', item: 'fish', count: 5 },
     ],
-    rewards: { lesson: 'pell_net_throw', coins: 15, exp: 30 },
+    rewards: { lesson: 'pell_net_throw', coins: 10, exp: 20 },
   },
   {
     id: 'pell_set_the_hook',
@@ -318,7 +318,7 @@ export const QUESTS: QuestDef[] = [
       { kind: 'kill', monster: 'puddlewisp', count: 6 },
       { kind: 'deliver', item: 'fish', count: 10 },
     ],
-    rewards: { lesson: 'pell_hook_pull', coins: 30, exp: 70 },
+    rewards: { lesson: 'pell_hook_pull', coins: 10, exp: 50 },
   },
   {
     id: 'pell_pier_patience',
@@ -337,7 +337,7 @@ export const QUESTS: QuestDef[] = [
       { kind: 'gather', node: 'fishing', count: 4 },
       { kind: 'deliver', item: 'fish', count: 6 },
     ],
-    rewards: { lesson: 'pell_patience', coins: 10, exp: 40 },
+    rewards: { lesson: 'pell_patience', exp: 40 },
     repeatable: bounty(20),
   },
   {
@@ -357,7 +357,7 @@ export const QUESTS: QuestDef[] = [
       { kind: 'kill', monster: 'brinewisp', count: 1 },
       { kind: 'deliver', item: 'fish', count: 6 },
     ],
-    rewards: { lesson: 'pell_essence_return', coins: 20, exp: 60 },
+    rewards: { lesson: 'pell_essence_return', exp: 60 },
     repeatable: bounty(15),
   },
 
@@ -370,7 +370,7 @@ export const QUESTS: QuestDef[] = [
     summary: 'Meditate at the wind shrine on Windcrest Hill and gather 3 chime feathers.',
     dialog: {
       offer:
-        'The shrine on this hill asks for stillness. Sit before it, and do not be struck; the wind notices patience. Bring me three chime feathers from the singing posts while you are up here.',
+        'The shrine on this hill asks for stillness. Sit before it, and do not be struck; the wind notices patience. Pick three chime feathers from the singing posts while you are up here.',
       progress: 'Sit at the shrine and let it finish; any blow breaks the stillness. Clear the Gustlings and Sparkbugs away first.',
       complete:
         'The wind has noticed you; you carry it now. Wind scatters things, and fog that no torch can lift may yet step aside for it. There is such a fog by the falls.',
@@ -379,7 +379,7 @@ export const QUESTS: QuestDef[] = [
       state({ type: 'flag', id: 'meditations', min: 1 }, 'Meditate at the wind shrine'),
       { kind: 'gather', node: 'wind_chime', count: 3 },
     ],
-    rewards: { coins: 50, exp: 80, items: { mana_draught: 1 } },
+    rewards: { coins: 50, exp: 50, items: { mana_draught: 1 } },
   },
   {
     id: 'oru_past_the_limit',
@@ -395,7 +395,7 @@ export const QUESTS: QuestDef[] = [
     },
     after: ['oru_sit_still'],
     objectives: [state({ type: 'flag', id: 'mastered_any', min: 1 }, 'Master any skill')],
-    rewards: { lesson: 'oru_meditation', coins: 40, exp: 150 },
+    rewards: { lesson: 'oru_meditation', coins: 10, exp: 100 },
   },
   {
     id: 'oru_open_palm',
@@ -415,7 +415,7 @@ export const QUESTS: QuestDef[] = [
       { kind: 'kill', monster: 'gustling', count: 8 },
       { kind: 'deliver', item: 'chime_feather', count: 3 },
     ],
-    rewards: { lesson: 'oru_palm_strike', coins: 40, exp: 120 },
+    rewards: { lesson: 'oru_palm_strike', coins: 10, exp: 80 },
   },
   {
     id: 'oru_quiet_mind',
@@ -435,7 +435,7 @@ export const QUESTS: QuestDef[] = [
       { kind: 'kill', monster: 'sparkbug', count: 10 },
       { kind: 'deliver', item: 'chime_feather', count: 5 },
     ],
-    rewards: { lesson: 'oru_still_mind', coins: 20, exp: 90 },
+    rewards: { lesson: 'oru_still_mind', exp: 90 },
     repeatable: bounty(20),
   },
 
@@ -450,7 +450,7 @@ export const QUESTS: QuestDef[] = [
       offer:
         'I train soldiers, not sightseers. Come back wearing a calling, thin eight Emberkits off my field, and bring two ember shards from the vents. Then I will teach you how the line holds.',
       progress:
-        'A calling finds you when enough of your techniques share a shape; Tamsin in Hearthvale can explain. Ember shards cough out of the vents in the Cinder Fields.',
+        'A calling finds you when enough of your techniques share a kind; Tamsin in Hearthvale can explain. Ember shards cough out of the vents in the Cinder Fields.',
       complete: 'You held. Now learn the shout that holds it for everyone: Rally Cry. One breath, and steel goes into your arm.',
     },
     objectives: [
@@ -458,7 +458,7 @@ export const QUESTS: QuestDef[] = [
       { kind: 'kill', monster: 'emberkit', count: 8 },
       { kind: 'deliver', item: 'ember_shard', count: 2 },
     ],
-    rewards: { lesson: 'vey_rally_cry', coins: 60, exp: 120 },
+    rewards: { lesson: 'vey_rally_cry', coins: 10, exp: 80 },
   },
   {
     id: 'vey_under_fire',
@@ -477,7 +477,7 @@ export const QUESTS: QuestDef[] = [
       { kind: 'kill', monster: 'ashfly', count: 10 },
       { kind: 'deliver', item: 'ember_shard', count: 4 },
     ],
-    rewards: { lesson: 'vey_flare_dash', coins: 80, exp: 160 },
+    rewards: { lesson: 'vey_flare_dash', coins: 10, exp: 100 },
   },
   {
     id: 'vey_laps',
@@ -499,7 +499,7 @@ export const QUESTS: QuestDef[] = [
       { kind: 'visit', map: 'vale.greystone_quarry' },
       { kind: 'deliver', item: 'ember_shard', count: 3 },
     ],
-    rewards: { lesson: 'vey_field_drill', coins: 20, exp: 100 },
+    rewards: { lesson: 'vey_field_drill', exp: 100 },
     repeatable: bounty(20),
   },
   {
@@ -518,7 +518,7 @@ export const QUESTS: QuestDef[] = [
       { kind: 'kill', monster: 'voltcalf', count: 8 },
       { kind: 'deliver', item: 'ember_shard', count: 5 },
     ],
-    rewards: { lesson: 'vey_essence_haste', coins: 50, exp: 120 },
+    rewards: { lesson: 'vey_essence_haste', exp: 120 },
     repeatable: bounty(15),
   },
 
@@ -532,7 +532,7 @@ export const QUESTS: QuestDef[] = [
     dialog: {
       offer:
         'Stormwood splits along the grain, and so does what lives in it. Bring me four lengths from the storm trees by the road, and thin eight Riftlings while you are about it. I pay in essence, never in coin.',
-      progress: 'The storm trees crackle; you will hear them before you see them. Riftlings blink about, so strike where they land.',
+      progress: 'The storm trees crackle; you will hear them before you see them. Riftlings crowd the road itself, so thin them as you go.',
       complete: 'Good grain. Essence of Splitting: lay it on a projectile at an altar and one shot becomes a fan. Come back when the road has grown more.',
     },
     requires: [ARRIVED_RIFT_ROAD],
@@ -540,7 +540,7 @@ export const QUESTS: QuestDef[] = [
       { kind: 'kill', monster: 'riftling', count: 8 },
       { kind: 'deliver', item: 'storm_wood', count: 4 },
     ],
-    rewards: { lesson: 'korrin_essence_split', coins: 60, exp: 150 },
+    rewards: { lesson: 'korrin_essence_split', exp: 180 },
     repeatable: bounty(15),
   },
   {
@@ -555,12 +555,13 @@ export const QUESTS: QuestDef[] = [
       progress: 'Stalkers lunge out of the shadows at the edge of the road. Keep your back to the trees and the wood close.',
       complete: 'Essence of Arcing, crackling in the jar. Lay it on a strike, a projectile or a chain and the hit jumps. Watch your fingers.',
     },
+    after: ['korrin_split_grain'],
     requires: [ARRIVED_RIFT_ROAD],
     objectives: [
       { kind: 'kill', monster: 'rift_stalker', count: 6 },
       { kind: 'deliver', item: 'storm_wood', count: 5 },
     ],
-    rewards: { lesson: 'korrin_essence_arc', coins: 70, exp: 160 },
+    rewards: { lesson: 'korrin_essence_arc', exp: 190 },
     repeatable: bounty(15),
   },
   {
@@ -575,12 +576,13 @@ export const QUESTS: QuestDef[] = [
       progress: 'Frostlings throw shards of ice, and fire cuts through them best. The crystals sit in the shelf walls and never quite melt.',
       complete: 'Needle-fine. Essence of Piercing: your projectiles pass through foes and keep going. Bring more ice when you have it.',
     },
+    after: ['korrin_ridge_charge'],
     requires: [ARRIVED_RIFT_ROAD],
     objectives: [
       { kind: 'kill', monster: 'frostling', count: 6 },
       { kind: 'deliver', item: 'frost_crystal', count: 4 },
     ],
-    rewards: { lesson: 'korrin_essence_pierce', coins: 80, exp: 170 },
+    rewards: { lesson: 'korrin_essence_pierce', exp: 200 },
     repeatable: bounty(15),
   },
   {
@@ -588,19 +590,20 @@ export const QUESTS: QuestDef[] = [
     name: 'Stock from Far Roads',
     giver: 'korrin',
     chain: "Wayfinder's Trade",
-    summary: 'Topple the Glacier Matron and 8 Rimefangs on the Frost Shelf.',
+    summary: 'Topple the Glacier Matron and 8 Hoarhounds on the Frost Shelf.',
     dialog: {
       offer:
-        'Rare stock from far roads, and I trade it only for hard work. The Glacier Matron leads the Rimefang pack on the Frost Shelf; topple her and eight of her pack. Then the expanse is yours.',
+        'Rare stock from far roads, and I trade it only for hard work. The Glacier Matron leads the Hoarhound pack on the Frost Shelf; topple her and eight of her pack. Then the expanse is yours.',
       progress: 'She breathes rime in a wide cone, so step around it, not back. Her pack runs ahead of her; thin it first.',
       complete: 'You came back from the Matron. Essence of Expanse: spins, novas and strikes reach wider with it. Far roads, far reach.',
     },
-    requires: [ARRIVED_RIFT_ROAD],
+    after: ['korrin_needle_point'],
+    requires: [ARRIVED_RIFT_ROAD, { type: 'level', min: 14 }],
     objectives: [
       { kind: 'kill', monster: 'glacier_matron', count: 1 },
       { kind: 'kill', monster: 'rimefang', count: 8 },
     ],
-    rewards: { lesson: 'korrin_essence_expanse', coins: 120, exp: 300 },
+    rewards: { lesson: 'korrin_essence_expanse', exp: 360 },
     repeatable: bounty(20),
   },
   {
@@ -615,14 +618,15 @@ export const QUESTS: QuestDef[] = [
       progress: 'Just set foot on each and come back; no one asked you to fight the ridge. Stormwood grows by this road and along Thunderhead Ridge.',
       complete: 'Your stride has changed already; you step where the ground is going to be. That speed stays with you. Same walk, any time.',
     },
-    requires: [ARRIVED_RIFT_ROAD],
+    after: ['korrin_needle_point'],
+    requires: [ARRIVED_RIFT_ROAD, { type: 'level', min: 15 }],
     objectives: [
       { kind: 'visit', map: 'rift.frost_shelf' },
       { kind: 'visit', map: 'rift.basalt_steps' },
       { kind: 'visit', map: 'rift.thunderhead_ridge' },
       { kind: 'deliver', item: 'storm_wood', count: 4 },
     ],
-    rewards: { lesson: 'korrin_pathfinder', coins: 40, exp: 200 },
+    rewards: { lesson: 'korrin_pathfinder', exp: 220 },
     repeatable: bounty(20),
   },
 
@@ -632,19 +636,19 @@ export const QUESTS: QuestDef[] = [
     name: 'Stones That Remember',
     giver: 'mirelle',
     chain: 'Waystones',
-    summary: 'Wake the waystones on Windcrest Hill and in Quarry Depths I.',
+    summary: 'Walk to the waystones on Windcrest Hill and in Quarry Depths I.',
     dialog: {
       offer:
-        'Touch a waystone once and it remembers you; after that I can send you to any stone you have woken. Two sleep nearby, one on Windcrest Hill and one just inside the Quarry Depths. Wake them both, and choose your resting stone with care: you wake beside it if you fall.',
+        'Touch a waystone once and it remembers you; after that I can send you to any stone you have woken. Two sleep nearby, one on Windcrest Hill and one just inside the Quarry Depths, so walk to both and lay a hand on each. Choose your resting stone with care: you wake beside it if you fall.',
       progress: 'Windcrest Hill is past Mirror Lake to the north-east; the Depths open off Greystone Quarry, east of town. Touch the stone and it glows.',
       complete:
-        'Both stones remember you now. Travel between stones in the Vale is free, and crossing to another region costs a few coins. Here is a waystone shard for when you need to come home in a hurry.',
+        'You found both stones, and any stone you touch will remember you. Travel between stones in the Vale is free, and crossing to another region costs a few coins. Here is a waystone shard for when you need to come home in a hurry.',
     },
     objectives: [
       { kind: 'visit', map: 'vale.windcrest_hill' },
       { kind: 'visit', map: 'vale.quarry_depths.1' },
     ],
-    rewards: { coins: 40, exp: 60, items: { waystone_shard: 1 } },
+    rewards: { coins: 40, exp: 40, items: { waystone_shard: 1 } },
   },
   {
     id: 'mirelle_same_purse',
@@ -662,7 +666,7 @@ export const QUESTS: QuestDef[] = [
     },
     after: ['mirelle_stones_remember'],
     objectives: [{ kind: 'visit', map: 'vale.emberwatch' }],
-    rewards: { coins: 70, exp: 90 },
+    rewards: { coins: 70, exp: 60 },
   },
   {
     id: 'mirelle_altar_hums',
@@ -678,7 +682,7 @@ export const QUESTS: QuestDef[] = [
         'Listen to it hum. An element joined to a skill changes how it hits and what it is strong against, and essences or a second skill can be laid on the altar too. Here is something to experiment with.',
     },
     objectives: [state({ type: 'tagCount', tags: ['infused'], count: 1 }, 'Infuse a skill with an element at an altar')],
-    rewards: { essences: { reprise: 1 }, coins: 60, exp: 120 },
+    rewards: { essences: { reprise: 1 }, coins: 60, exp: 80 },
   },
 
   // ================================================================ emberwatch · Mirelle (waykeeper)
@@ -695,7 +699,7 @@ export const QUESTS: QuestDef[] = [
       complete: 'You found the fire; I can smell the smoke on you. Same Mirelle, same purse: here is something for the walk back up.',
     },
     objectives: [{ kind: 'visit', map: 'vale.hollow_barrow.3' }],
-    rewards: { coins: 90, exp: 160, items: { waystone_shard: 1 } },
+    rewards: { coins: 90, exp: 100, items: { waystone_shard: 1 } },
   },
   {
     id: 'mirelle_2_sealed_door',
@@ -707,11 +711,11 @@ export const QUESTS: QuestDef[] = [
       offer:
         'Past the camp sleeps a door that wants both shadow and light. Carry both elements and it will open for you. What lies behind it, I only know from the notes on the stones.',
       progress: 'Shadow comes from the obelisk in Gloomwood once you have felled five Gloomcaps. Holy light is Sister Alba\'s to give.',
-      complete: 'Twilight, painted on a chest lid? Then the notes were right. Keep what you found; I only wanted to know it was true.',
+      complete: 'The door opened for you, then. If the notes on the stones were right, the vault keeps an old secret. Keep what you found; I only wanted to know it was true.',
     },
     after: ['mirelle_2_barrow_camp'],
     objectives: [{ kind: 'visit', map: 'vale.barrow_vault' }],
-    rewards: { coins: 120, exp: 200, items: { sun_water: 1 } },
+    rewards: { coins: 120, exp: 130, items: { sun_water: 1 } },
   },
 
   // ================================================================ hearthvale · Tamsin (loremaster)
@@ -729,7 +733,7 @@ export const QUESTS: QuestDef[] = [
         'There it is, worn well. Every skill that suits it now raises its Class Rank, and each rank buys a step along its tree. Here is a riddle for a calling that walks a lighter road.',
     },
     objectives: [state(CLASS_WORN, 'Discover a class (the first is worn at once)')],
-    rewards: { whisper: 'wayfarer', coins: 40, exp: 80 },
+    rewards: { whisper: 'wayfarer', coins: 40, exp: 50 },
   },
   {
     id: 'tamsin_blademaster_imprint',
@@ -747,7 +751,7 @@ export const QUESTS: QuestDef[] = [
     after: ['tamsin_first_calling'],
     requires: [{ type: 'class', id: 'blademaster' }],
     objectives: [state({ type: 'class', id: 'blademaster', rank: 5 }, 'Raise Blademaster to Class Rank 5')],
-    rewards: { whisper: 'sword_saint', coins: 100, exp: 160 },
+    rewards: { whisper: 'sword_saint', coins: 100, exp: 100 },
   },
   {
     id: 'tamsin_arcanist_imprint',
@@ -765,7 +769,7 @@ export const QUESTS: QuestDef[] = [
     after: ['tamsin_first_calling'],
     requires: [{ type: 'class', id: 'arcanist' }],
     objectives: [state({ type: 'class', id: 'arcanist', rank: 5 }, 'Raise Arcanist to Class Rank 5')],
-    rewards: { whisper: 'archmage', coins: 100, exp: 160 },
+    rewards: { whisper: 'archmage', coins: 100, exp: 100 },
   },
   {
     id: 'tamsin_shadowstalker_imprint',
@@ -783,7 +787,61 @@ export const QUESTS: QuestDef[] = [
     after: ['tamsin_first_calling'],
     requires: [{ type: 'class', id: 'shadowstalker' }],
     objectives: [state({ type: 'class', id: 'shadowstalker', rank: 5 }, 'Raise Shadowstalker to Class Rank 5')],
-    rewards: { whisper: 'phantom', coins: 100, exp: 160 },
+    rewards: { whisper: 'phantom', coins: 100, exp: 100 },
+  },
+  {
+    id: 'tamsin_pyroblade_imprint',
+    name: "The Pyroblade's Mark",
+    giver: 'tamsin',
+    chain: 'The Codex',
+    summary: 'Raise Pyroblade to Class Rank 5.',
+    dialog: {
+      offer:
+        'Pyroblade suits you. Wear it and fight with burning edges until it reaches Class Rank five. At that rank a class leaves an Imprint, a trace you can carry even while wearing another.',
+      progress: 'Only fiery blade skills feed this calling, and the worn class takes the larger share. Fight foes worth your time; easy kills teach a class nothing.',
+      complete:
+        'Rank five, and the Imprint is yours to slot. Past the First Tier a burning blade grows heavier still, but it asks for rank ten first. Here is its riddle.',
+    },
+    after: ['tamsin_first_calling'],
+    requires: [{ type: 'class', id: 'pyroblade' }],
+    objectives: [state({ type: 'class', id: 'pyroblade', rank: 5 }, 'Raise Pyroblade to Class Rank 5')],
+    rewards: { whisper: 'magma_knight', coins: 100, exp: 100 },
+  },
+  {
+    id: 'tamsin_tempest_dancer_imprint',
+    name: "The Tempest Dancer's Mark",
+    giver: 'tamsin',
+    chain: 'The Codex',
+    summary: 'Raise Tempest Dancer to Class Rank 5.',
+    dialog: {
+      offer:
+        'Tempest Dancer suits you. Wear it and keep turning until it reaches Class Rank five. At that rank a class leaves an Imprint, a trace you can carry even while wearing another.',
+      progress: 'Only spinning skills feed this calling, and the worn class takes the larger share. Fight foes worth your time; easy kills teach a class nothing.',
+      complete:
+        'Rank five, and the Imprint is yours to slot. Past the First Tier the dance never stops, for rank ten and four honed turns. Here is its riddle.',
+    },
+    after: ['tamsin_first_calling'],
+    requires: [{ type: 'class', id: 'tempest_dancer' }],
+    objectives: [state({ type: 'class', id: 'tempest_dancer', rank: 5 }, 'Raise Tempest Dancer to Class Rank 5')],
+    rewards: { whisper: 'vortex_dancer', coins: 100, exp: 100 },
+  },
+  {
+    id: 'tamsin_elementalist_imprint',
+    name: "The Elementalist's Mark",
+    giver: 'tamsin',
+    chain: 'The Codex',
+    summary: 'Raise Elementalist to Class Rank 5.',
+    dialog: {
+      offer:
+        'Elementalist suits you. Wear it and fight in every colour you carry until it reaches Class Rank five. At that rank a class leaves an Imprint, a trace you can carry even while wearing another.',
+      progress: 'Infused skills feed this calling, and the worn class takes the larger share. Fight foes worth your time; easy kills teach a class nothing.',
+      complete:
+        'Rank five, and the Imprint is yours to slot. Past the First Tier waits a deeper study, for rank ten and more colours than three. Here is its riddle.',
+    },
+    after: ['tamsin_first_calling'],
+    requires: [{ type: 'class', id: 'elementalist' }],
+    objectives: [state({ type: 'class', id: 'elementalist', rank: 5 }, 'Raise Elementalist to Class Rank 5')],
+    rewards: { whisper: 'prism_sage', coins: 100, exp: 100 },
   },
 
   // ================================================================ greenmeadow · Lio
@@ -800,7 +858,7 @@ export const QUESTS: QuestDef[] = [
         'Whoa! There is a sparkly bit of air out on Mirror Lake that went all wobbly when I ran at it. Bet if you zoom at it, something happens!',
     },
     objectives: [{ kind: 'cast', shape: 'dash', map: 'vale.greenmeadow', count: 3 }],
-    rewards: { coins: 25, exp: 40, items: { blink_seed: 1 } },
+    rewards: { coins: 25, exp: 30, items: { blink_seed: 1 } },
   },
   {
     id: 'child_lio_wobbly_king',
@@ -810,12 +868,12 @@ export const QUESTS: QuestDef[] = [
     summary: 'Defeat the Jellop Monarch in Greenmeadow.',
     dialog: {
       offer:
-        'Gran says when there are enough Jellops they get a king, a big wobbly king with a big wobbly crown! I saw him by the flowers. Can you bonk him?',
+        'Gran says when there are enough Jellops they get a king, a big wobbly king with a big wobbly crown! I saw him by the old standing stones. Can you bonk him?',
       progress: 'He is bigger than the others and he does a big squishy SLAM. Watch out for the slam!',
       complete: 'You bonked the king! If you see him slam enough times, maybe you can learn it too. Here, I found this in the grass.',
     },
     objectives: [{ kind: 'kill', monster: 'jellop_monarch', count: 1 }],
-    rewards: { coins: 30, exp: 90, items: { healing_draught: 1 } },
+    rewards: { coins: 30, exp: 60, items: { healing_draught: 1 } },
   },
   {
     id: 'child_lio_frozen_lake',
@@ -825,12 +883,12 @@ export const QUESTS: QuestDef[] = [
     summary: 'Cast an ice skill at Mirror Lake three times for Lio.',
     dialog: {
       offer: 'If the lake got hard, I could walk on it and not fall in! Can you make ice? Do it at Mirror Lake, three times!',
-      progress: 'Gran says ice is water and wind holding hands. You have to ask the altar in town nicely.',
+      progress: 'Gran says the lake goes hard when it gets a really, really cold breath. Maybe the altar in town knows how!',
       complete: 'It went all crunchy! I am never falling in again. You can have my best coins.',
     },
     after: ['child_lio_really_fast'],
     objectives: [{ kind: 'cast', element: 'ice', map: 'vale.mirror_lake', count: 3 }],
-    rewards: { coins: 60, exp: 120, items: { mana_draught: 1 } },
+    rewards: { coins: 60, exp: 80, items: { mana_draught: 1 } },
   },
 
   // ================================================================ greystone_quarry · Gus
@@ -844,13 +902,13 @@ export const QUESTS: QuestDef[] = [
       offer:
         'Ten good hauls of ore and the stone starts talking back to you; funny how that works. Mine ten from the rock face, and knock six Craglings off my floor while you are at it. They keep sitting on the good seams.',
       progress: 'Tap a rock face and hold still while you chip. Craglings crack under fire; wind and lightning just scatter off them.',
-      complete: 'Hear that? The earth is answering you now. And here is a pinch of Cragling dust I swept up; it makes a blow land heavier.',
+      complete: 'Hear that? The earth is answering you now. And here is a chip off the deep seam I have been saving; lay it on a blow and it lands heavier.',
     },
     objectives: [
       { kind: 'gather', node: 'ore', count: 10 },
       { kind: 'kill', monster: 'cragling', count: 6 },
     ],
-    rewards: { essences: { heavy: 1 }, coins: 60, exp: 110 },
+    rewards: { essences: { heavy: 1 }, coins: 60, exp: 70 },
   },
   {
     id: 'miner_gus_stand_in_its_way',
@@ -868,7 +926,7 @@ export const QUESTS: QuestDef[] = [
     },
     after: ['miner_gus_good_haul'],
     objectives: [{ kind: 'witness', skill: 'boulder_roll', count: 3 }],
-    rewards: { whisper: 'mimic', coins: 80, exp: 200, items: { healing_draught: 1 } },
+    rewards: { whisper: 'mimic', coins: 80, exp: 130, items: { healing_draught: 1 } },
   },
   {
     id: 'miner_gus_rootbound',
@@ -885,7 +943,7 @@ export const QUESTS: QuestDef[] = [
     },
     after: ['miner_gus_good_haul'],
     objectives: [{ kind: 'kill', monster: 'ironroot_colossus', count: 1 }],
-    rewards: { coins: 250, exp: 400, items: { ore: 8 } },
+    rewards: { coins: 250, exp: 260, items: { ore: 8 } },
   },
 
   // ================================================================ cinder_fields · Rhea
@@ -900,14 +958,14 @@ export const QUESTS: QuestDef[] = [
       offer:
         'You picked a hot day to scout. Collect three shards from the ember vents and drive off six Ashflies, then take my report to Quartermaster Vey at Emberwatch. The outpost gate is at the far side of the fields.',
       progress: 'Vents cough up shards when you work them, and Ashflies spit from range, so keep moving. Vey is the one with the voice.',
-      complete: "Rhea's report, carried through the ash in one piece. Good. Come back wearing a calling and I will make a soldier of you.",
+      complete: "Rhea's report, carried through the ash in one piece; she will want you back on the fields. Come back to me wearing a calling and I will make a soldier of you.",
     },
     objectives: [
       { kind: 'gather', node: 'ember_vent', count: 3 },
       { kind: 'kill', monster: 'ashfly', count: 6 },
       { kind: 'visit', map: 'vale.emberwatch' },
     ],
-    rewards: { coins: 90, exp: 150 },
+    rewards: { coins: 90, exp: 100 },
   },
   {
     id: 'scout_rhea_thin_the_pack',
@@ -923,10 +981,10 @@ export const QUESTS: QuestDef[] = [
     },
     after: ['scout_rhea_eyes_on_ash'],
     objectives: [
-      { kind: 'kill', monster: 'emberkit', count: 10 },
+      { kind: 'kill', monster: 'emberkit', rank: 'common', count: 10 },
       { kind: 'kill', monster: 'emberkit_alpha', count: 1 },
     ],
-    rewards: { essences: { flurry: 1 }, coins: 120, exp: 220 },
+    rewards: { essences: { flurry: 1 }, coins: 120, exp: 140 },
   },
   {
     id: 'scout_rhea_prism_gate',
@@ -946,7 +1004,7 @@ export const QUESTS: QuestDef[] = [
       { kind: 'visit', map: 'vale.stormbreak' },
       { kind: 'kill', monster: 'thunderhoof', count: 1 },
     ],
-    rewards: { coins: 300, exp: 500, items: { healing_draught: 2 } },
+    rewards: { coins: 300, exp: 320, items: { healing_draught: 2 } },
   },
 
   // ================================================================ riftmarch · Ione (archivist)
@@ -972,17 +1030,17 @@ export const QUESTS: QuestDef[] = [
     name: 'The Hour Between',
     giver: 'ione',
     chain: 'The Archive',
-    summary: 'Attune Twilight by fusing shadow and holy light at an altar.',
+    summary: 'Attune Twilight, the element of the hour between.',
     dialog: {
       offer:
-        'Neither night nor day, but the hour that holds both: twilight is a fused element, made rather than found. Lay shadow beside holy light on an altar and carry the result back to me. Callings sleep in that hour that sleep nowhere else.',
-      progress: "Shadow and holy, element to element, on the same altar. If you lack one, the Vale has both: Gloomwood's obelisk and Sister Alba's chapel.",
+        'Twilight is an element made at an altar, never found in the wild. The painted lid in the Barrow Vault, beneath Hollow Barrow, tells how it is made. Callings sleep in that hour that sleep nowhere else.',
+      progress: 'Two lights that cannot abide each other, held together on one altar. The Vale holds both, if you know where to look.',
       complete:
-        'Twilight sits in you now, and the Dusk Orchard to the south will feel familiar. Here is the riddle of a Third Tier walker between light and dark. Read it twice.',
+        'Twilight sits in you now, and the Dusk Orchard to the south will feel familiar. Here is the riddle of a calling that lives in that hour. Read it twice.',
     },
     after: ['ione_honed_not_collected'],
     objectives: [state({ type: 'element', id: 'twilight' }, 'Attune Twilight')],
-    rewards: { whisper: 'eclipse_walker', essences: { reprise: 1 }, coins: 150, exp: 250 },
+    rewards: { whisper: 'twilight_sage', essences: { reprise: 1 }, coins: 150, exp: 250 },
   },
   {
     id: 'ione_warden_relics',
@@ -1035,7 +1093,8 @@ export const QUESTS: QuestDef[] = [
       progress: 'Duskhounds hunt at the edge of the orchard. Holy light cuts through twilight, if you carry it.',
       complete: 'Eight fewer at my stone tonight. The orchard keeps stranger things deeper in, but that is a tale for when you are stronger. Here, for the road.',
     },
-    requires: [ARRIVED_RIFTMARCH],
+    after: ['dask_lovely_handwriting'],
+    requires: [ARRIVED_RIFTMARCH, { type: 'level', min: 18 }],
     objectives: [
       { kind: 'visit', map: 'rift.dusk_orchard' },
       { kind: 'kill', monster: 'duskhound', count: 8 },

@@ -34,7 +34,7 @@ export const CORNER = { NW: 1, NE: 2, SW: 4, SE: 8 } as const;
  * Edge families = rows of the 'tiles_edge' atlas. Soft families are named after the terrain that spills OVER its
  * lower-precedence neighbours; `foam`/`lavaglow`/`abyss` are underlays drawn on liquid/void cells beneath the land's
  * edge; `*_face` pieces go on wall cells (mask = corners touching floor), `*_rim` pieces on floor cells next to walls
- * (mask = corners touching that wall).
+ * (mask = corners touching that wall); `bridge_rim` puts a deck's side beam, posts and shadow on water/void next to it.
  */
 export const EDGE_FAMILIES = [
   'foam',
@@ -63,6 +63,7 @@ export const EDGE_FAMILIES = [
   'cavewall_rim',
   'crypt_face',
   'crypt_rim',
+  'bridge_rim',
 ] as const;
 export type EdgeFamily = (typeof EDGE_FAMILIES)[number];
 
@@ -112,6 +113,7 @@ export const DECAL_SETS = [
   'ember',
   'basalt',
   'water',
+  'pond',
   'lava',
   'rock',
 ] as const;
@@ -122,6 +124,9 @@ const DECAL_SET_INDEX: Readonly<Record<DecalSet, number>> = Object.fromEntries(D
 export function decalFrame(set: DecalSet | number, k: number): number {
   return (typeof set === 'number' ? set : DECAL_SET_INDEX[set]) * DECALS_PER_SET + (k % DECALS_PER_SET);
 }
+
+/** Biomes whose open water gets lily pads. */
+const POND_BIOMES: ReadonlySet<string> = new Set(['meadow', 'lake', 'town', 'grove', 'glade', 'dusk', 'hill']);
 
 /** Decal set and expected decals per (uniform) cell, by tile id. */
 const DECAL_RULES: Readonly<Partial<Record<number, [DecalSet, number]>>> = {
@@ -267,7 +272,7 @@ export interface TerrainLayers {
   base: Uint16Array;
   /** Edge pieces in draw order (cells ascending; within a cell: underlays, soft edges by precedence, wall rim/face). */
   overlays: TerrainOverlay[];
-  /** Detail sprites drawn after the overlays, only on cells whose 3x3 neighbourhood is one terrain. */
+  /** Detail sprites drawn after the overlays, only on cells that received no overlay. */
   decals: TerrainDecal[];
 }
 
@@ -307,6 +312,36 @@ export function computeTerrainLayers(cm: CompiledMap): TerrainLayers {
   };
   const soft: number[] = [];
 
+  /** Overlays for one non-uniform cell (n[] holds its 3x3 neighbourhood). */
+  const layerCell = (x: number, y: number, t: number) => {
+    if (isWall(t)) {
+      // face / lit lip on the wall itself: corners that touch any non-wall cell
+      push(x, y, WALL_FAMILIES[t].face, maskOf((v) => !isWall(v)));
+      return;
+    }
+    // 1) underlays on liquids and the void
+    // (no foam where a bridge deck abuts: the foam line would cut across the open water beside it)
+    if (isWater(t)) {
+      if (!n.includes(T.BRIDGE)) push(x, y, FAMILY_INDEX.foam, maskOf((v) => isShoreLand(v)));
+    }
+    else if (t === T.LAVA) push(x, y, FAMILY_INDEX.lavaglow, maskOf((v) => isShoreLand(v)));
+    else if (t === T.VOID) push(x, y, FAMILY_INDEX.abyss, maskOf((v) => isShoreLand(v) && !isWall(v)));
+    // 2) soft terrains of higher precedence, ascending
+    const myPrec = PRECEDENCE[t];
+    soft.length = 0;
+    for (let i = 0; i < 9; i++) {
+      const c = TERRAIN_CLASS[n[i]];
+      if (SOFT_FAMILY[c] < 0 || PRECEDENCE[c] <= myPrec || soft.includes(c)) continue;
+      soft.push(c);
+    }
+    soft.sort((a, b) => PRECEDENCE[a] - PRECEDENCE[b]);
+    for (const c of soft) push(x, y, SOFT_FAMILY[c], maskOf((v) => TERRAIN_CLASS[v] === c));
+    // 3) wall rims (outline + cast shadow) on the floor side; walls simply end in darkness over the void
+    if (t !== T.VOID) for (const wt of [T.CLIFF, T.CAVE_WALL, T.CRYPT_WALL]) push(x, y, WALL_FAMILIES[wt].rim, maskOf((v) => v === wt));
+    // 4) bridge decks: side beam, posts and shadow on the water / void beside them
+    if (isWater(t) || t === T.VOID || t === T.LAVA) push(x, y, FAMILY_INDEX.bridge_rim, maskOf((v) => v === T.BRIDGE));
+  };
+
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
       const t = ground[y * w + x];
@@ -319,46 +354,24 @@ export function computeTerrainLayers(cm: CompiledMap): TerrainLayers {
           n[k++] = v;
           if (TERRAIN_CLASS[v] !== TERRAIN_CLASS[t]) uniform = false;
         }
-      if (uniform) {
-        const rule = DECAL_RULES[t];
+      const before = overlays.length;
+      if (!uniform) layerCell(x, y, t);
+      // decals only where nothing is drawn over this cell's base (no spill from a neighbour, no wall pieces)
+      if (overlays.length === before) {
+        let rule = DECAL_RULES[t];
         if (!rule) continue;
-        const h = cellHash(x, y, seed, 53);
-        const n = Math.floor(rule[1] + (h & 0xffff) / 0x10000);
-        for (let k = 0; k < n; k++) {
-          const hk = cellHash(x, y, seed, 59 + k);
+        if (rule[0] === 'water' && POND_BIOMES.has(cm.def.biome)) rule = ['pond', rule[1]];
+        const hd = cellHash(x, y, seed, 53);
+        const cnt = Math.floor(rule[1] + (hd & 0xffff) / 0x10000);
+        for (let j = 0; j < cnt; j++) {
+          const hk = cellHash(x, y, seed, 59 + j);
           decals.push({
             x: x * TILE_PX + (hk % (TILE_PX - DECAL_PX + 1)),
             y: y * TILE_PX + ((hk >>> 8) % (TILE_PX - DECAL_PX + 1)),
             frame: decalFrame(rule[0], hk >>> 16),
           });
         }
-        continue;
       }
-
-      if (isWall(t)) {
-        // Face / lit lip on the wall itself: corners that touch any non-wall cell.
-        push(x, y, WALL_FAMILIES[t].face, maskOf((v) => !isWall(v)));
-        continue;
-      }
-
-      // 1) underlays on liquids and the void
-      if (isWater(t)) push(x, y, FAMILY_INDEX.foam, maskOf((v) => isShoreLand(v)));
-      else if (t === T.LAVA) push(x, y, FAMILY_INDEX.lavaglow, maskOf((v) => isShoreLand(v)));
-      else if (t === T.VOID) push(x, y, FAMILY_INDEX.abyss, maskOf((v) => isShoreLand(v) && !isWall(v)));
-
-      // 2) soft terrains of higher precedence, ascending
-      const myPrec = PRECEDENCE[t];
-      soft.length = 0;
-      for (let i = 0; i < 9; i++) {
-        const c = TERRAIN_CLASS[n[i]];
-        if (SOFT_FAMILY[c] < 0 || PRECEDENCE[c] <= myPrec || soft.includes(c)) continue;
-        soft.push(c);
-      }
-      soft.sort((a, b) => PRECEDENCE[a] - PRECEDENCE[b]);
-      for (const c of soft) push(x, y, SOFT_FAMILY[c], maskOf((v) => TERRAIN_CLASS[v] === c));
-
-      // 3) wall rims (outline + cast shadow) on the floor side; walls simply end in darkness over the void
-      if (t !== T.VOID) for (const wt of [T.CLIFF, T.CAVE_WALL, T.CRYPT_WALL]) push(x, y, WALL_FAMILIES[wt].rim, maskOf((v) => v === wt));
     }
   }
   return { base, overlays, decals };

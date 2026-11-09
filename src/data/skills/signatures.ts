@@ -256,7 +256,7 @@ export const SIGNATURE_SKILLS: SkillDef[] = [
   {
     id: 'stormreaver_sig',
     name: 'Thunderwheel',
-    desc: 'Stormreaver signature. Become a wheel of thunder: three crackling pulses around you shock every foe in reach.',
+    desc: 'Stormwhirl signature. Become a wheel of thunder: three crackling pulses around you shock every foe in reach.',
     icon: '🌩️',
     tier: 2,
     tags: ['spin', 'aoe', 'melee', 'wind'],

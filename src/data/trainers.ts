@@ -2,9 +2,11 @@ import type { Requirement, TrainerDef } from '../core/types';
 
 // Trainers (SPEC-v2 §4.4 / §8). Trainer ids equal their NPC ids (src/data/npcs.ts).
 // Lesson ids are `<trainer>_<grant>`; every id is unique across all trainers.
-// Costs are paid from the game inventory (SkillBook.inv): coins plus gathered materials
-// (ore, fish, herb, ember_shard, chime_feather, storm_wood, umbral_spore, sun_water, frost_crystal).
-// Passive lessons are repeatable: each purchase raises the passive by one rank, up to its maxRank (3).
+// Every lesson is the reward of exactly one quest (src/data/quests.ts, docs/QUESTS.md). Until the client's quest
+// UI ships, lessons can also still be taken at the trainer: costs are paid from the game inventory
+// (SkillBook.inv), and taking one credits the quest that teaches it. Once the quest UI ships, every lesson gets
+// `questOnly: true` and is taught only as a quest reward. Blurbs describe what a lesson teaches, never its price.
+// Passive lessons are repeatable: each one raises the passive by one rank, up to its maxRank (3).
 
 /** Any authored skill at rank >= minRank (an empty tag list matches every skill). */
 const anySkill = (minRank: number): Requirement => ({ type: 'tagCount', tags: [], count: 1, minRank });
@@ -70,7 +72,7 @@ export const TRAINERS: TrainerDef[] = [
       {
         id: 'brann_crack_armor',
         name: 'Crack Armor',
-        blurb: 'A blade that has seen real use can learn where armor is weakest. Bring ore; we practise on plate.',
+        blurb: 'A blade that has seen real use can learn where armor is weakest: a strike that finds the gap and stuns.',
         grants: { skill: 'crack_armor' },
         requires: [anyTagged('blade', 5)],
         cost: { coins: 80, items: { ore: 20 } },
@@ -95,7 +97,7 @@ export const TRAINERS: TrainerDef[] = [
       {
         id: 'brann_essence_heavy',
         name: 'Essence of Weight',
-        blurb: 'Swept from under the anvil: dust that makes any blow land heavier. One essence per purchase.',
+        blurb: 'Swept from under the anvil: dust that makes any blow land heavier.',
         grants: { essence: 'heavy', count: 1 },
         requires: [],
         cost: { coins: 150 },
@@ -145,7 +147,7 @@ export const TRAINERS: TrainerDef[] = [
       {
         id: 'pell_net_throw',
         name: 'Net Throw',
-        blurb: 'A good net catches more than fish. Bring me a few to mend it with and I will show you the cast.',
+        blurb: 'A good net catches more than fish: a cast that slows whatever it lands on.',
         grants: { skill: 'net_throw' },
         requires: [],
         cost: { items: { fish: 5 } },
@@ -170,7 +172,7 @@ export const TRAINERS: TrainerDef[] = [
       {
         id: 'pell_essence_return',
         name: 'Essence of Returning',
-        blurb: 'Wisp-water in a stoppered jar. Makes a thrown thing come home. One essence per trade.',
+        blurb: 'Wisp-water in a stoppered jar. Makes a thrown thing come home.',
         grants: { essence: 'return', count: 1 },
         requires: [],
         cost: { items: { fish: 6 } },
@@ -246,7 +248,7 @@ export const TRAINERS: TrainerDef[] = [
       {
         id: 'vey_essence_haste',
         name: 'Essence of Haste',
-        blurb: 'Quartermaster stock, traded for ember shards. Makes any technique come round faster.',
+        blurb: 'Quartermaster stock. Makes any technique come round faster.',
         grants: { essence: 'haste', count: 1 },
         requires: [],
         cost: { items: { ember_shard: 5 } },
@@ -264,7 +266,7 @@ export const TRAINERS: TrainerDef[] = [
       {
         id: 'korrin_essence_split',
         name: 'Essence of Splitting',
-        blurb: 'Stormwood splits along the grain, and so does what lives in it. Traded for stormwood.',
+        blurb: 'Stormwood splits along the grain, and so does what lives in it: one shot becomes a fan.',
         grants: { essence: 'split', count: 1 },
         requires: [],
         cost: { items: { storm_wood: 4 } },
@@ -273,7 +275,7 @@ export const TRAINERS: TrainerDef[] = [
       {
         id: 'korrin_essence_arc',
         name: 'Essence of Arcing',
-        blurb: 'Charge drawn out of ridge-struck wood. Lets a hit leap to the next foe. Traded for stormwood.',
+        blurb: 'Charge drawn out of ridge-struck wood. Lets a hit leap to the next foe.',
         grants: { essence: 'arc', count: 1 },
         requires: [],
         cost: { items: { storm_wood: 5 } },
@@ -282,7 +284,7 @@ export const TRAINERS: TrainerDef[] = [
       {
         id: 'korrin_essence_pierce',
         name: 'Essence of Piercing',
-        blurb: 'Frost crystal ground to a needle point. Traded for crystals from the shelf.',
+        blurb: 'Frost crystal ground to a needle point: projectiles pass through foes and keep going.',
         grants: { essence: 'pierce', count: 1 },
         requires: [],
         cost: { items: { frost_crystal: 4 } },
@@ -291,7 +293,7 @@ export const TRAINERS: TrainerDef[] = [
       {
         id: 'korrin_essence_expanse',
         name: 'Essence of Expanse',
-        blurb: 'Rare stock from far roads. No barter for this one: coin only.',
+        blurb: 'Rare stock from far roads: spins, novas and strikes reach wider.',
         grants: { essence: 'expanse', count: 1 },
         requires: [],
         cost: { coins: 300 },

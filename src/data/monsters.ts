@@ -754,7 +754,7 @@ export const MONSTERS: MonsterDef[] = [
   },
   {
     id: 'rimefang',
-    name: 'Rimefang',
+    name: 'Hoarhound',
     ...stats(14, 'common', { atk: 1.1 }),
     element: 'ice',
     elementLevel: 1,

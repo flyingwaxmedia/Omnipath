@@ -47,6 +47,10 @@ export class UI implements PanelHost {
   private panel: string | null = null;
   private panelArg: string | undefined;
   private discoveries: DiscoveryCard[] = [];
+  /** Cards that arrived mid-fight (see discovery()). */
+  private held: DiscoveryCard[] = [];
+  private holdSince: number | null = null;
+  private holdTimer: number | null = null;
   private showingDiscovery = false;
   private pendingDialog: (() => void) | null = null;
 
@@ -249,7 +253,28 @@ export class UI implements PanelHost {
   }
 
   discovery(card: DiscoveryCard): void {
+    // Mid-fight cards (mastered, class rank, passive, essence, echo…) wait until the fight is over: the playtest saw
+    // a Class Rank card pause the game in the middle of the Thunderhoof fight.
+    if (this.ctrl.inCombat?.()) {
+      this.held.push(card);
+      this.holdSince ??= Date.now();
+      this.holdTimer ??= window.setInterval(() => this.releaseHeld(), 500);
+      return;
+    }
     this.discoveries.push(card);
+    if (!this.showingDiscovery && this.panel !== 'dialog' && this.panel !== 'minigame') this.nextDiscovery();
+  }
+
+  /** Shows held cards once the fight is over (or after 30 s anyway). */
+  private releaseHeld(): void {
+    const long = this.holdSince !== null && Date.now() - this.holdSince > 30000;
+    if (this.held.length && this.ctrl.inCombat?.() && !long) return;
+    window.clearInterval(this.holdTimer ?? undefined);
+    this.holdTimer = null;
+    this.holdSince = null;
+    const cards = this.held.splice(0);
+    if (!cards.length) return;
+    this.discoveries.push(...cards);
     if (!this.showingDiscovery && this.panel !== 'dialog' && this.panel !== 'minigame') this.nextDiscovery();
   }
 

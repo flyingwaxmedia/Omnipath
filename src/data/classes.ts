@@ -379,7 +379,7 @@ const SEEDS: ClassSeed[] = [
   },
   {
     id: 'stormreaver',
-    name: 'Stormreaver',
+    name: 'Stormwhirl',
     icon: '⚡',
     desc: 'Catches the lightning mid-air and spins it into a wheel.',
     hint: 'Catch the thunder and spin it: a tried Stormcaller who also dances the tempest.',

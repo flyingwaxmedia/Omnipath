@@ -4,7 +4,7 @@
 // SkillBook also uses it as its defensive copy. Storage keys and I/O belong to the game layer.
 import { classMaxRank, classXpToNext, imprintSlots, imprintUnlocked } from './classes';
 import { MASTERY, overmasteryCost, xpToNext } from './mastery';
-import { QUEST_TRACK_LIMIT, counterNeed } from './quests';
+import { QUEST_TRACK_LIMIT, counterNeed, creditLessonQuests } from './quests';
 import type { Registry } from './registry';
 import { hashSeed } from './rng';
 import { SPARK } from './spark';
@@ -201,7 +201,10 @@ const insideBar = (xp: number, size: number): number => (xp < size ? xp : Math.m
  * bar, or at most one full overmastery bar at max rank, which may hold full), class ranks to their
  * tier cap and XP to the Class Rank curve (0 at max), unknown elements dropped, imprints limited to
  * discovered, unlocked classes within the unlocked slots, and `mastered_any` set when a skill is maxed.
- * Ids the registry does not know are kept untouched (content may come back).
+ * Quests: counters fit the current objectives, a completed non-repeatable quest loses a stale active
+ * entry, tracked ids must be known quests, and quests teaching lessons already in `state.lessons` count
+ * as completed (quests.creditLessonQuests). Ids the registry does not know are kept untouched (content
+ * may come back).
  */
 function settle(state: SkillBookState, reg: Registry): void {
   for (const p of Object.values(state.skills)) {
@@ -232,11 +235,24 @@ function settle(state: SkillBookState, reg: Registry): void {
     })
     .slice(0, imprintSlots(reg, state));
   // Quest counters follow the current objectives: one per objective, capped at its need (live
-  // objectives — deliver, state — keep 0).
-  for (const [id, entry] of Object.entries(state.quests?.active ?? {})) {
-    const quest = reg.quest(id);
-    if (!quest) continue;
-    entry.progress = quest.objectives.map((o, i) => Math.min(counterNeed(o), entry.progress[i] ?? 0));
+  // objectives — deliver, state — keep 0). A non-repeatable quest already completed cannot be active
+  // again (it would pay twice).
+  const quests = state.quests;
+  if (quests) {
+    for (const [id, entry] of Object.entries(quests.active)) {
+      const quest = reg.quest(id);
+      if (!quest) continue;
+      if (!quest.repeatable && (quests.done[id] ?? 0) >= 1) {
+        delete quests.active[id];
+        continue;
+      }
+      entry.progress = quest.objectives.map((o, i) => Math.min(counterNeed(o), entry.progress[i] ?? 0));
+    }
+    // Tracker slots only for quests the content knows (an unknown active entry is kept, untracked, in
+    // case the content comes back).
+    quests.tracked = quests.tracked.filter((id) => Object.hasOwn(quests.active, id) && reg.quest(id) !== undefined);
+    // Lessons taken before quests taught them credit the quest that now teaches each one.
+    creditLessonQuests(reg, state, state.lessons);
   }
 }
 

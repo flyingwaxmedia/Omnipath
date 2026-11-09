@@ -360,12 +360,12 @@ function dirtGround(g: DirtLook): Ground {
 
 const PATH_LOOK: DirtLook = {
   base: '#a08a63',
-  dark: '#86704f',
-  light: '#b39e78',
-  stone: '#b8a888',
-  stoneHi: '#d2c4a4',
-  pebbles: 3,
-  specks: 6,
+  dark: '#8a7553',
+  light: '#b09b75',
+  stone: '#b5a585',
+  stoneHi: '#cbbd9d',
+  pebbles: 1,
+  specks: 5,
 };
 
 interface WaterLook {
@@ -474,39 +474,27 @@ function iceGround(): Ground {
   return {
     base,
     deco(b, rnd, place, v, density) {
-      const n = count(rnd, v === 1 ? 2 : v === 2 ? 0 : 1, density);
-      for (let i = 0; i < n; i++) {
-        const len = 5 + ri(rnd, 5);
-        const p = place(len, len);
-        if (!p) continue;
-        const [x, y] = p;
-        for (let k = 0; k < len; k++) {
-          b.set(x + k, y + len - 1 - k, hx(ICE_LOOK.light));
-          if (k % 2 === 0 && k < len - 1) b.set(x + k + 1, y + len - 1 - k, hx(ICE_LOOK.hi));
-        }
-      }
-      const nc = count(rnd, v === 2 ? 2 : 1, density);
-      for (let i = 0; i < nc; i++) {
-        const p = place(7, 3);
-        if (!p) continue;
-        let [x, y] = p;
-        y += 1;
-        for (let k = 0; k < 7; k++) {
-          b.set(x + k, y, hx(ICE_LOOK.deep));
-          b.set(x + k, y + 1, hx(ICE_LOOK.light));
-          if (rnd() < 0.3) y = clamp(y + (rnd() < 0.5 ? -1 : 1), p[1], p[1] + 1);
-        }
-        x += 0;
-      }
+      // calm sheet: a faint frost streak in v1 only; decals add cracks and glints at random spots
       if (v === 1 && rnd() < density) {
-        const p = place(3, 3, 2);
+        const len = 5 + ri(rnd, 4);
+        const p = place(len, len);
+        if (p) for (let k = 0; k < len; k += 1) b.set(p[0] + k, p[1] + len - 1 - k, hx(ICE_LOOK.light));
+      }
+      if (density < 1 && rnd() < 0.5) {
+        const p = place(7, 3);
         if (p) {
-          b.set(p[0] + 1, p[1], hx(ICE_LOOK.hi));
-          b.set(p[0], p[1] + 1, hx(ICE_LOOK.hi));
-          b.set(p[0] + 1, p[1] + 1, hx('#ffffff'));
-          b.set(p[0] + 2, p[1] + 1, hx(ICE_LOOK.hi));
-          b.set(p[0] + 1, p[1] + 2, hx(ICE_LOOK.hi));
+          let y = p[1] + 1;
+          for (let k = 0; k < 7; k++) {
+            b.set(p[0] + k, y, mixc(base, hx(ICE_LOOK.deep), 0.6));
+            b.set(p[0] + k, y + 1, hx(ICE_LOOK.light));
+            if (rnd() < 0.3) y = clamp(y + (rnd() < 0.5 ? -1 : 1), p[1], p[1] + 1);
+          }
         }
+      }
+      const ns = count(rnd, 2, density);
+      for (let i = 0; i < ns; i++) {
+        const p = place(2, 1, 1);
+        if (p) b.set(p[0], p[1], rnd() < 0.5 ? hx(ICE_LOOK.light) : mixc(base, hx(ICE_LOOK.dark), 0.5));
       }
     },
   };
@@ -721,75 +709,6 @@ interface Stone {
   seed: number;
 }
 
-/** Toroidal cobble layout (shared by every variant so edges always match). */
-const COBBLES: readonly Stone[] = (() => {
-  const rnd = artRng(keySeed('cobble-layout'));
-  const out: Stone[] = [];
-  for (let row = 0; row < 4; row++) {
-    let x = ri(rnd, S);
-    let left = S;
-    while (left > 0) {
-      let w = 7 + ri(rnd, 5);
-      if (left - w < 7) w = left;
-      const h = 6 + (rnd() < 0.5 ? 1 : 0);
-      out.push({ x: x % S, y: row * 8 + (h === 6 ? ri(rnd, 2) : 0), w, h, wraps: (x % S) + w > S, seed: out.length * 131 + 7 });
-      x += w;
-      left -= w;
-    }
-  }
-  return out;
-})();
-
-const COBBLE = { mortar: hx('#544f47'), body: hx('#9a9488'), hi: hx('#b9b3a6'), lo: hx('#78726a'), moss: hx('#6a7e45') };
-
-/** One cobble stone (wrapped across the tile). `only` restricts drawing to a pixel predicate (edge pieces). */
-function cobbleStone(b: Buf, st: Stone, rnd: Rnd, feature: boolean, only?: (x: number, y: number) => boolean): void {
-  const body = cobbleTone(rnd);
-  const crack = feature && rnd() < 0.5;
-  const moss = feature && !crack;
-  const w = st.w - 1;
-  const h = st.h - 1;
-  for (let j = 0; j < h; j++)
-    for (let i = 0; i < w; i++) {
-      const c = cobblePixel(body, i, j, w, h);
-      if (c < 0) continue;
-      let col = c;
-      if (crack && i === w >> 1 && j > 0 && j < h - 1) col = sh(body, -30);
-      if (moss && j === h - 1 && i > 0 && i < 4) col = COBBLE.moss;
-      const x = (st.x + i) % S;
-      const y = st.y + j;
-      if (!only || only(x, y)) b.set(x, y, col);
-    }
-}
-
-/** Stone tone: warm/cool greys with the odd brownish stone. */
-function cobbleTone(rnd: Rnd): RGB {
-  const tone = sh(COBBLE.body, ri(rnd, 19) - 9);
-  return rnd() < 0.3 ? mixc(tone, hx('#a8957a'), 0.4) : tone;
-}
-
-/** Rounded, top-lit cobble pixel (or -1 outside the rounded corners). */
-function cobblePixel(body: RGB, i: number, j: number, w: number, h: number): number {
-  const cut = (j === 0 || j === h - 1) && (i === 0 || i === w - 1);
-  if (cut) return -1;
-  if (j === 0) return i === 1 ? sh(body, 30) : sh(body, 18);
-  if (j === h - 1) return sh(body, -22);
-  if (j === h - 2) return i === w - 1 ? sh(body, -16) : sh(body, -8);
-  if (i === 0) return sh(body, 10);
-  if (i === w - 1) return sh(body, -12);
-  return body;
-}
-
-function paintCobble(b: Buf, v: number): void {
-  b.fill(COBBLE.mortar);
-  const vr = artRng(keySeed('cobble') + v * 977);
-  const featureAt = v === 0 ? -1 : ri(vr, COBBLES.length);
-  COBBLES.forEach((st, i) => {
-    const rnd = artRng(st.wraps ? st.seed : st.seed + v * 4099);
-    cobbleStone(b, st, rnd, !st.wraps && i === featureAt);
-  });
-}
-
 /** Crypt flagstones: two offset rows of 16 px slabs. */
 const SLABS: readonly Stone[] = [
   { x: 0, y: 0, w: 16, h: 16, wraps: false, seed: 11 },
@@ -798,20 +717,20 @@ const SLABS: readonly Stone[] = [
   { x: 24, y: 16, w: 16, h: 16, wraps: true, seed: 41 },
 ];
 function paintCrypt(b: Buf, v: number): void {
-  const seam = hx('#3a3645');
-  b.fill(seam);
+  const base = hx('#5a5566');
+  b.fill(mixc(base, hx('#2e2a38'), 0.45));
   SLABS.forEach((st) => {
     const rnd = artRng(st.wraps ? st.seed : st.seed + v * 977);
-    const body = sh(hx('#5c5768'), ri(rnd, 11) - 5);
+    const body = sh(base, ri(rnd, 9) - 4);
     for (let j = 0; j < st.h - 1; j++)
       for (let k = 0; k < st.w - 1; k++) {
         let c = body;
-        if (j === 0 || k === 0) c = sh(body, 12);
-        if (j === st.h - 2 || k === st.w - 2) c = sh(body, -14);
+        if (j === 0 || k === 0) c = sh(body, 7);
+        if (j === st.h - 2 || k === st.w - 2) c = sh(body, -9);
         b.set((st.x + k) % S, st.y + j, c);
       }
     // worn speckles
-    for (let q = 0; q < 3; q++) b.set((st.x + 3 + ri(rnd, 10)) % S, st.y + 3 + ri(rnd, 10), sh(body, rnd() < 0.5 ? -10 : 8));
+    for (let q = 0; q < 3; q++) b.set((st.x + 3 + ri(rnd, 10)) % S, st.y + 3 + ri(rnd, 10), sh(body, rnd() < 0.5 ? -8 : 6));
   });
 }
 
@@ -826,6 +745,8 @@ interface Plates {
   /** centre of the pixel's cell (nearest toroidal copy, may lie outside the tile) */
   cx: Float32Array;
   cy: Float32Array;
+  /** third-nearest minus nearest distance: small near cell vertices (used to round stones) */
+  vert: Float32Array;
 }
 const plateCache = new Map<string, Plates>();
 function voronoi(seed: number, n: number, minD: number, yScale: number): Plates {
@@ -850,10 +771,12 @@ function voronoi(seed: number, n: number, minD: number, yScale: number): Plates 
   const side = new Int8Array(S * S);
   const cx = new Float32Array(S * S);
   const cy = new Float32Array(S * S);
+  const vert = new Float32Array(S * S);
   for (let y = 0; y < S; y++)
     for (let x = 0; x < S; x++) {
       let d1 = 1e9;
       let d2 = 1e9;
+      let d3 = 1e9;
       let best = 0;
       let bx = 0;
       let by = 0;
@@ -864,42 +787,123 @@ function voronoi(seed: number, n: number, minD: number, yScale: number): Plates 
             const dy = (y + 0.5 - (py + oy)) * yScale;
             const d = Math.sqrt(dx * dx + dy * dy);
             if (d < d1) {
+              d3 = d2;
               d2 = d1;
               d1 = d;
               best = i;
               bx = px + ox;
               by = py + oy;
-            } else if (d < d2) d2 = d;
+            } else if (d < d2) {
+              d3 = d2;
+              d2 = d;
+            } else if (d < d3) d3 = d;
           }
       });
       const i = y * S + x;
+      vert[i] = d3 - d1;
       id[i] = best;
       edge[i] = d2 - d1;
       side[i] = x + 0.5 - bx + (y + 0.5 - by) > 0 ? 1 : -1;
       cx[i] = bx;
       cy[i] = by;
     }
-  const out = { id, edge, side, cx, cy };
+  const out = { id, edge, side, cx, cy, vert };
   plateCache.set(key, out);
   return out;
 }
 
-/** Basalt: irregular polygonal column tops with dark joints, bevelled rims and the odd ember glint. */
-const BASALT = { gap: hx('#1c1a20'), top: hx('#423e48'), hi: hx('#57525f'), lo: hx('#34313a'), ember: hx('#d0561e') };
-const basaltCells = () => voronoi(keySeed('basalt-cells'), 9, 8.5, 1.2);
-function paintBasalt(b: Buf, v: number): void {
-  const pl = basaltCells();
+/** Voronoi paving (cobble plaza, basalt columns): flat cells with dark joints and bevelled rims. */
+interface PavingLook {
+  key: string;
+  cells: () => Plates;
+  gap: RGB;
+  top: RGB;
+  hi: RGB;
+  lo: RGB;
+  /** joint half-width and bevel width (px of Voronoi edge distance) */
+  joint: number;
+  bevel: number;
+  /** rounds cell corners: pixels this close to a Voronoi vertex become joint */
+  round: number;
+  /** tone spread between cells, and the share of warm-tinted cells */
+  spread: number;
+  warm?: [RGB, number];
+}
+
+const COBBLE_PAVE: PavingLook = {
+  key: 'cobble',
+  cells: () => voronoi(keySeed('cobble-cells'), 12, 6.5, 1.15),
+  gap: hx('#5b564d'),
+  top: hx('#9c968a'),
+  hi: hx('#b6b0a3'),
+  lo: hx('#7c766b'),
+  joint: 1.1,
+  bevel: 2.2,
+  round: 3.2,
+  spread: 16,
+  warm: [hx('#a8957a'), 0.3],
+};
+const BASALT = { gap: hx('#1c1a20'), top: hx('#423e48'), hi: hx('#57525f'), lo: hx('#34313a') };
+const BASALT_PAVE: PavingLook = {
+  key: 'basalt',
+  cells: () => voronoi(keySeed('basalt-cells'), 9, 8.5, 1.2),
+  gap: BASALT.gap,
+  top: BASALT.top,
+  hi: BASALT.hi,
+  lo: BASALT.lo,
+  joint: 1.3,
+  bevel: 2.5,
+  round: 0,
+  spread: 5,
+};
+
+/** Full extent (bbox) of every cell copy, keyed by its canonical centre. */
+const extentCache = new Map<string, Map<string, [number, number, number, number]>>();
+function cellExtent(look: PavingLook, cx: number, cy: number): [number, number, number, number] {
+  const keyOf = (x: number, y: number) => `${Math.round(((x % S) + S) % S)},${Math.round(((y % S) + S) % S)}`;
+  let ext = extentCache.get(look.key);
+  if (!ext) {
+    const pl = look.cells();
+    const m = new Map<string, [number, number, number, number]>();
+    for (let y = 0; y < S; y++)
+      for (let x = 0; x < S; x++) {
+        const i = y * S + x;
+        const bx = ((pl.cx[i] % S) + S) % S;
+        const by = ((pl.cy[i] % S) + S) % S;
+        const rx = x - (pl.cx[i] - bx);
+        const ry = y - (pl.cy[i] - by);
+        const k = keyOf(bx, by);
+        const e = m.get(k) ?? [1e9, 1e9, -1e9, -1e9];
+        m.set(k, [Math.min(e[0], rx), Math.min(e[1], ry), Math.max(e[2], rx), Math.max(e[3], ry)]);
+      }
+    extentCache.set(look.key, (ext = m));
+  }
+  const bx = ((cx % S) + S) % S;
+  const by = ((cy % S) + S) % S;
+  const e = ext.get(keyOf(bx, by))!;
+  return [e[0] + (cx - bx), e[1] + (cy - by), e[2] + (cx - bx), e[3] + (cy - by)];
+}
+
+/** Paving tile. Cells wholly inside the tile get variant-specific tones; straddling cells stay fixed (seamless). */
+function paintPaving(b: Buf, look: PavingLook, v: number): void {
+  const pl = look.cells();
   for (let y = 0; y < S; y++)
     for (let x = 0; x < S; x++) {
       const i = y * S + x;
-      const tone = sh(BASALT.top, ((pl.id[i] * 3 + v * (pl.id[i] % 2)) % 5) - 2);
-      let c = tone;
+      const [x0, y0, x1, y1] = cellExtent(look, pl.cx[i], pl.cy[i]);
+      const inner = x0 >= 1 && y0 >= 1 && x1 <= S - 2 && y1 <= S - 2;
+      const rnd = artRng(keySeed(`${look.key}-${Math.round(pl.cx[i])},${Math.round(pl.cy[i])}`) + (inner ? v * 7919 : 0));
+      let tone = sh(look.top, Math.round((rnd() - 0.5) * look.spread));
+      if (look.warm && rnd() < look.warm[1]) tone = mixc(tone, look.warm[0], 0.4);
       const e = pl.edge[i];
-      if (e < 1.3) c = BASALT.gap;
-      else if (e < 2.5) c = pl.side[i] > 0 ? BASALT.lo : BASALT.hi;
+      let c = tone;
+      if (e < look.joint || pl.vert[i] < look.round) c = look.gap;
+      else if (e < look.bevel || pl.vert[i] < look.round + 1.2) c = pl.side[i] > 0 ? mixc(tone, look.lo, 0.7) : mixc(tone, look.hi, 0.7);
       b.set(x, y, c);
     }
 }
+const paintCobble = (b: Buf, v: number) => paintPaving(b, COBBLE_PAVE, v);
+const paintBasalt = (b: Buf, v: number) => paintPaving(b, BASALT_PAVE, v);
 
 const BRIDGE = { gap: hx('#3a2616'), plank: hx(PAL.wood[2]), hi: hx(PAL.wood[3]), lo: hx(PAL.wood[1]), nail: hx('#2a1d12') };
 function paintBridge(b: Buf, v: number): void {
@@ -1289,6 +1293,25 @@ function shapeField(mask: number, D: number): Float32Array {
   return f;
 }
 
+/**
+ * Whether a whole item (cobble stone, basalt column) belongs to a spill piece. Items touching or straddling a cell edge
+ * decide from that edge's two corner bits (shared by both cells), items touching a corner from that corner's bit
+ * (shared by all four cells), so neighbouring pieces always agree; items inside the cell use the shape at their centre.
+ */
+function itemIncluded(mask: number, D: number, cx: number, cy: number, x0: number, x1: number, y0: number, y1: number): boolean {
+  const bit = (c: number) => (mask & c) !== 0;
+  // touching the border counts: the neighbour's item right across the line must make the same call
+  const cl = x0 <= 0;
+  const cr = x1 >= S - 1;
+  const ct = y0 <= 0;
+  const cb = y1 >= S - 1;
+  const profile = (a: boolean, b: boolean, s: number) => (a && b) || (a && s < D) || (b && s > S - D);
+  if ((cl || cr) && (ct || cb)) return bit(ct ? (cl ? CORNER.NW : CORNER.NE) : cl ? CORNER.SW : CORNER.SE);
+  if (cl || cr) return profile(bit(cl ? CORNER.NW : CORNER.NE), bit(cl ? CORNER.SW : CORNER.SE), cy);
+  if (ct || cb) return profile(bit(ct ? CORNER.NW : CORNER.SW), bit(ct ? CORNER.NE : CORNER.SE), cx);
+  return shapeG(mask, D, cx, cy) < 0;
+}
+
 /** Covered pixels on the padded grid for a mask (1 = overlay). */
 function coverage(mask: number, D: number, amp: number, noise: Float32Array): Uint8Array {
   const g = shapeField(mask, D);
@@ -1423,74 +1446,45 @@ function softPiece(b: Buf, fam: EdgeFamily, st: SoftStyle, mask: number, v: numb
       if (st.kind === 'raised' && cov(c, x, y - 2)) b.set(x, y, st.rim, st.rimA * 0.35); // soft cast shadow
     }
   // details strictly inside the covered area (1 px clear of the boundary)
-  const inside = (x: number, y: number) =>
-    cov(c, x, y) === 1 && cov(c, x - 1, y) === 1 && cov(c, x + 1, y) === 1 && cov(c, x, y - 1) === 1 && cov(c, x, y + 1) === 1;
-  const place = makePlacer(rnd, inside);
+  const inGrid = new Uint8Array(S * S);
+  for (let y = 0; y < S; y++)
+    for (let x = 0; x < S; x++) {
+      const i = pi(x, y);
+      inGrid[y * S + x] = c[i] & c[i - 1] & c[i + 1] & c[i - P] & c[i + P];
+    }
+  const place = makePlacer(rnd, (x, y) => inGrid[y * S + x] === 1);
   if (st.extra) st.extra(b, rnd, place, v);
   st.ground.deco(b, rnd, place, v, 0.7);
 }
 
-/** Cobble spill: whole stones whose centre lies inside the shape, set in mortar with an outline. */
-function cobblePiece(b: Buf, mask: number): void {
-  const own = new Uint8Array(P * P);
-  const chosen: Stone[] = [];
-  for (const st of COBBLES) {
-    // the stone's centre may sit in a neighbouring cell: test every toroidal copy that touches this cell
-    for (const ox of [-S, 0, S])
-      for (const oy of [-S, 0, S]) {
-        const cx = st.x + ox + (st.w - 1) / 2;
-        const cy = st.y + oy + (st.h - 1) / 2;
-        if (cx < -6 || cy < -6 || cx > S + 6 || cy > S + 6) continue;
-        // pure shape (no noise) so both cells sharing a straddling stone always agree on it
-        if (shapeG(mask, 9, cx, cy) < 0) chosen.push({ ...st, x: st.x + ox, y: st.y + oy });
-      }
+/** Paving spill (cobble, basalt): whole cells (see itemIncluded) with a dark outline around them. */
+const pavingFull = new Map<string, Buf>();
+function pavingPiece(b: Buf, look: PavingLook, mask: number, v: number, outlineC: RGB, outlineA: number): void {
+  const noise = familyNoise(`paving-${look.key}`, v);
+  let full = pavingFull.get(look.key);
+  if (!full) {
+    full = new Buf();
+    paintPaving(full, look, 0);
+    pavingFull.set(look.key, full);
   }
-  for (const st of chosen)
-    for (let j = -1; j < st.h; j++)
-      for (let i = -1; i < st.w; i++) {
-        const x = st.x + i;
-        const y = st.y + j;
-        if (x >= -1 && y >= -1 && x <= S && y <= S) own[pi(x, y)] = 1;
-      }
-  for (let y = 0; y < S; y++)
-    for (let x = 0; x < S; x++) {
-      if (own[pi(x, y)]) b.set(x, y, COBBLE.mortar);
-      else if (cov(own, x - 1, y) || cov(own, x + 1, y) || cov(own, x, y - 1) || cov(own, x, y + 1)) b.set(x, y, OUT, 0.55);
-    }
-  for (const st of chosen) {
-    const base = COBBLES.find((q) => q.seed === st.seed)!;
-    const rnd = artRng(base.seed);
-    const body = cobbleTone(rnd);
-    for (let j = 0; j < st.h - 1; j++)
-      for (let i = 0; i < st.w - 1; i++) {
-        const c = cobblePixel(body, i, j, st.w - 1, st.h - 1);
-        const x = st.x + i;
-        const y = st.y + j;
-        if (c >= 0 && x >= 0 && y >= 0 && x < S && y < S) b.set(x, y, c);
-      }
-  }
-}
-
-let basaltFull: Buf | null = null;
-/** Basalt spill: whole columns whose centre lies inside the shape, with a dark joint around them. */
-function basaltPiece(b: Buf, mask: number): void {
-  if (!basaltFull) {
-    basaltFull = new Buf();
-    paintBasalt(basaltFull, 0);
-  }
-  const full = basaltFull;
-  const pl = basaltCells();
+  const pl = look.cells();
   for (let y = 0; y < S; y++)
     for (let x = 0; x < S; x++) {
       const i = y * S + x;
-      if (shapeG(mask, 9, pl.cx[i], pl.cy[i]) < 0) b.set(x, y, full.rgb(x, y));
+      const [x0, y0, x1, y1] = cellExtent(look, pl.cx[i], pl.cy[i]);
+      const touches = x0 <= 0 || y0 <= 0 || x1 >= S - 1 || y1 >= S - 1;
+      // cells inside the piece are this piece's own call: wobble the choice so the edge is irregular per variant
+      const inside = touches
+        ? itemIncluded(mask, 10, pl.cx[i], pl.cy[i], x0, x1, y0, y1)
+        : shapeG(mask, 10, pl.cx[i], pl.cy[i]) + 4 * noise[pi(clamp(Math.round(pl.cx[i]), -1, S), clamp(Math.round(pl.cy[i]), -1, S))] < 0;
+      if (inside) b.set(x, y, full.rgb(x, y));
     }
   const solid = (x: number, y: number) => x >= 0 && y >= 0 && x < S && y < S && b.alpha(x, y) > 0;
   const marks: [number, number][] = [];
   for (let y = 0; y < S; y++)
     for (let x = 0; x < S; x++)
       if (!solid(x, y) && (solid(x - 1, y) || solid(x + 1, y) || solid(x, y - 1) || solid(x, y + 1))) marks.push([x, y]);
-  for (const [x, y] of marks) b.set(x, y, BASALT.gap, 0.85);
+  for (const [x, y] of marks) b.set(x, y, outlineC, outlineA);
 }
 
 // ================================================================== edge pieces: underlays
@@ -1527,8 +1521,9 @@ function lavaGlowPiece(b: Buf, mask: number, v: number): void {
   for (let y = 0; y < S; y++)
     for (let x = 0; x < S; x++) {
       const g = f[pi(x, y)];
-      if (g < 0.5) b.set(x, y, hx(LAVA_LOOK.crust));
-      else if (g < 1.6) b.set(x, y, hx(LAVA_LOOK.white));
+      if (g < -1.5) continue;
+      if (g < 0.6) b.set(x, y, hx(LAVA_LOOK.crust), 0.85);
+      else if (g < 1.7) b.set(x, y, hx(LAVA_LOOK.white));
       else if (g < 3.2) b.set(x, y, hx(LAVA_LOOK.hotter));
       else if (g < 6) b.set(x, y, hx(LAVA_LOOK.hot), 0.7);
     }
@@ -1657,6 +1652,42 @@ function wallRimPiece(b: Buf, t: number, mask: number, v: number): void {
     shadow(1, 0, 0.18);
     shadow(0, 1, 0.18);
   }
+}
+
+/** Bridge rim, drawn on water / void beside a deck: side beam with posts to the north, outlines elsewhere, shadow. */
+function bridgeRimPiece(b: Buf, mask: number): void {
+  const nw = !!(mask & CORNER.NW);
+  const ne = !!(mask & CORNER.NE);
+  const sw = !!(mask & CORNER.SW);
+  const se = !!(mask & CORNER.SE);
+  const beam = hx(PAL.wood[1]);
+  const beamLo = hx(PAL.wood[0]);
+  const out = OUT;
+  if (nw && ne) {
+    // deck to the north: its side beam, posts into the water and a soft shadow
+    for (let x = 0; x < S; x++) {
+      b.set(x, 0, beam);
+      b.set(x, 1, beamLo);
+      b.set(x, 2, out, 0.9);
+      b.set(x, 3, out, 0.3);
+      b.set(x, 4, out, 0.15);
+    }
+    for (const px of [5, 21]) {
+      b.rect(px, 2, 2, 4, beamLo);
+      b.set(px, 2, beam);
+      b.rect(px - 1, 2, 1, 4, out, 0.8);
+      b.rect(px + 2, 2, 1, 4, out, 0.8);
+      b.rect(px, 6, 2, 1, hx(PAL.foam), 0.7);
+    }
+  }
+  if (sw && se) for (let x = 0; x < S; x++) b.set(x, S - 1, out, 0.85);
+  if (nw && sw)
+    for (let y = 0; y < S; y++) {
+      b.set(0, y, beamLo);
+      b.set(1, y, out, 0.85);
+      b.set(2, y, out, 0.25);
+    }
+  if (ne && se) for (let y = 0; y < S; y++) b.set(S - 1, y, out, 0.85);
 }
 
 // ================================================================== decals
@@ -1955,9 +1986,10 @@ function blitOver(b: Buf, src: Buf): void {
 
 const PATHP = { body: PATH_LOOK.stone, hi: PATH_LOOK.stoneHi, lo: '#8f7f62', sh: PATH_LOOK.dark };
 const GREY_STONE = stone('#9a958b', '#b8b3a8', '#77726a', '#3a352c');
+const GRASS_STONE = stone('#9c9784', '#b5b09c', '#7c7766', '#4a5530');
 
 const DECAL_PAINT: Readonly<Record<DecalSet, readonly DecalPainter[]>> = {
-  grass: [tuft(DG, true), tuft(DG, false), tuft(DG, false), clover('#7c9a48', '#5f7d38'), daisies(PAL.cream, '#e8c040', DG.d), GREY_STONE, patch(hx(GRASS_LOOK.dark), 0.35), tuft(DG, true)],
+  grass: [tuft(DG, true), tuft(DG, false), tuft(DG, false), clover('#7c9a48', '#5f7d38'), daisies(PAL.cream, '#e8c040', DG.d), GRASS_STONE, patch(hx(GRASS_LOOK.dark), 0.35), tuft(DG, true)],
   flowers: [
     flowerClump(PAL.crimson, '#f0c050', DG),
     flowerClump(PAL.rose, '#fff0c0', DG),
@@ -2003,11 +2035,12 @@ const DECAL_PAINT: Readonly<Record<DecalSet, readonly DecalPainter[]>> = {
   stone: [crack('#5c574f', '#a29c91'), pebbles('#a29d93', '#bdb8ae', '#5c574f'), GREY_STONE, patch(hx('#6d6860'), 0.35), clover('#6a7e45', '#4f6233'), crack('#5c574f', '#a29c91'), stone('#9a958b', '#b8b3a8', '#77726a', '#3a352c', true), pebbles('#a29d93', '#bdb8ae', '#5c574f')],
   cave: [pebbles('#6b6055', '#80746a', '#2e2823'), crack('#2e2823', '#5f554a'), stone('#6b6055', '#80746a', '#4a4038', '#1a1512'), patch(hx('#2e3a44'), 0.45), mushrooms('#5a8ab0', '#8cc0e0', '#c8d8e0'), patch(hx('#3f372f'), 0.4), pebbles('#6b6055', '#80746a', '#2e2823'), crack('#2e2823', '#5f554a')],
   crypt: [crack('#3a3645', '#6a6576'), crack('#3a3645'), patch(hx('#6a6576'), 0.25), pebbles('#6e697a', '#8a8496', '#2a2733'), clover('#4f6a3e', '#3a5030'), stone('#6e697a', '#8a8496', '#4a4656', '#16141b'), crack('#3a3645', '#6a6576'), pebbles('#6e697a', '#8a8496', '#2a2733')],
-  snow: [drift(false), drift(true), sparkle('#ffffff'), stone('#8a8f98', '#b8bec8', '#6a7078', '#3a4250'), patch(hx(SNOW_LOOK.shade), 0.45), drift(false), twig('#4a3a2a', '#7a6048'), sparkle('#ffffff', true)],
+  snow: [drift(false), drift(true), sparkle('#ffffff'), stone('#8a8f98', '#b8bec8', '#6a7078', '#3a4250'), patch(hx(SNOW_LOOK.shade), 0.45), drift(false), drift(true), sparkle('#ffffff', true)],
   ice: [crack(ICE_LOOK.deep, ICE_LOOK.light), crack(ICE_LOOK.deep), sparkle('#ffffff'), patch(hx(ICE_LOOK.light), 0.5), sparkle('#ffffff', true), crack(ICE_LOOK.deep, ICE_LOOK.hi), patch(hx(ICE_LOOK.dark), 0.3), sparkle(ICE_LOOK.hi)],
   ember: [glowCrack(), glowCrack(), patch(hx('#7a6a62'), 0.35), cinders(), twig('#2a1a14', '#4a3028'), glowCrack(), patch(hx('#46302a'), 0.4), cinders()],
   basalt: [glowCrack(), patch(hx('#6a6670'), 0.25), cinders(), crack('#1c1a20'), glowCrack(), cinders(), patch(hx('#2a2830'), 0.4), pebbles('#55505e', '#6a6574', '#1c1a20')],
-  water: [ripple('#6aa8d2', '#3676a8'), ripple('#6aa8d2', '#3676a8', true), sparkle('#cfeaf6'), lilypad(false), lilypad(true), ripple('#8cc6e6', '#3676a8', true), sparkle('#cfeaf6', true), lilypad(false)],
+  water: [ripple('#6aa8d2', '#3676a8'), ripple('#6aa8d2', '#3676a8', true), sparkle('#cfeaf6'), ripple('#8cc6e6', '#3676a8'), sparkle('#cfeaf6', true), ripple('#8cc6e6', '#3676a8', true), sparkle('#cfeaf6'), ripple('#6aa8d2', '#3676a8')],
+  pond: [ripple('#6aa8d2', '#3676a8'), ripple('#6aa8d2', '#3676a8', true), sparkle('#cfeaf6'), lilypad(false), lilypad(true), ripple('#8cc6e6', '#3676a8', true), sparkle('#cfeaf6', true), lilypad(false)],
   lava: [bubble(false), bubble(true), crustPlate(), sparkle(LAVA_LOOK.white), bubble(true), crustPlate(), sparkle(LAVA_LOOK.hotter, true), bubble(false)],
   rock: [
     tuft(pal4('#56702f', '#45592a', '#7a9845', '#94b057'), false),
@@ -2107,10 +2140,12 @@ function drawPiece(b: Buf, fam: EdgeFamily, mask: number, v: number): void {
       return lavaGlowPiece(b, mask, v);
     case 'abyss':
       return abyssPiece(b, mask, v);
+    case 'bridge_rim':
+      return bridgeRimPiece(b, mask);
     case 'cobble':
-      return cobblePiece(b, mask);
+      return pavingPiece(b, COBBLE_PAVE, mask, v, OUT, 0.6);
     case 'basalt':
-      return basaltPiece(b, mask);
+      return pavingPiece(b, BASALT_PAVE, mask, v, BASALT.gap, 0.85);
   }
   const st = SOFT[fam];
   if (!st) return;

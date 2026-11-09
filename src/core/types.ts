@@ -407,7 +407,14 @@ export interface ClassDef {
 
 // ------------------------------------------------------------------ items
 
-export type ItemDef =
+/** Display fields every item kind may carry. */
+export interface ItemDisplay {
+  /** Name for a count other than 1 ('Lake Fish', 'Iron Ore'); default: English plural of `name`. */
+  plural?: string;
+}
+
+export type ItemDef = ItemDisplay &
+  (
   | { id: string; name: string; icon: string; kind: 'tome'; skill: string; desc: string }
   | { id: string; name: string; icon: string; kind: 'shard'; element: ElementId; desc: string }
   | { id: string; name: string; icon: string; kind: 'material'; desc: string; price?: number }
@@ -421,7 +428,8 @@ export type ItemDef =
       amount?: number;
       desc: string;
       price?: number;
-    };
+    }
+  );
 
 // ------------------------------------------------------------------ data bundle
 

@@ -262,7 +262,7 @@ describe('v2 fill-ins', () => {
           gone_quest: { progress: [5, 2.6, -1], acceptedAt: 12 },
           junk: 4,
         },
-        done: { gus_dust: 1, bad: -2, frac: 2.5 },
+        done: { old_quest: 1, bad: -2, frac: 2.5 },
         cooldown: { gus_dust: 500, bad: 'x' },
         tracked: ['gone_quest', 'nope', 'gus_dust', 'gone_quest', 7],
       },
@@ -273,7 +273,7 @@ describe('v2 fill-ins', () => {
         gus_dust: { progress: [99, 0, 4, 7, 0], acceptedAt: 0 },
         gone_quest: { progress: [5, 2, 0], acceptedAt: 12 },
       },
-      done: { gus_dust: 1, frac: 2 },
+      done: { old_quest: 1, frac: 2 },
       cooldown: { gus_dust: 500 },
       tracked: ['gone_quest', 'gus_dust'],
     });

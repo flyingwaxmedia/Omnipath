@@ -236,7 +236,13 @@ export class MapScene extends Phaser.Scene implements GameController {
     }
     s.greeted = true;
     if (s.nav) this.time.delayedCall(350, () => this.navStep());
-    if (this.ui.isOpen) this.setPaused(true);
+    // A modal still open from the previous map (a card or dialog that opened during the warp) must pause this one too.
+    // The scene is still CREATING here, so setPaused() would ignore it: pause on the first update instead.
+    const pauseIfOpen = () => {
+      if (this.ui.isOpen) this.setPaused(true);
+    };
+    this.events.once(Phaser.Scenes.Events.UPDATE, pauseIfOpen);
+    this.disposers.push(() => this.events.off(Phaser.Scenes.Events.UPDATE, pauseIfOpen));
     this.save();
   }
 
@@ -265,19 +271,40 @@ export class MapScene extends Phaser.Scene implements GameController {
     const mh = this.cm.h * TILE;
     if (this.def.kind === 'arena') zoom = Math.max(0.8, Math.min(zoom, height / mh));
     cam.setZoom(zoom);
-    // Maps smaller than the view are centred instead of pinned to the top-left. HUD-safe bounds: the camera may also
-    // scroll past each map edge by the HUD strip on that side (vitals/minimap on top, menu column, hotbar), so exits,
-    // chests and hidden-portal shimmers near an edge never stay stuck under the HUD (playtest: mirror_lake#islet and
-    // greystone_quarry#shaft were untappable on portrait phones).
+    // Maps smaller than the view are centred instead of pinned to the top-left. HUD-safe bounds: where something the
+    // player must see or tap (portal, object, node, NPC) lies near a map edge, the camera may scroll past that edge by
+    // the HUD strip on that side (vitals/minimap on top, menu column, hotbar), so it never stays stuck under the HUD
+    // (playtest: mirror_lake#islet and greystone_quarry#shaft were untappable on portrait phones). Edges with nothing
+    // there keep the tight bounds, so no empty margin shows.
     const vw = width / zoom;
     const vh = height / zoom;
     const ins = this.ui?.safeInsets?.() ?? { top: 0, right: 0, bottom: 0, left: 0 };
-    const minX = Math.min(0, (mw - vw) / 2) - ins.left / zoom;
-    const maxX = Math.max(mw - vw, (mw - vw) / 2) + ins.right / zoom;
-    const minY = Math.min(0, (mh - vh) / 2) - ins.top / zoom;
-    const maxY = Math.max(mh - vh, (mh - vh) / 2) + ins.bottom / zoom;
+    const need = this.edgeThings();
+    const pad = (px: number, side: keyof typeof need) => (px > 0 && need[side] < px / zoom + TILE * 2 ? px / zoom : 0);
+    const minX = Math.min(0, (mw - vw) / 2) - pad(ins.left, 'left');
+    const maxX = Math.max(mw - vw, (mw - vw) / 2) + pad(ins.right, 'right');
+    const minY = Math.min(0, (mh - vh) / 2) - pad(ins.top, 'top');
+    const maxY = Math.max(mh - vh, (mh - vh) / 2) + pad(ins.bottom, 'bottom');
     cam.setBounds(minX, minY, maxX - minX + vw, maxY - minY + vh);
     this.chunkWin = '';
+  }
+
+  /** Distance (px) from each map edge to the nearest portal / object / node / NPC (for the HUD-safe camera bounds). */
+  private edgeThings(): { top: number; right: number; bottom: number; left: number } {
+    const mw = this.cm.w * TILE;
+    const mh = this.cm.h * TILE;
+    const out = { top: Infinity, right: Infinity, bottom: Infinity, left: Infinity };
+    const add = (tx: number, ty: number, w = 1, h = 1) => {
+      out.left = Math.min(out.left, tx * TILE);
+      out.top = Math.min(out.top, ty * TILE);
+      out.right = Math.min(out.right, mw - (tx + w) * TILE);
+      out.bottom = Math.min(out.bottom, mh - (ty + h) * TILE);
+    };
+    for (const p of this.def.portals) add(p.tx, p.ty, p.w, p.h);
+    for (const o of this.def.objects ?? []) add(o.tx, o.ty);
+    for (const n of this.def.nodes ?? []) add(n.tx, n.ty);
+    for (const n of this.def.npcs ?? []) add(n.tx, n.ty);
+    return out;
   }
 
   // =================================================================== building
@@ -1520,6 +1547,11 @@ export class MapScene extends Phaser.Scene implements GameController {
   newGame(): void {
     Session.clear();
     location.reload();
+  }
+
+  /** Mid-fight (dealt or took damage within the combat window): the UI holds discovery cards until it ends. */
+  inCombat(): boolean {
+    return !!this.combat && !this.combat.dead && !this.warping && this.combat.inCombat();
   }
 
   save(): void {

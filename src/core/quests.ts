@@ -21,8 +21,9 @@ import type {
 /**
  * Where a quest stands for the player: 'locked' (an `after` quest is not completed or a `requires`
  * entry is unmet), 'available' (can be accepted), 'active' (accepted, objectives outstanding), 'ready'
- * (accepted, every objective met: turn it in), 'done' (a non-repeatable quest completed) or 'cooldown'
- * (a repeatable quest waiting for its next offer time).
+ * (accepted, every objective met: turn it in), 'done' (a non-repeatable quest completed, or a repeatable
+ * one with nothing left to give — see questExhausted) or 'cooldown' (a repeatable quest waiting for its
+ * next offer time).
  */
 export type QuestStatus = 'locked' | 'available' | 'active' | 'ready' | 'done' | 'cooldown';
 
@@ -46,6 +47,13 @@ export interface QuestContext extends RequirementContext {
   /** Optional display names (fallback: the id, prettified). */
   npcName?(id: string): string | undefined;
   mapName?(id: string): string | undefined;
+  /**
+   * Whether a trainer lesson has nothing left to give (trainers.lessonOwned: taken once, or its grant
+   * already fully owned). Omitted: lessons are never owned. Turn-in drops an owned `rewards.lesson`
+   * from the payload, and a repeatable quest whose lesson is owned and that pays nothing else but coins
+   * and exp is exhausted (status 'done').
+   */
+  lessonOwned?(lessonId: string): boolean;
 }
 
 /** One objective of a quest with the player's progress, as the log, dialog and tracker show it. */
@@ -207,6 +215,13 @@ function pluralName(name: string): string {
   return `${name}s`;
 }
 
+/** An item's display name for `n` of it: its name for 1, else ItemDef.plural or the English plural. */
+function itemName(reg: Registry, id: string, n: number): string {
+  const item = reg.item(id);
+  const name = item?.name ?? prettify(id);
+  return n === 1 ? name : (item?.plural ?? pluralName(name));
+}
+
 function npcName(ctx: QuestContext, id: string): string {
   return ctx.npcName?.(id) ?? prettify(id);
 }
@@ -235,6 +250,17 @@ function baseSkill(reg: Registry, skill: SkillDef): string {
 }
 
 /**
+ * Whether a skill, or the authored skill it rolls up to, carries a tag. Generated variants drop some
+ * of their base's tags (an infused basic attack loses 'basic'), yet a Blazing Slash is still the slash.
+ */
+function rollsUpToTag(reg: Registry, skill: SkillDef, tag: string): boolean {
+  if (hasTag(skill, tag)) return true;
+  const base = baseSkill(reg, skill);
+  const root = base !== skill.id ? reg.skill(base) : undefined;
+  return root !== undefined && hasTag(root, tag);
+}
+
+/**
  * Counter target of an objective: its count (kill, gather, use, cast, witness), 1 (visit, talk), or 0
  * for live objectives that keep no counter (deliver reads the bag, state its requirement).
  */
@@ -255,8 +281,11 @@ export function counterNeed(o: QuestObjective): number {
   }
 }
 
-/** Whether a kill counts for a kill objective: every given filter must match. */
-function killMatches(o: Extract<QuestObjective, { kind: 'kill' }>, m: MonsterDef): boolean {
+/**
+ * Whether a kill of `m` counts for a kill objective: every given filter must match (`monster` also
+ * matches elites and wardens whose `base` is that species).
+ */
+export function killCounts(o: Extract<QuestObjective, { kind: 'kill' }>, m: MonsterDef): boolean {
   if (o.monster !== undefined && m.id !== o.monster && m.base !== o.monster) return false;
   if (o.family !== undefined && m.family !== o.family) return false;
   if (o.rank !== undefined && m.rank !== o.rank) return false;
@@ -267,7 +296,7 @@ function killMatches(o: Extract<QuestObjective, { kind: 'kill' }>, m: MonsterDef
 function eventMatches(reg: Registry, quest: QuestDef, o: QuestObjective, event: QuestEvent): boolean {
   switch (o.kind) {
     case 'kill':
-      return event.type === 'kill' && killMatches(o, event.monster);
+      return event.type === 'kill' && killCounts(o, event.monster);
     case 'gather':
       return event.type === 'gather' && event.node === o.node;
     case 'visit':
@@ -279,7 +308,7 @@ function eventMatches(reg: Registry, quest: QuestDef, o: QuestObjective, event: 
     case 'use':
       if (event.type !== 'use') return false;
       if (o.skill !== undefined && event.skill.id !== o.skill && baseSkill(reg, event.skill) !== o.skill) return false;
-      return o.tag === undefined || hasTag(event.skill, o.tag);
+      return o.tag === undefined || rollsUpToTag(reg, event.skill, o.tag);
     case 'cast': {
       if (event.type !== 'cast' || event.map !== o.map) return false;
       const s = event.skill;
@@ -288,7 +317,7 @@ function eventMatches(reg: Registry, quest: QuestDef, o: QuestObjective, event: 
         !any ||
         (o.element !== undefined && s.element === o.element) ||
         (o.shape !== undefined && s.shape.kind === o.shape) ||
-        (o.tag !== undefined && hasTag(s, o.tag))
+        (o.tag !== undefined && rollsUpToTag(reg, s, o.tag))
       );
     }
     case 'witness': {
@@ -328,13 +357,50 @@ export function questMissing(reg: Registry, state: SkillBookState, ctx: QuestCon
   return out;
 }
 
+/** One objective measured for the player (objectiveProgress without its text). */
+interface Measured {
+  have: number;
+  need: number;
+  done: boolean;
+}
+
+/**
+ * Measures every objective of a quest (shared by objectiveProgress and the cheap done-ness path):
+ * counters read `active.progress`; a `witness` objective naming an echo the player already knows is
+ * met (no more marks can be earned for it); `deliver` reads the bag against everything the quest
+ * asks of that item (two deliveries of one item need their sum, as turn-in spends the sum); `state`
+ * evaluates its requirement live. A completed non-repeatable quest reads every objective as met.
+ */
+function measure(state: SkillBookState, ctx: QuestContext, quest: QuestDef): Measured[] {
+  const qs = read(state);
+  const active = own(qs.active, quest.id);
+  const completed = !active && !quest.repeatable && (own(qs.done, quest.id) ?? 0) >= 1;
+  let totals: Record<string, number> | undefined;
+  return quest.objectives.map((objective, i) => {
+    if (objective.kind === 'deliver') {
+      const have = ctx.itemCount(objective.item);
+      totals ??= deliveries(quest);
+      return { have, need: objective.count, done: completed || have >= (totals[objective.item] ?? objective.count) };
+    }
+    if (objective.kind === 'state') {
+      const done = completed || meetsRequirement(objective.requires, ctx);
+      return { have: done ? 1 : 0, need: 1, done };
+    }
+    const need = counterNeed(objective);
+    const known = objective.kind === 'witness' && objective.skill !== undefined && ctx.rank(objective.skill) > 0;
+    const have = completed || known ? need : Math.min(need, Math.max(0, active?.progress[i] ?? 0));
+    return { have, need, done: have >= need };
+  });
+}
+
 /**
  * Each objective of a quest with the player's progress: counters read `active.progress` (0 when the
- * quest is not active; every objective reads done once a non-repeatable quest is completed), `deliver`
- * reads the bag and `state` evaluates its requirement live. Texts: 'Defeat Jellops 3/8', 'Mine ore 2/10',
- * 'Bring 5 Lake Fish (4 in bag)', 'Visit Mirror Lake', 'Speak with Fisher Pell', 'Use blade skills 6/20',
- * 'Cast ice at Mirror Lake 0/1', 'Witness an echo 1/2', a state objective's label; ' ✓' is appended to
- * every met objective. Unknown ids yield [].
+ * quest is not active; every objective reads done once a non-repeatable quest is completed), a `witness`
+ * objective for an echo the player already knows reads met, `deliver` reads the bag (against the sum
+ * the quest asks of that item) and `state` evaluates its requirement live. Texts: 'Defeat Jellops 3/8',
+ * 'Mine ore 2/10', 'Bring 5 Lake Fish (4 in bag)', 'Bring 3 Meadow Herbs (0 in bag)', 'Visit Mirror
+ * Lake', 'Speak with Fisher Pell', 'Use blade skills 6/20', 'Cast ice at Mirror Lake 0/1', 'Witness an
+ * echo 1/2', a state objective's label; ' ✓' is appended to every met objective. Unknown ids yield [].
  */
 export function objectiveProgress(
   reg: Registry,
@@ -344,29 +410,20 @@ export function objectiveProgress(
 ): ObjectiveProgress[] {
   const quest = reg.quest(id);
   if (!quest) return [];
-  const qs = read(state);
-  const active = own(qs.active, id);
-  const completed = !active && !quest.repeatable && (own(qs.done, id) ?? 0) >= 1;
-  return quest.objectives.map((objective, i) => {
-    let have: number;
-    let need: number;
-    let done: boolean;
-    if (objective.kind === 'deliver') {
-      need = objective.count;
-      have = ctx.itemCount(objective.item);
-      done = completed || have >= need;
-    } else if (objective.kind === 'state') {
-      need = 1;
-      done = completed || meetsRequirement(objective.requires, ctx);
-      have = done ? 1 : 0;
-    } else {
-      need = counterNeed(objective);
-      have = completed ? need : Math.min(need, Math.max(0, active?.progress[i] ?? 0));
-      done = have >= need;
-    }
+  return measure(state, ctx, quest).map(({ have, need, done }, i) => {
+    const objective = quest.objectives[i];
     const text = objectiveText(reg, ctx, objective, have, need) + (done ? CHECK : '');
     return { objective, have, need, done, text };
   });
+}
+
+/**
+ * Done-ness of each objective of a quest, in order — objectiveProgress without building any text (cheap
+ * enough to run after every flag or bag change). Unknown ids yield [].
+ */
+export function objectivesDone(reg: Registry, state: SkillBookState, ctx: QuestContext, id: string): boolean[] {
+  const quest = reg.quest(id);
+  return quest ? measure(state, ctx, quest).map((m) => m.done) : [];
 }
 
 /** Objective text without the ✓ (see objectiveProgress). */
@@ -396,7 +453,7 @@ function objectiveText(reg: Registry, ctx: QuestContext, o: QuestObjective, have
     case 'gather':
       return `${GATHER_TEXT[o.node] ?? `Gather ${prettify(o.node)}`} ${counter}`;
     case 'deliver':
-      return `Bring ${o.count} ${reg.item(o.item)?.name ?? prettify(o.item)} (${have} in bag)`;
+      return `Bring ${o.count} ${itemName(reg, o.item, o.count)} (${have} in bag)`;
     case 'visit':
       return `Visit ${mapName(ctx, o.map)}`;
     case 'talk':
@@ -423,23 +480,43 @@ function objectiveText(reg: Registry, ctx: QuestContext, o: QuestObjective, have
 }
 
 /** Every objective of an active quest is met (counters full, bag holds the deliveries, states hold). */
-function allObjectivesMet(reg: Registry, state: SkillBookState, ctx: QuestContext, id: string): boolean {
-  return objectiveProgress(reg, state, ctx, id).every((p) => p.done);
+function allObjectivesMet(state: SkillBookState, ctx: QuestContext, quest: QuestDef): boolean {
+  return measure(state, ctx, quest).every((m) => m.done);
+}
+
+/**
+ * A repeatable quest with nothing left to give: its `rewards.lesson` is owned (ctx.lessonOwned — e.g. a
+ * passive drill whose passive is at its max rank) and it pays nothing else but coins and exp. Bounties
+ * that teach an essence, or pay only coins, never run out.
+ */
+function exhausted(ctx: QuestContext, quest: QuestDef): boolean {
+  const r = quest.rewards;
+  if (!quest.repeatable || r.lesson === undefined || !(ctx.lessonOwned?.(r.lesson) ?? false)) return false;
+  const others = r.skill ?? r.passive ?? r.element ?? r.whisper ?? r.flag;
+  return others === undefined && Object.keys(r.essences ?? {}).length === 0 && Object.keys(r.items ?? {}).length === 0;
+}
+
+/** Whether quest `id` is a repeatable quest with nothing left to give (see QuestContext.lessonOwned). */
+export function questExhausted(reg: Registry, ctx: QuestContext, id: string): boolean {
+  const quest = reg.quest(id);
+  return quest !== undefined && exhausted(ctx, quest);
 }
 
 /**
  * Status of quest `id` (see QuestStatus): active quests are 'ready' when every objective is met, else
- * 'active'; a completed non-repeatable quest is 'done'; a repeatable one is 'cooldown' until its next
- * offer time (`state.quests.cooldown`, game clock); otherwise 'locked' while an `after` quest is not
- * completed or a `requires` entry is unmet, else 'available'. Unknown ids are 'locked'.
+ * 'active'; a completed non-repeatable quest is 'done', and so is an exhausted repeatable one (its lesson
+ * owned, nothing else but coins and exp to give — see questExhausted); a repeatable one is 'cooldown'
+ * until its next offer time (`state.quests.cooldown`, game clock); otherwise 'locked' while an `after`
+ * quest is not completed or a `requires` entry is unmet, else 'available'. Unknown ids are 'locked'.
  */
 export function questStatus(reg: Registry, state: SkillBookState, ctx: QuestContext, id: string): QuestStatus {
   const quest = reg.quest(id);
   if (!quest) return 'locked';
   const qs = read(state);
-  if (own(qs.active, id)) return allObjectivesMet(reg, state, ctx, id) ? 'ready' : 'active';
+  if (own(qs.active, id)) return allObjectivesMet(state, ctx, quest) ? 'ready' : 'active';
   const done = own(qs.done, id) ?? 0;
   if (done >= 1 && !quest.repeatable) return 'done';
+  if (exhausted(ctx, quest)) return 'done';
   if (quest.repeatable && (own(qs.cooldown, id) ?? -Infinity) > ctx.now()) return 'cooldown';
   return questMissing(reg, state, ctx, id).length > 0 ? 'locked' : 'available';
 }
@@ -453,23 +530,65 @@ export function questList(reg: Registry, state: SkillBookState, ctx: QuestContex
   return [...reg.quests.values()].map((q) => view(reg, state, ctx, q));
 }
 
+/** Data order of every quest id, per registry (built once). */
+const ORDER = new WeakMap<Registry, ReadonlyMap<string, number>>();
+
+function dataOrder(reg: Registry): ReadonlyMap<string, number> {
+  let order = ORDER.get(reg);
+  if (!order) {
+    order = new Map([...reg.quests.keys()].map((id, i) => [id, i]));
+    ORDER.set(reg, order);
+  }
+  return order;
+}
+
 /**
  * The quests NPC `npcId` deals with, with status: every quest it gives, plus active / ready quests
  * turned in to it. Sorted ready > available > active > cooldown > done > locked, then data order.
- * `turnIn` tells whether a ready quest can be handed in here.
+ * `turnIn` tells whether a ready quest can be handed in here. Only that NPC's quests are evaluated
+ * (Registry.questsBy / questsTurnedInAt), so refreshing every NPC costs one pass over the quests.
  */
 export function questsFor(reg: Registry, state: SkillBookState, ctx: QuestContext, npcId: string): QuestView[] {
   const out: QuestView[] = [];
-  const order = new Map<string, number>();
-  [...reg.quests.values()].forEach((q, i) => order.set(q.id, i));
-  for (const quest of reg.quests.values()) {
-    const v = view(reg, state, ctx, quest);
-    if (quest.giver === npcId || (v.turnIn === npcId && (v.status === 'active' || v.status === 'ready'))) out.push(v);
+  const seen = new Set<string>();
+  for (const quest of reg.questsBy(npcId)) {
+    seen.add(quest.id);
+    out.push(view(reg, state, ctx, quest));
   }
+  const active = read(state).active;
+  for (const quest of reg.questsTurnedInAt(npcId)) {
+    if (seen.has(quest.id) || !own(active, quest.id)) continue;
+    out.push(view(reg, state, ctx, quest));
+  }
+  const order = dataOrder(reg);
   return out.sort(
     (a, b) =>
       STATUS_ORDER[a.status] - STATUS_ORDER[b.status] || (order.get(a.quest.id) ?? 0) - (order.get(b.quest.id) ?? 0),
   );
+}
+
+/** The marker over an NPC's head (docs/CLIENT-v3.md §4): '?' ready to turn in here, '!' available, '…' active. */
+export type QuestMarker = '?' | '!' | '…';
+
+/**
+ * Marker for NPC `npcId`: '?' when a ready quest can be turned in to it, else '!' when it offers an
+ * available quest, else '…' when a quest it gives or takes is in progress, else null. Cheaper than
+ * questsFor: it stops at the first '?'.
+ */
+export function questMarker(reg: Registry, state: SkillBookState, ctx: QuestContext, npcId: string): QuestMarker | null {
+  let marker: QuestMarker | null = null;
+  const active = read(state).active;
+  for (const quest of reg.questsTurnedInAt(npcId)) {
+    if (!own(active, quest.id)) continue;
+    if (allObjectivesMet(state, ctx, quest)) return '?';
+    marker = '…';
+  }
+  for (const quest of reg.questsBy(npcId)) {
+    const status = questStatus(reg, state, ctx, quest.id);
+    if (status === 'available') return '!';
+    if (status === 'active' || status === 'ready') marker = '…';
+  }
+  return marker;
 }
 
 // ------------------------------------------------------------------ mutations
@@ -477,8 +596,9 @@ export function questsFor(reg: Registry, state: SkillBookState, ctx: QuestContex
 /**
  * Advances the counters of every active quest an event matches (each matching objective +1, capped
  * at its need) and reports which quests moved and which became 'ready'. Readiness needs `ctx` (bag and
- * live state objectives); without it `ready` counts the counter objectives only and treats deliver /
- * state objectives as met.
+ * live state objectives); without it a quest is reported ready only when its counters are full and it
+ * has no live objective (deliver, state) that might still be unmet — such quests show up in
+ * `progressed` alone. Servers should always pass `ctx`.
  */
 export function advanceQuests(
   reg: Registry,
@@ -507,11 +627,18 @@ export function advanceQuests(
   return { progressed, ready };
 }
 
+/** Readiness without a context: every counter full and no live objective (deliver, state) to check. */
 function countersFull(quest: QuestDef, progress: readonly number[]): boolean {
-  return quest.objectives.every((o, i) => (progress[i] ?? 0) >= counterNeed(o));
+  return quest.objectives.every(
+    (o, i) => o.kind !== 'deliver' && o.kind !== 'state' && (progress[i] ?? 0) >= counterNeed(o),
+  );
 }
 
-/** Reports an event to every active quest (see advanceQuests); returns the ids whose status became 'ready'. */
+/**
+ * Reports an event to every active quest (see advanceQuests); returns the ids whose status became
+ * 'ready'. Pass `ctx` (docs/QUESTS.md §3): without it, quests with deliver or state objectives are never
+ * reported ready.
+ */
 export function notifyQuest(reg: Registry, state: SkillBookState, event: QuestEvent, ctx?: QuestContext): string[] {
   return advanceQuests(reg, state, event, ctx).ready;
 }
@@ -536,17 +663,26 @@ export function trackQuest(state: SkillBookState, id: string, on: boolean): bool
 /**
  * Accepts an available quest: its counters start at 0 (`acceptedAt` = ctx.now()) and it is tracked.
  * Counters only count what happens from now on; a `visit` to the map the player stands in completes when
- * the player talks to the giver there (a talk event with `map`).
+ * the player talks to the giver there (a talk event with `map`). With `at` (the NPC the player is
+ * talking to), the quest must be that NPC's to give; servers should always pass it.
  */
-export function acceptQuest(reg: Registry, state: SkillBookState, ctx: QuestContext, id: string): QuestOutcome {
+export function acceptQuest(
+  reg: Registry,
+  state: SkillBookState,
+  ctx: QuestContext,
+  id: string,
+  at?: string,
+): QuestOutcome {
   const quest = reg.quest(id);
   if (!quest) return { ok: false, message: 'No one here offers that.' };
+  if (at !== undefined && at !== quest.giver) return { ok: false, message: `Ask ${npcName(ctx, quest.giver)} about that.` };
   const status = questStatus(reg, state, ctx, id);
   switch (status) {
     case 'active':
     case 'ready':
       return { ok: false, message: `You are already on ${quest.name}.` };
     case 'done':
+      if (exhausted(ctx, quest)) return { ok: false, message: `${quest.name} has nothing more to teach you.` };
       return { ok: false, message: `You have already completed ${quest.name}.` };
     case 'cooldown':
       return { ok: false, message: `${quest.name} is not offered again yet.` };
@@ -561,13 +697,16 @@ export function acceptQuest(reg: Registry, state: SkillBookState, ctx: QuestCont
   return { ok: true, message: `Accepted ${quest.name}.` };
 }
 
-/** Drops an active quest: its counters are lost and it leaves the tracker (no cooldown is started). */
+/**
+ * Drops an active quest: its counters are lost and it leaves the tracker (no cooldown is started). An
+ * active entry whose quest is no longer in the content can be dropped too (it would otherwise hold a
+ * tracker slot forever).
+ */
 export function abandonQuest(reg: Registry, state: SkillBookState, _ctx: QuestContext, id: string): QuestOutcome {
-  const quest = reg.quest(id);
-  if (!quest || !own(read(state).active, id)) return { ok: false, message: 'You are not on that quest.' };
+  if (!own(read(state).active, id)) return { ok: false, message: 'You are not on that quest.' };
   delete write(state).active[id];
   trackQuest(state, id, false);
-  return { ok: true, message: `Abandoned ${quest.name}.` };
+  return { ok: true, message: `Abandoned ${reg.quest(id)?.name ?? 'that quest'}.` };
 }
 
 /**
@@ -575,7 +714,9 @@ export function abandonQuest(reg: Registry, state: SkillBookState, _ctx: QuestCo
  * `ctx.spendItems`, records the completion (`done` +1; repeatable quests start their cooldown on the
  * game clock), untracks it and returns the reward payload. Nothing is applied here: the SkillBook applies
  * book-side rewards (lesson grant, skill, passive, element, essences, whisper, flag) and the game coins,
- * items and exp. With `at`, the quest must be turned in to that NPC. On failure nothing changes.
+ * items and exp. A `rewards.lesson` the player already owns (ctx.lessonOwned) is left out of the payload:
+ * it would teach nothing. With `at`, the quest must be turned in to that NPC (servers should always pass
+ * it). On failure nothing changes.
  */
 export function turnInQuest(
   reg: Registry,
@@ -592,9 +733,11 @@ export function turnInQuest(
   const progress = objectiveProgress(reg, state, ctx, id);
   const unmet = progress.filter((p) => !p.done);
   if (unmet.length > 0) return fail(`Not yet: ${unmet.map((p) => p.text).join(', ')}.`);
+  // Ownership is read before anything changes (spending items could, in principle, change it).
+  const lessonOwned = quest.rewards.lesson !== undefined && (ctx.lessonOwned?.(quest.rewards.lesson) ?? false);
   const items = deliveries(quest);
   if (Object.keys(items).length > 0 && !(ctx.spendItems?.(items) ?? false)) {
-    const wanted = Object.entries(items).map(([item, n]) => `${n} ${reg.item(item)?.name ?? prettify(item)}`);
+    const wanted = Object.entries(items).map(([item, n]) => `${n} ${itemName(reg, item, n)}`);
     return fail(`You need ${wanted.join(', ')}.`);
   }
   const qs = write(state);
@@ -606,5 +749,28 @@ export function turnInQuest(
   const rewards: QuestReward = { ...r };
   if (r.items) rewards.items = { ...r.items };
   if (r.essences) rewards.essences = { ...r.essences };
+  if (lessonOwned) delete rewards.lesson;
   return { ok: true, message: `Completed ${quest.name}!`, rewards };
+}
+
+/**
+ * Credits the non-repeatable quests that teach lessons the player has already taken (a save from before
+ * quests, or a lesson bought through SkillBook.takeLesson while lessons are not `questOnly`): each such
+ * quest that is neither active nor completed is recorded as completed once, so its follow-ups open and
+ * it is never offered for a lesson that would teach nothing. Repeatable quests are left alone. Returns
+ * the credited quest ids, in data order.
+ */
+export function creditLessonQuests(reg: Registry, state: SkillBookState, lessonIds: readonly string[]): string[] {
+  const credited: string[] = [];
+  if (lessonIds.length === 0) return credited;
+  const taken = new Set(lessonIds);
+  for (const quest of reg.quests.values()) {
+    const lesson = quest.rewards.lesson;
+    if (quest.repeatable || lesson === undefined || !taken.has(lesson)) continue;
+    const qs = read(state);
+    if (own(qs.active, quest.id) || (own(qs.done, quest.id) ?? 0) >= 1) continue;
+    write(state).done[quest.id] = 1;
+    credited.push(quest.id);
+  }
+  return credited;
 }

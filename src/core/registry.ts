@@ -2,7 +2,7 @@
 // shape merges, composed on demand and cached) and data validation. Every core module codes
 // against this class; it never mutates the data it was built from.
 import { canTakeElement, compose, hasReservedChar, legalEssenceSet, mergeSkills, parseVariantId } from './compose';
-import { QUEST_NODE_KINDS } from './quests';
+import { QUEST_NODE_KINDS, killCounts } from './quests';
 import { pairKey, parseRef, type ParsedRef } from './refs';
 import {
   SHAPE_KINDS,
@@ -581,6 +581,22 @@ export class Registry {
       checkReqs(where, q.requires);
       checkFlags(where, q.requires ?? []);
       q.objectives.forEach((o, i) => checkObjective(`${where} objective ${i + 1} (${o.kind})`, o));
+      // Two deliveries of one item read the same bag count but turn-in spends their sum.
+      const delivered = q.objectives.flatMap((o) => (o.kind === 'deliver' ? [o.item] : []));
+      for (const item of duplicates(delivered)) errs.push(`${where}: delivers ${item} in more than one objective`);
+      // A named elite or warden also counts toward its base species: asking for both the species and
+      // that elite lets one kill fill two objectives ('10 Emberkits and their Alpha' after 9 + 1).
+      // Give the species objective `rank: 'common'` to count the pack alone.
+      const kills = q.objectives.flatMap((o, i) => (o.kind === 'kill' ? [{ o, i }] : []));
+      for (const named of kills) {
+        const m = named.o.monster !== undefined ? this.monsters.get(named.o.monster) : undefined;
+        if (!m) continue;
+        for (const other of kills) {
+          if (other.i !== named.i && other.o.monster !== undefined && other.o.monster === m.base && killCounts(other.o, m)) {
+            errs.push(`${where}: a ${m.id} kill also counts toward objective ${other.i + 1} (${other.o.monster})`);
+          }
+        }
+      }
       const r = q.rewards;
       if (r.lesson !== undefined && !this.lessonIndex.has(r.lesson)) errs.push(`${where}: unknown reward lesson ${r.lesson}`);
       if (r.skill !== undefined && !skillOk(r.skill)) errs.push(`${where}: unknown reward skill ${r.skill}`);
