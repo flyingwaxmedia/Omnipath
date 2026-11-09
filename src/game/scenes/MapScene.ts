@@ -57,6 +57,7 @@ import { Combat } from '../systems/Combat';
 import { Interactions, type NodeView, type NpcView, type ObjectView, type PortalView } from '../systems/Interactions';
 import { MonsterSkills } from '../systems/MonsterSkills';
 import { SkillSystem } from '../systems/SkillSystem';
+import { type VfxHandle, attachVfx } from '../vfx/runtime';
 import {
   TILE,
   addOnce,
@@ -126,6 +127,8 @@ export class MapScene extends Phaser.Scene implements GameController {
   portals: PortalView[] = [];
   /** Static world art + camera (render lane). */
   stage!: Stage;
+  /** VFX runtime + bus bridge for this map (docs/VFX.md §8); torn down on shutdown. */
+  vfx!: VfxHandle;
   /** In-world text: floating numbers and labels (render lane). */
   text!: WorldText;
   /** NPC markers, chevrons, looks, animation (actors lane). */
@@ -202,6 +205,7 @@ export class MapScene extends Phaser.Scene implements GameController {
     this.actors = createActors(this);
     const cam = this.cameras.main;
     this.stage.follow(this.player, start.x, start.y);
+    this.vfx = attachVfx(this);
 
     const onDown = (ptr: Phaser.Input.Pointer) => {
       const wp = ptr.positionToCamera(cam) as Phaser.Math.Vector2;
@@ -609,9 +613,8 @@ export class MapScene extends Phaser.Scene implements GameController {
     );
     add(
       ev.on('spark', () => {
-        this.hitStop(250);
-        this.skills.fxRing(this.player.x, this.player.y - 10, 90, 0xffe9a0, true);
-        this.cameras.main.flash(160, 255, 236, 170);
+        // 150 ms freeze (QUALITY-PLAN hit-stop budget, docs/VFX.md §13); the VFX runtime holds the spark star.
+        this.hitStop(150);
         try {
           navigator.vibrate?.(60);
         } catch {
