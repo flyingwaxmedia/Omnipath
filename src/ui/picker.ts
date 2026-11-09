@@ -4,9 +4,11 @@
 //             arg 'skill:<id>'   — choose which of your slots gets that skill (a card's Equip when every slot is full);
 //                                  after the pick it goes back where it came from: the Star Chart with that star's card,
 //                                  the skill card, or the NPC dialog that offered the Equip;
-//   'menu'    the ☰ button       — New game (with a one-line confirm) and only what exists.
+//   'menu'    the ☰ button       — Sound On/Off + Volume, "Reduce shake & flashes" (hud/settings.ts), New game
+//                                  (with a one-line confirm) and only what exists.
 // Class slots are never edited here: the class fills them (holding a class slot opens that skill's card instead).
 import { pickerHtml, slotChooserHtml } from './hud/html';
+import { menuSettingsHtml, readMenuSettings, wireMenuSettings } from './hud/settings';
 import { OPENED_FROM, type OpenedFrom, type PanelHost, type PanelRender } from './panels/common';
 import { $, $$, esc } from './util';
 
@@ -54,14 +56,14 @@ export function renderPicker(host: PanelHost, arg?: string): void {
   const view = ctrl.slotPicker(slot);
   const classSlots = slots.filter((s) => s.kind === 'class').length;
   const now = view.current ? (ctrl.reg.skill(view.current)?.name ?? '') : '';
-  const lead = now ? `Slot ${slot + 1} holds <b>${esc(now)}</b>. Tap a skill to swap.` : `Tap a skill to put it in slot ${slot + 1}.`;
-  const body = host.sheet('Pick a skill', `<p class="pk-lead">${lead}</p>${pickerHtml(view, icon, classSlots)}`, `${CLASS} picker-sheet`);
+  // Nothing to choose (every skill you know sits in a class slot): no "tap a skill" lead — the grid's one line says it.
+  const choosable = !!view.current || view.choices.some((c) => c.slot === null || c.slot >= classSlots);
+  const lead = now ? `Slot ${slot + 1} holds <b>${esc(now)}</b>. Tap a skill to swap.` : choosable ? `Tap a skill to put it in slot ${slot + 1}.` : '';
+  const body = host.sheet('Pick a skill', `${lead ? `<p class="pk-lead">${lead}</p>` : ''}${pickerHtml(view, icon, classSlots)}`, `${CLASS} picker-sheet`);
+  // Nothing to pick (every skill you know is in a class slot): the one next step is a quest that teaches a new one.
+  body.querySelector('.pk-quests')?.addEventListener('click', () => host.open('codex', 'quests'));
   $$<HTMLButtonElement>(body, '.pk-tile[data-skill]').forEach((b) =>
     b.addEventListener('click', () => {
-      if (b.classList.contains('inclass')) {
-        host.toast('Your class already uses that one.');
-        return;
-      }
       if (b.classList.contains('cur')) {
         host.close();
         return;
@@ -98,6 +100,7 @@ export function renderMenu(host: PanelHost): void {
     'Menu',
     `<div class="mn-who"><b>${esc(p.name)}</b><span>Lv ${p.level}${worn ? ` · ${esc(worn)}` : ''} · played ${playTime(p.playMs ?? 0)}</span></div>
      <p class="mn-line">Your game saves by itself.</p>
+     ${menuSettingsHtml(readMenuSettings())}
      <div class="mn-actions">
        <button class="btn big gold mn-resume">Back to the game</button>
        <button class="btn mn-new">New game</button>
@@ -108,6 +111,7 @@ export function renderMenu(host: PanelHost): void {
      </div>`,
     `${CLASS} menu-sheet`,
   );
+  wireMenuSettings(body);
   $(body, '.mn-resume').addEventListener('click', () => host.close());
   $(body, '.mn-new').addEventListener('click', () => {
     $(body, '.mn-confirm').classList.remove('hidden');

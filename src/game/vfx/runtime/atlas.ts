@@ -220,7 +220,17 @@ export class Atlas {
    * forgotten (it re-bakes on next use). Returns false when nothing could be freed.
    */
   evict(busy: ReadonlySet<string>): boolean {
-    const cands = this.pages.filter((p) => ![...p.entries].some((k) => busy.has(k))).sort((a, b) => a.lastUsed - b.lastUsed);
+    // A live entry pins its own pages AND the pages of its shared glow twins (they may sit on another page).
+    const pinned = new Set<number>();
+    for (const k of busy) {
+      const e = this.entries.get(k);
+      if (!e) continue;
+      for (const p of e.pages) pinned.add(p);
+      for (const s of e.strips) for (const g of s?.glow ?? []) if (g.w) pinned.add(g.page);
+    }
+    const cands = this.pages
+      .filter((p) => !pinned.has(p.idx) && ![...p.entries].some((k) => busy.has(k)))
+      .sort((a, b) => a.lastUsed - b.lastUsed);
     const page = cands[0];
     if (!page) return false;
     for (const k of page.entries) {
@@ -237,6 +247,9 @@ export class Atlas {
     this.uploads = this.uploads.filter((u) => u.page !== page);
     const names = Object.keys(page.tex.frames).filter((n) => n !== '__BASE');
     for (const n of names) page.tex.remove(n);
+    // Phaser resolves a missing / default frame through `firstFrame`, which still names a removed frame: a new
+    // Image or Blitter on this page would crash on it (TypeError: cutWidth). Point it back at the base frame.
+    page.tex.firstFrame = '__BASE';
     page.ctx.clearRect(0, 0, PAGE, PAGE);
     page.shelves = [];
     page.top = 0;

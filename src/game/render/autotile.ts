@@ -125,6 +125,28 @@ export function decalFrame(set: DecalSet | number, k: number): number {
   return (typeof set === 'number' ? set : DECAL_SET_INDEX[set]) * DECALS_PER_SET + (k % DECALS_PER_SET);
 }
 
+/**
+ * Ground that gets large-scale tone patches (render/ground.ts washes it darker or drier by TONE_CELL-tile value noise,
+ * in an ordered dither): fields read as darker and lighter patches several tiles across, like the reference's two-tone
+ * grass, without changing the base tiles (so tile seams stay invisible).
+ */
+export const TONE_TILES: ReadonlySet<number> = new Set([T.GRASS, T.GRASS2, T.FLOWERS, T.HILL, T.STORMGRASS, T.DARK]);
+const TONE_CELL = 6;
+
+/** Smooth value noise in [0, 1) over TONE_CELL-tile cells at tile coordinates (x, y) (deterministic per map seed). */
+export function toneNoise(x: number, y: number, seed: number): number {
+  const fx = x / TONE_CELL;
+  const fy = y / TONE_CELL;
+  const x0 = Math.floor(fx);
+  const y0 = Math.floor(fy);
+  const v = (cx: number, cy: number) => (cellHash(cx, cy, seed, 0x70e) & 0xffff) / 0x10000;
+  const sx = (fx - x0) ** 2 * (3 - 2 * (fx - x0));
+  const sy = (fy - y0) ** 2 * (3 - 2 * (fy - y0));
+  const a = v(x0, y0) + (v(x0 + 1, y0) - v(x0, y0)) * sx;
+  const b = v(x0, y0 + 1) + (v(x0 + 1, y0 + 1) - v(x0, y0 + 1)) * sx;
+  return a + (b - a) * sy;
+}
+
 /** Biomes whose open water gets lily pads. */
 const POND_BIOMES: ReadonlySet<string> = new Set(['meadow', 'lake', 'town', 'grove', 'glade', 'dusk', 'hill']);
 

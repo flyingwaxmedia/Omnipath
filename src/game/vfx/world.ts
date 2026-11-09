@@ -26,7 +26,7 @@
 import { hashSeed } from '../../core/rng';
 import type { MonsterDef, SkillDef, StatusKind } from '../../core/types';
 import type { Monster } from '../entities/Monster';
-import type { EventBus, GameEvents, Pt, Scope, TellPhase } from '../events';
+import type { EventBus, GameEvents, Scope, TellPhase } from '../events';
 import { bodyOf, pulsePieces } from './bridge';
 import { holdFor } from './juice';
 import type { GhostSource, JuiceHooks, LivePt, PlayCtx, TellPhaseView, VfxGroup, VfxStage } from './play';
@@ -287,6 +287,16 @@ export class WorldBridge {
         ms,
       );
       cues.push(this.stage.play(ex, { ...ctx, caster: e.shape === 'projectile' ? this.mouth(m) : m, aim: { x: e.at.x, y: e.at.y }, rScale: undefined }));
+    }
+    // A chain's charge links the caster to the player while the player stands in reach (beads every 6 px).
+    if (e.shape === 'chain' && live) {
+      const p = host.player();
+      const reach = (): boolean => {
+        const g = live();
+        const pp = host.player();
+        return !!pp && g.kind === 'range' && Math.hypot(pp.x - g.x, pp.y - g.y) <= g.r + 12;
+      };
+      if (p) cues.push(this.stage.play([piece('motes', { kind: 'bead', size: 2 }, DANGER, { anchor: { to: 'path', dy: 0 }, place: { pattern: 'path', everyPx: 6 } })], { ...ctx, caster: this.mouth(m), body: this.playerPt(-18), alive: () => alive() && reach(), rScale: undefined }));
     }
     // Elites and wardens gather light under the body while they charge.
     if (e.rank && e.rank !== 'common') {
@@ -702,15 +712,8 @@ export class WorldBridge {
     });
   }
 
-  /** The aim point of a live monster tell (QA: the hitbox overlay). */
+  /** Live monster tells (QA). */
   tellCount(): number {
     return this.tells.size;
   }
 }
-
-/** Every one of a recipe's statuses on the player (warm set helper). */
-export function playerStatusPieces(r: VfxRecipe): VfxPiece[] {
-  return r.statuses.flatMap((k) => statusPieces(k, (r.imbue ?? r.family) as FamilyId, 'M', 'monster'));
-}
-
-export type { Pt };

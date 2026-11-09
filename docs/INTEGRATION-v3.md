@@ -212,7 +212,7 @@ Who does what (the cross-lane questions, one owner each):
 | `bag` | panels | `sell` |
 | `map` | panels | `travel` / `route` |
 | `altar` | panels | — |
-| `menu` | hud | — (the ☰ button: New game with a one-line confirm, and only what exists) |
+| `menu` | hud | — (the ☰ button: Sound On/Off + Volume, "Reduce shake & flashes", New game with a one-line confirm) |
 New names (quest reward card, …) go into the owner's registry and must not collide. `STARCHART_FULLSCREEN` and
 `PANELS_FULLSCREEN` name the panels that hide the world (`uiOpen.fullscreen`).
 

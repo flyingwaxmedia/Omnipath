@@ -129,8 +129,10 @@ export interface ClassCardView {
   level: number;
   maxLevel: number;
   levelProgress: number;
-  /** Locked classes: ONE hint line (the first unmet goal, or the riddle). */
+  /** Locked classes: ONE short hint line (the first unmet goal). */
   hint?: string;
+  /** Locked and not close yet: the name stays '???' (its riddle lives in Codex > Whispers). */
+  mystery?: boolean;
   /** Frame / accent colour, '#rrggbb'. */
   color: string;
   /** Skills this class would equip into the class slots (ids, best first). */
@@ -194,6 +196,8 @@ export interface QuestCardView {
 export interface NpcQuestView extends QuestCardView {
   /** The NPC's line for this status: offer (available), progress (active), complete (ready). */
   dialog: string;
+  /** Flavour behind the dialog's small "More" toggle (offer and complete only; src/data/quests.ts QUEST_LORE). */
+  more?: string;
 }
 
 /** What talking to an NPC shows (the quest list part of the NPC dialog / trainer panel). */

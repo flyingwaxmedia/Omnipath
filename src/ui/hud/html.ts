@@ -24,7 +24,8 @@ export const HUD_WORDS = {
   on: 'ON',
   off: 'OFF',
   target: 'Target',
-  potion: 'Potion',
+  potion: 'SP potion',
+  sp: 'SP',
   exp: 'EXP',
   empty: 'Empty',
   explored: 'Explored',
@@ -138,36 +139,68 @@ export function statsHtml(st: { atk: number; matk: number; def: number }, worn: 
   }<span class="cn">${esc(worn.name)}</span><b>Lv <span class="num">${worn.level}</span>${max ? '★' : ''}</b><u><i style="width:${max ? 100 : pct}%"></i></u></span>`;
 }
 
+/** A quest marker as the NPCs wear it (pixel art data URL + its size in art px). */
+export interface QuestMarkArt {
+  url: string;
+  w: number;
+  h: number;
+}
+
+/** The tracker's mark for a quest: the NPC marker set ('…' in progress, '?' ready to turn in; '!' only ever means
+ *  "a new quest here", so it never shows in the tracker — docs/UX-SIMPLE.md rule 10). */
+export function questMarkHtml(ready: boolean, art?: QuestMarkArt | null): string {
+  const label = ready ? 'Ready to turn in' : 'In progress';
+  if (art?.url) return `<img class="qm" src="${attr(art.url)}" style="--w:${art.w};--h:${art.h}" alt="${label}" draggable="false">`;
+  return `<b class="qm-t" aria-label="${label}">${ready ? '?' : '…'}</b>`;
+}
+
 /** One Pursuits row: tracked quests (objective line with progress) and goals (one plain next step). */
-export function pursuitHtml(p: PursuitView, i: number, iconUrl: string): string {
+export function pursuitHtml(p: PursuitView, i: number, iconUrl: string, mark?: QuestMarkArt | null): string {
   const { text, count } = splitCount(p.line);
   const pct = p.progress !== undefined ? Math.round(Math.max(0, Math.min(1, p.progress)) * 100) : -1;
   const ico = iconUrl
     ? `<img src="${attr(iconUrl)}" alt="" draggable="false">`
-    : `<i class="g g-${p.kind === 'quest' ? 'quest' : 'skills'}" aria-hidden="true"></i>`;
+    : p.kind === 'quest'
+      ? questMarkHtml(!!p.ready, mark)
+      : '<i class="g g-skills" aria-hidden="true"></i>';
   return `<button class="pz-row ${p.kind}${p.ready ? ' ready' : ''}" data-i="${i}" data-key="${attr(p.key)}" aria-label="${attr(`${p.title}: ${p.line}`)}">
 <span class="pz-ico">${ico}</span><span class="pz-txt"><b>${digits(esc(p.title))}</b><span class="pz-line"><span>${digits(esc(text))}</span>${count ? `<em class="num">${esc(count)}</em>` : ''}</span></span>${
     pct >= 0 && !p.ready ? `<u class="pz-bar"><i style="width:${pct}%"></i></u>` : ''
   }</button>`;
 }
 
-/** Picker grid (panel 'picker', arg '<slot>'): icons + names, newest first; 'Empty' first when the slot holds a skill. */
+/** What the picker says when nothing can go in the slot, and its one button (the quest log: quests teach skills). */
+export const PICKER_NONE = { line: 'Learn a new skill to fill this slot.', button: 'See quests' } as const;
+
+/**
+ * Picker grid (panel 'picker', arg '<slot>'): the skills that can go in this slot — icons + names, newest first;
+ * 'Empty' first when the slot holds a skill. Skills your class already holds are not choices: they sit dimmed in a
+ * small row below ("Already in your class slots"). Nothing to pick → one line and one button (`.pk-quests`).
+ */
 export function pickerHtml(view: SlotPickerView, icon: (id: string) => string, classSlots: number): string {
+  const inClass = (c: SlotPickerView['choices'][number]) => c.slot !== null && c.slot < classSlots;
+  const picks = view.choices.filter((c) => !inClass(c));
+  const held = view.choices.filter(inClass);
   const tiles: string[] = [];
   if (view.current)
     tiles.push(`<button class="pk-tile pk-empty" data-empty="1" aria-label="Empty this slot"><span class="pk-ico"><i class="pk-x" aria-hidden="true"></i></span><span class="nm">${HUD_WORDS.empty}</span></button>`);
-  for (const c of view.choices) {
+  for (const c of picks) {
     const here = c.slot === view.slot;
-    const inClass = c.slot !== null && c.slot < classSlots;
-    const tag = here ? 'Equipped' : inClass ? 'Class' : c.slot !== null ? `Slot ${c.slot + 1}` : '';
-    const cls = ['pk-tile', here ? 'cur' : '', inClass ? 'inclass' : '', c.fresh ? 'fresh' : ''].filter(Boolean).join(' ');
+    const tag = here ? 'Equipped' : c.slot !== null ? `Slot ${c.slot + 1}` : '';
+    const cls = ['pk-tile', here ? 'cur' : '', c.fresh ? 'fresh' : ''].filter(Boolean).join(' ');
     tiles.push(`<button class="${cls}" data-skill="${attr(c.skillId)}" aria-label="${attr(c.name)}${tag ? ` (${attr(tag)})` : ''}">
 <span class="pk-ico"><img src="${attr(icon(c.skillId))}" alt="" draggable="false">${c.fresh ? '<i class="new" aria-hidden="true">New</i>' : ''}</span><span class="nm">${esc(c.name)}</span>${
       tag ? `<em class="tag">${esc(tag)}</em>` : ''
     }</button>`);
   }
-  if (!view.choices.length) return `<p class="pk-none">Learn skills from quests, then pick one here.</p>`;
-  return `<div class="pk-grid">${tiles.join('')}</div>`;
+  const classRow = held.length
+    ? `<div class="pk-class"><small>Already in your class slots</small><div class="pk-mini">${held
+        .map((c) => `<span class="inclass" title="${attr(c.name)}"><img src="${attr(icon(c.skillId))}" alt="${attr(c.name)}" draggable="false"></span>`)
+        .join('')}</div></div>`
+    : '';
+  // Something to choose: the slot's own skill alone is no choice unless it can be emptied (it always can).
+  if (picks.length || view.current) return `<div class="pk-grid">${tiles.join('')}</div>${classRow}`;
+  return `<p class="pk-none">${PICKER_NONE.line}</p><div class="pk-acts"><button class="btn gold big pk-quests">${PICKER_NONE.button}</button></div>${classRow}`;
 }
 
 /** Slot chooser (panel 'picker', arg 'skill:<id>'): which of your slots gets the skill. */

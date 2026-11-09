@@ -525,6 +525,24 @@
   color: #8a5a10;
 }
 
+/* The quest's flavour behind "More" (UX-SIMPLE rule 9): inline with the line, its own small italic line when open. */
+.npc-dialog .say-t {
+  min-height: 32px;
+  vertical-align: baseline;
+}
+
+.npc-dialog .say-more {
+  display: block;
+  margin-top: 4px;
+  font-size: 13px;
+  font-style: italic;
+  color: #5a4a20;
+}
+
+.npc-dialog .say-more.hidden {
+  display: none;
+}
+
 .npc-dialog .qhint {
   margin: 6px 0 0;
   font-size: 13px;

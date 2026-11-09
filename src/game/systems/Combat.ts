@@ -20,7 +20,6 @@ import type { PlayerDot } from '../entities/Player';
 import type { MapScene } from '../scenes/MapScene';
 import { type Buff, type Stats, expToNext } from '../session';
 import { gameBus } from '../events';
-import { DEPTH } from '../render/depths';
 import { TILE } from '../world/runtime';
 import { type Cast, type CombatHost, PLAYER_R, SkillSystem, castRef, clearShot, hex } from './SkillSystem';
 
@@ -64,7 +63,6 @@ interface WindUp {
   until: number;
   target: Monster | null;
   aim: { x: number; y: number };
-  preview: Phaser.GameObjects.Graphics | null;
   /** Reserved at wind-up: castStart and every later part of this cast carry it. */
   castId: number;
 }
@@ -293,11 +291,10 @@ export class Combat implements CombatHost {
         this.cancelWindup(true);
       } else {
         const t = (now - w.start) / (w.until - w.start);
+        // The ground preview (strike cone, spin / nova rim, dash lane) is the VFX charge phase's (castStart).
         p.setCast(t, this.colorFor(w.skill));
-        this.drawPreview(w, Math.min(1, t));
         if (now >= w.until) {
           this.windup = null;
-          w.preview?.destroy();
           p.setCast(null);
           const tg = w.target && w.target.alive ? w.target : null;
           const aim = tg ? { x: tg.x, y: tg.y } : w.aim;
@@ -430,56 +427,8 @@ export class Combat implements CombatHost {
     const w = this.windup;
     if (!w) return;
     this.windup = null;
-    w.preview?.destroy();
     this.player.setCast(null);
     if (show) this.scene.floatText(this.player.x, this.player.y - 66, `× ${w.skill.name}`, '#b8c0d0', 11);
-  }
-
-  /** Ground preview of a winding-up skill: where a nova lands, a dash's lane, a spin's ring, a strike's cone. */
-  private drawPreview(w: WindUp, t: number): void {
-    const p = this.player;
-    const sh = w.skill.shape;
-    if (!w.preview) {
-      if (sh.kind === 'buff') return;
-      w.preview = this.scene.add.graphics().setDepth(DEPTH.AIM_PREVIEW);
-    }
-    const g = w.preview;
-    g.clear();
-    const color = this.colorFor(w.skill);
-    const tg = w.target?.alive ? w.target : null;
-    const ax = tg ? tg.x : w.aim.x;
-    const ay = tg ? tg.y : w.aim.y;
-    const ang = Math.atan2(ay - p.y, ax - p.x);
-    const a = 0.35 + 0.45 * t;
-    switch (sh.kind) {
-      case 'nova': {
-        const d = Math.min(sh.range, Math.hypot(ax - p.x, ay - p.y));
-        const cx = p.x + Math.cos(ang) * d;
-        const cy = p.y + Math.sin(ang) * d;
-        g.fillStyle(color, 0.1 + 0.12 * t).fillEllipse(cx, cy, sh.radius * 2 * t, sh.radius * 1.3 * t);
-        g.lineStyle(2, color, a).strokeEllipse(cx, cy, sh.radius * 2, sh.radius * 1.3);
-        break;
-      }
-      case 'dash': {
-        const ex = p.x + Math.cos(ang) * sh.distance;
-        const ey = p.y + Math.sin(ang) * sh.distance;
-        g.lineStyle(Math.max(8, sh.width), color, 0.08 + 0.1 * t).lineBetween(p.x, p.y, ex, ey);
-        g.lineStyle(2, color, a).lineBetween(p.x, p.y, p.x + (ex - p.x) * t, p.y + (ey - p.y) * t);
-        break;
-      }
-      case 'spin':
-        g.fillStyle(color, 0.06 + 0.1 * t).fillEllipse(p.x, p.y, sh.radius * 2, sh.radius * 1.3);
-        g.lineStyle(2, color, a).strokeEllipse(p.x, p.y, sh.radius * 2, sh.radius * 1.3);
-        break;
-      case 'strike': {
-        const arc = (sh.arc * Math.PI) / 180;
-        g.fillStyle(color, 0.08 + 0.12 * t);
-        g.slice(p.x, p.y, sh.range, ang - arc / 2, ang + arc / 2, false).fillPath();
-        break;
-      }
-      default:
-        g.lineStyle(2, color, a * 0.7).lineBetween(p.x, p.y - 12, ax, ay - 12);
-    }
   }
 
   // ---------------------------------------------------------------- casting
@@ -567,7 +516,7 @@ export class Combat implements CombatHost {
     if ((skill.castMs ?? 0) > 0) {
       p.path = [];
       const castId = s.skills.reserveId();
-      this.windup = { skill, start: now, until: now + skill.castMs!, target, aim, preview: null, castId };
+      this.windup = { skill, start: now, until: now + skill.castMs!, target, aim, castId };
       p.setCast(0, this.colorFor(skill));
       gameBus.emit('castStart', { skillId: skill.id, skill, element: skill.element, castId, x: p.x, y: p.y, aim, target, durationMs: skill.castMs!, auto });
       return true;
@@ -1360,7 +1309,6 @@ export class Combat implements CombatHost {
     for (const m of this.monsters) m.destroy();
     this.monsters = [];
     this.target = null;
-    this.windup?.preview?.destroy();
     this.windup = null;
   }
 }

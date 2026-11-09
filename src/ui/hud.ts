@@ -1,14 +1,16 @@
 // HUD v3 (docs/CLIENT-v3.md §2, docs/ART-DIRECTION.md §5, docs/UX-SIMPLE.md) — no joystick, tap-to-move:
 //   top-left    portrait medallion + level badge, "Lv N · Name", HP / SP bars with numbers, stat strip (+ class);
-//   top-centre  zone plate (name, Safe / Hunting / Dungeon / Warden, level band) + a slim strip; target, auto-travel
-//               and toasts stack under it;
+//   top-centre  zone plate (name, Safe / Hunting / Dungeon / Warden, level band) + a slim strip; target and auto-travel
+//               under it (landscape: the toasts too);
 //   top-right   framed buttons Skills · Fuse · Class · Codex · Bag · Map · ☰ (Fuse after the first element), the
-//               collapsible minimap under them, then the Pursuits tracker (tracked quests, then ≤ 2 goals);
+//               collapsible minimap under them, then the Pursuits tracker (≤ 2 rows: tracked quests, then goals; "+N");
 //   left edge   round quick buttons: heal (count), recall (count), rest;
-//   bottom      3-line fading log, the skill bar (class slots in the class colour + emblem, your slots plain; portrait
-//               phones: two rows), the attack cluster (hold to swing, AUTO, Target, Potion) and the EXP bar.
-// The layout pass (layout()) measures the widgets and places the zone plate, bar, log and Pursuits so portrait /
-// landscape phones, iPads and desktops never overlap. Updates are throttled by the caller (≤ 10 Hz) and only touch the
+//   bottom      3-line fading log, the skill bar (class slots with the emblem and a class-coloured bracket, your slots
+//               plain; portrait: class row + your row), the attack cluster (hold to swing, AUTO, Target, SP potion)
+//               and the EXP bar. Portrait: the toasts rise from just above the bar.
+// The layout pass (layout()) measures the widgets and places the zone plate, bar, log, Pursuits and toasts so portrait /
+// landscape phones, iPads and desktops never overlap, and portrait keeps the middle of the screen (where the player
+// stands; tap-to-move is the only way to move) free. Updates are throttled by the caller (≤ 10 Hz) and only touch the
 // DOM when a value changed. Frames come from the uiCss custom properties (./hud/art.ts).
 import type { ElementDef, SkillDef } from '../core/types';
 import { WEAPONS } from '../data/weapons';
@@ -17,14 +19,17 @@ import { expToNext } from '../game/session';
 import { discoveredRoute } from '../game/world/runtime';
 import type { BarSlotView, GameController, PursuitView, ZoneView } from './controller';
 import { ensureUiArt } from './hud/art';
-import { HUD_WORDS, SPARK_RUNE, barTabsHtml, digits, pursuitHtml, slotHtml, statsHtml, zonePlateHtml, zoneStripHtml, type HudArt } from './hud/html';
+import { MARKER_ART } from '../game/entities/actorArt';
+import { HUD_WORDS, SPARK_RUNE, barTabsHtml, digits, pursuitHtml, slotHtml, statsHtml, zonePlateHtml, zoneStripHtml, type HudArt, type QuestMarkArt } from './hud/html';
 import {
   HOLD_MS,
   HOLD_SLOP,
+  PURSUIT_ROWS,
   type HudLayoutClasses,
   type HudScale,
+  type Rect,
   barLeft,
-  barRows,
+  barPlan,
   barWidth,
   cooldownText,
   countText,
@@ -32,7 +37,7 @@ import {
   fitSnap,
   hudLayoutClasses,
   hudScale,
-  placeCentred,
+  placeZone,
   rowsThatFit,
 } from './hud/layout';
 import { $, $$, esc, hex } from './util';
@@ -148,8 +153,17 @@ export class Hud {
   private t = { stats: 0, badges: 0, zone: 0, pz: 0 };
   private pursuits: PursuitView[] = [];
   private pzOpen: boolean | null = null;
-  private hold: { i: number; x: number; y: number; timer: number } | null = null;
+  /** Slot presses in progress, one per finger (two-thumb play: each press casts or edits on its own). */
+  private holds = new Map<number, { i: number; x: number; y: number; timer: number }>();
   private suppressClick = false;
+  /** When the target plate last showed a new target (a full-HP target nobody fights hides after a while). */
+  private targetSince = 0;
+  private targetIdle = false;
+  private zoneName = '';
+  private zoneFade = 0;
+  private sparkSkill = '';
+  private sparkTimer = 0;
+  private marks: Partial<Record<'busy' | 'ready', QuestMarkArt | null>> = {};
   private layoutQueued = false;
   private uiArt = false;
   private hinted = new Set<string>();
@@ -188,8 +202,8 @@ export class Hud {
           <button class="np-open" aria-label="Show route on the map"><i class="g g-map" aria-hidden="true"></i><span class="np-txt"><b></b><small></small></span></button>
           <button class="np-stop" aria-label="Stop auto-travel" title="Stop">✕</button>
         </div>
-        <div class="toasts" aria-live="polite"></div>
       </div>
+      <div class="toasts" aria-live="polite"></div>
       <div class="hud-right">
         <nav class="menu">${MENU.map(
           (m) =>
@@ -198,7 +212,10 @@ export class Hud {
         <div class="mm-dock"></div>
         <div class="pursuits hidden">
           <div class="pz-list"></div>
-          <button class="pz-tab" aria-label="${HUD_WORDS.pursuits}"><i class="g g-quest" aria-hidden="true"></i><b class="pz-n"></b><small>${HUD_WORDS.pursuits}</small></button>
+          <div class="pz-side">
+            <button class="pz-tab" aria-label="${HUD_WORDS.pursuits}"><i class="g g-quest" aria-hidden="true"></i><b class="pz-n"></b><small>${HUD_WORDS.pursuits}</small></button>
+            <button class="pz-more hidden" aria-label="More quests: open the quest log"></button>
+          </div>
         </div>
       </div>
       <div class="quick">
@@ -212,10 +229,10 @@ export class Hud {
         <button class="atk" aria-label="${HUD_WORDS.attack} (hold to keep swinging)"><i class="g g-attack" aria-hidden="true"></i><span class="cd" aria-hidden="true"></span><span class="ring" aria-hidden="true"></span><span class="rk hidden" aria-hidden="true"></span></button>
         <button class="rb auto" aria-pressed="false" aria-label="${HUD_WORDS.auto}"><i class="g g-auto" aria-hidden="true"></i><em class="pill">${HUD_WORDS.off}</em></button>
         <button class="rb tgt" aria-label="${HUD_WORDS.target}"><i class="g g-target" aria-hidden="true"></i><small>${HUD_WORDS.target}</small></button>
-        <button class="rb pot" aria-label="${HUD_WORDS.potion}"><span class="q-ico"><i class="g g-potion sp" aria-hidden="true"></i></span><b class="n"></b></button>
+        <button class="rb pot none" aria-label="${HUD_WORDS.potion}"><span class="q-ico"><i class="g g-potion sp" aria-hidden="true"></i></span><b class="n"></b><small>${HUD_WORDS.sp}</small></button>
       </div>
       <div class="expbar" aria-label="${HUD_WORDS.exp}"><i></i><span></span></div>
-      <div class="spark-banner"><b></b><small></small></div>
+      <div class="spark-banner"><b></b><small></small><button class="sb-see">See it</button></div>
       <div class="headline" aria-live="polite"><div class="hl-card"><span class="hl-art"></span><span class="hl-txt"><b></b><small></small></span></div></div>
       <div class="channel hidden"><div class="ch-label"></div><div class="cbar"><i></i></div></div>
       <div class="castbar hidden" aria-hidden="true"><div class="cb-label"><img class="cb-ico" alt=""><span class="cb-name"></span></div><div class="cbar"><i></i></div></div>
@@ -298,6 +315,13 @@ export class Hud {
       const p = row ? this.pursuits[Number(row.dataset.i)] : undefined;
       if (p) this.actions.open(p.open.panel, p.open.arg);
     });
+    // "+N": the rows that did not fit → the quest log.
+    $(this.pzEl, '.pz-more').addEventListener('click', () => this.actions.open('codex', 'quests'));
+    // A sudden insight's banner: "See it" opens the new skill's card (the banner is the moment's only announcement).
+    $(this.sparkEl, '.sb-see').addEventListener('click', () => {
+      if (this.sparkSkill) this.actions.open('skill', this.sparkSkill);
+      this.hideSpark();
+    });
     $$<HTMLButtonElement>(this.el, '.quick .qk').forEach((b) =>
       b.addEventListener('click', () => {
         const kind = b.dataset.q as 'heal' | 'recall' | 'rest';
@@ -346,10 +370,12 @@ export class Hud {
       const b = (e.target as HTMLElement).closest<HTMLElement>('.slot');
       if (b) this.slotEdit(Number(b.dataset.slot));
     });
-    window.addEventListener('pointerup', () => this.slotUp());
-    window.addEventListener('pointercancel', () => this.endHold());
+    // Every finger on its own: its release casts its slot, its move / cancel drops only its own press.
+    window.addEventListener('pointerup', (e) => this.slotUp(e.pointerId));
+    window.addEventListener('pointercancel', (e) => this.endHold(e.pointerId));
     window.addEventListener('pointermove', (e) => {
-      if (this.hold && Math.hypot(e.clientX - this.hold.x, e.clientY - this.hold.y) > HOLD_SLOP) this.endHold();
+      const h = this.holds.get(e.pointerId);
+      if (h && Math.hypot(e.clientX - h.x, e.clientY - h.y) > HOLD_SLOP) this.endHold(e.pointerId);
     });
     this.el.addEventListener('contextmenu', (e) => e.preventDefault());
     // Desktop: M opens the map.
@@ -363,44 +389,53 @@ export class Hud {
   }
 
   private slotDown(e: PointerEvent): void {
-    // A new press: whatever click the last long-press swallowed is long gone.
-    this.suppressClick = false;
     const target = e.target as HTMLElement;
     const b = target.closest<HTMLElement>('.slot');
     if (!b) return;
+    // A new press with no other finger down: whatever click the last long-press swallowed is long gone.
+    if (!this.holds.size) this.suppressClick = false;
     e.preventDefault();
     const i = Number(b.dataset.slot);
     const v = this.slots.find((s) => s.index === i);
     if (!v?.skillId) return; // empty slots act on click
     if (v.kind === 'own' && target.closest('.edit')) return; // the edit corner acts on click
-    // Cast on release (a quick tap); a hold opens the picker / the card instead and never casts.
-    this.endHold();
+    // Cast on release (a quick tap); a hold opens the picker / the card instead and never casts. Other fingers'
+    // presses carry on (two thumbs on two slots both cast).
+    const id = e.pointerId;
+    this.endHold(id);
     b.classList.add('pressed', 'holding');
-    this.hold = {
+    this.holds.set(id, {
       i,
       x: e.clientX,
       y: e.clientY,
       timer: window.setTimeout(() => {
-        this.hold = null;
+        this.endHold(id);
         this.suppressClick = true;
-        this.endHold();
         this.slotEdit(i);
       }, HOLD_MS),
-    };
+    });
   }
 
-  /** Drops a press in progress (no cast). */
-  private endHold(): void {
-    if (this.hold) clearTimeout(this.hold.timer);
-    this.hold = null;
-    this.slotsEl.querySelectorAll('.slot.holding, .slot.pressed').forEach((s) => s.classList.remove('holding', 'pressed'));
+  /** Drops one finger's press in progress (no cast), or every press without an id. */
+  private endHold(pointerId?: number): void {
+    const ids = pointerId === undefined ? [...this.holds.keys()] : [pointerId];
+    for (const id of ids) {
+      const h = this.holds.get(id);
+      if (!h) continue;
+      clearTimeout(h.timer);
+      this.holds.delete(id);
+      // Another finger may still hold the same slot: keep its look then.
+      if ([...this.holds.values()].some((o) => o.i === h.i)) continue;
+      this.slotsEl.querySelector(`.slot[data-slot="${h.i}"]`)?.classList.remove('holding', 'pressed');
+    }
   }
 
-  /** A press released before it became a hold: cast that slot. */
-  private slotUp(): void {
-    if (!this.hold) return;
-    const i = this.hold.i;
-    this.endHold();
+  /** A press released before it became a hold: cast that finger's slot. */
+  private slotUp(pointerId: number): void {
+    const h = this.holds.get(pointerId);
+    if (!h) return;
+    const i = h.i;
+    this.endHold(pointerId);
     this.ctrl.castSlot(i);
     const b = this.slotsEl.querySelector<HTMLElement>(`.slot[data-slot="${i}"]`);
     if (b) {
@@ -443,6 +478,8 @@ export class Hud {
   /** One-line "teach in the moment" hint, once per save (docs/UX-SIMPLE.md rule 9). */
   private hint(key: string, msg: string): void {
     if (this.hinted.has(key)) return;
+    // A card or panel is up (it is the moment's announcement): the hint waits for the next quiet render.
+    if (this.root.querySelector('.modal:not(.hidden)')) return;
     this.hinted.add(key);
     try {
       if (this.ctrl.firstTime(key)) this.toast(msg);
@@ -493,32 +530,62 @@ export class Hud {
     return w > 0 ? w : fb * this.scale.px;
   }
 
-  /** Places the zone plate, skill bar, log and Pursuits for this screen (no overlaps; see ./hud/layout.ts). */
+  /**
+   * Places the skill bar, log, Pursuits, zone plate, target and toasts for this screen (no overlaps; see
+   * ./hud/layout.ts). Portrait screens keep the middle band (where the player stands, and every tap must reach the
+   * world) free of HUD: the zone plate and target stay in the top band, the Pursuits show ≤ 2 rows above it, and
+   * toasts rise above the skill bar instead of stacking down the screen.
+   */
   layout(): void {
     if (!this.el.isConnected) return;
     const W = window.innerWidth;
     const H = window.innerHeight;
     this.applyScale(W, H);
-    // Every HUD length is in HUD art px: u CSS px each (the constants below are art px too).
+    // Every HUD length is in HUD art px: u CSS px each (the constants below are art px too). Boxes sit on whole
+    // device px and are whole art px wide, so their frames' pixels stay even under nearest sampling.
     const u = this.scale.px;
     const dpr = window.devicePixelRatio || 1;
     const snap = (v: number) => Math.round(v * dpr) / dpr;
+    const whole = (v: number) => Math.ceil(v / u - 0.01) * u;
+    const port = this.portraitPhone();
     const m = this.len('--m', 8);
+    // Skill bar: its plan (rows, slot size), width, and its left edge (centred, clear of the attack cluster).
+    const baseSlot = this.len('--slot', 52);
+    const gap = this.len('--sgap', 4);
+    const n = this.slots.length || 1;
+    const cl = this.cluster.getBoundingClientRect();
+    const clLeft = cl.width ? cl.left : W;
+    const plan = barPlan({
+      n,
+      classSlots: this.slots.filter((s) => s.kind === 'class').length,
+      twoRows: port,
+      room: clLeft - 6 * u - m,
+      slot: baseSlot,
+      minSlot: 44 * u,
+      gap,
+      unit: u,
+    });
+    const slot = plan.slot;
+    const slotVar = slot < baseSlot - 0.01 ? `${slot}px` : '';
+    if (this.last.barSlot !== slotVar) {
+      this.last.barSlot = slotVar;
+      if (slotVar) this.hotbar.style.setProperty('--slot', slotVar);
+      else this.hotbar.style.removeProperty('--slot');
+    }
+    this.hotbar.classList.toggle('split', plan.split);
+    this.hotbar.classList.toggle('two', plan.rows.length > 1);
+    this.setVar('--own-col', String(plan.ownCol || 'auto'));
     // Icons: one icon pixel = one HUD art pixel (32 art px) when the slot frame leaves room, else the largest crisp size.
-    const slot = this.len('--slot', 52);
     const crisp = (room: number, art: number) => (room >= art * u - 0.01 ? art * u : fitSnap(room, art, dpr));
     this.setVar('--ico', `${crisp(slot - 12 * u, 32)}px`);
-    this.setVar('--glyph', `${crisp(Math.min(30 * u, slot - 22 * u), 24)}px`);
-    // Skill bar: rows, width, and its left edge (centred, clear of the attack cluster).
-    const n = this.slots.length || 1;
-    const rows = barRows(n, this.portraitPhone());
-    const per = rows[0] ?? n;
-    const gap = this.len('--sgap', 4);
+    // (Glyphs are the buttons' icons, not the bar's: sized from the screen's slot size, not a shrunk bar.)
+    this.setVar('--glyph', `${crisp(Math.min(30 * u, baseSlot - 22 * u), 24)}px`);
+    const rows = plan.rows;
+    const per = Math.max(...rows, 1);
     const bw = barWidth(per, slot, gap);
     this.setVar('--per-row', String(per));
     this.setVar('--bar-w', `${bw}px`);
-    const cl = this.cluster.getBoundingClientRect();
-    const left = barLeft(bw, W, cl.width ? cl.left : W, 10 * u, m);
+    const left = barLeft(bw, W, clLeft, 10 * u, m);
     this.setVar('--bar-left', `${snap(left)}px`);
     // Full height (slots + the class / yours tabs): the stacked log and the cast bar sit above it.
     const barH = this.hotbar.offsetHeight || rows.length * slot + (rows.length - 1) * gap;
@@ -534,66 +601,100 @@ export class Hud {
     const st = this.v.stats.getBoundingClientRect();
     const statsRoom = menu.width > 0 && menu.bottom > st.top && menu.left > st.left ? `${snap(Math.max(80 * u, menu.left + 8 * u - st.left))}px` : '9999px';
     this.setVar('--stats-room', statsRoom);
-    // Zone plate (+ target / toasts under it): centred in the top row if it fits, else on a second row.
+    // Pursuits: ≤ 2 rows, above the attack cluster and (portrait) above the middle band; the rest behind "+N".
+    this.fitPursuits(Math.min(cl.width ? cl.top - 10 * u : H - 120 * u, H > W ? H * 0.4 : Infinity));
+    // Zone plate (+ the target under it): whole art px wide (its natural width rounded up), then placed.
     const me = this.me.getBoundingClientRect();
     const plate = $(this.me, '.me-plate').getBoundingClientRect();
-    const zw = this.zoneEl.offsetWidth;
-    const zh = this.zoneEl.offsetHeight;
-    const topRowRight = Math.max(plate.right, me.left + 8 * u);
-    let x = placeCentred(zw, W, topRowRight + 8 * u, menu.left - 8 * u);
-    let top = Math.max(m, menu.top);
-    let lo = topRowRight + 8 * u;
-    let hi = menu.left - 8 * u;
-    if (x === null) {
-      top = Math.max(me.bottom, menu.bottom) + 6 * u;
-      const mm = this.mmDock.getBoundingClientRect();
-      const pz = this.pzEl.getBoundingClientRect();
-      const blockers = [mm, pz].filter((r) => r.width > 0 && r.top < top + zh + 60 * u && r.bottom > top);
-      lo = m;
-      hi = Math.min(W - m, ...blockers.map((r) => r.left - 8 * u));
-      x = placeCentred(zw, W, lo, hi);
-      // Still no room beside the minimap (narrow phones, long place names): step down past whatever sits in the
-      // plate's own row until it fits beside the rest.
-      for (let i = 0; i < 3 && x === null; i++) {
-        const row = [mm, pz].filter((r) => r.width > 0 && r.top < top + zh && r.bottom > top);
-        if (!row.length) break;
-        top = Math.min(...row.map((r) => r.bottom)) + 6 * u;
-        const next = [mm, pz].filter((r) => r.width > 0 && r.top < top + zh && r.bottom > top);
-        hi = Math.min(W - m, ...next.map((r) => r.left - 8 * u));
-        x = placeCentred(zw, W, lo, hi);
-      }
-      x ??= lo;
+    const zone = this.zoneEl;
+    // Natural widths: the column must not cap them (it is sized to the plate below).
+    this.centre.style.width = '';
+    zone.style.width = '';
+    zone.classList.add('compact');
+    let zwCompact = whole(zone.getBoundingClientRect().width);
+    zone.classList.remove('compact');
+    let zw = whole(zone.getBoundingClientRect().width);
+    let zh = zone.offsetHeight;
+    // Portrait, the plate faded away: the column is placed for what it shows now (the target plate, if any).
+    if (port && zone.classList.contains('gone')) {
+      this.targetEl.style.width = '';
+      const t = this.targetEl.classList.contains('hidden') ? null : this.targetEl.getBoundingClientRect();
+      zw = zwCompact = t && t.width > 0 ? whole(t.width) : 44 * u;
+      zh = t && t.height > 0 ? t.height : 0;
     }
-    const cx = x + zw / 2;
-    this.centre.style.left = `${snap(cx)}px`;
-    this.centre.style.top = `${snap(top)}px`;
-    // Toasts / target under the plate: as wide as the space between whatever sits beside them allows.
-    const below = top + zh;
-    const side = (r: DOMRect) => r.width > 0 && r.top < below + 200 * u && r.bottom > below;
-    const leftBlocks = [me, this.el.querySelector('.quick')!.getBoundingClientRect()].filter(side);
-    const rightBlocks = [this.mmDock.getBoundingClientRect(), this.pzEl.getBoundingClientRect(), menu].filter(side);
-    const lo2 = Math.max(m, ...leftBlocks.map((r) => r.right + 8 * u));
-    const hi2 = Math.min(W - m, ...rightBlocks.map((r) => r.left - 8 * u));
-    // Toasts: centred under the plate when there is room, else slid sideways into the free span.
-    const want = Math.min(440 * u, Math.max(zw, hi2 - lo2));
-    const tcx = 2 * Math.min(cx - lo2, hi2 - cx) >= want ? cx : Math.max(lo2 + want / 2, Math.min(hi2 - want / 2, cx));
-    this.setVar('--centre-w', `${Math.floor(Math.max(zw, 2 * Math.min(tcx - lo2, hi2 - tcx)))}px`);
-    this.setVar('--toast-dx', `${snap(tcx - cx)}px`);
-    // Pursuits: only the rows that fit above the attack cluster.
-    this.fitPursuits(cl.width ? cl.top - 10 * u : H - 120 * u);
+    const rect = (el: Element | null): Rect | null => {
+      if (!el || (el as HTMLElement).offsetParent === null) return null;
+      const r = el.getBoundingClientRect();
+      return r.width > 0 ? r : null;
+    };
+    const mm = rect(this.mmDock);
+    const pz = rect(this.pzEl);
+    const quick = rect(this.el.querySelector('.quick'));
+    const place = placeZone({ W, m, u, zw, zwCompact, zh, below: port ? 0 : 48 * u, portrait: port, plate, me, stats: rect(this.v.stats), menu, minimap: mm, pursuits: pz, quick });
+    zone.classList.toggle('compact', place.compact);
+    const width = place.maxW !== undefined ? Math.floor(place.maxW / u) * u : place.compact ? zwCompact : zw;
+    zone.style.width = `${width}px`;
+    const x = snap(place.x);
+    const top = snap(place.top);
+    this.centre.style.left = `${x}px`;
+    this.centre.style.top = `${top}px`;
+    this.centre.style.width = `${width}px`;
+    // The target plate: whole art px, its width differing from the plate's by an even number of art px, so centred
+    // under the plate it starts on a whole art px too.
+    const tg = this.targetEl;
+    if (!tg.classList.contains('hidden')) {
+      tg.style.width = '';
+      let tw = Math.round(whole(tg.getBoundingClientRect().width) / u);
+      if ((tw - Math.round(width / u)) % 2) tw++;
+      tg.style.width = `${tw * u}px`;
+    }
+    // Toasts. Landscape: centred under the plate (+ target), slid sideways into the free span when needed. Portrait:
+    // they rise from just above the skill bar / attack cluster / log, clear of the player in the middle.
+    const centreBottom = this.centre.getBoundingClientRect().bottom;
+    if (port) {
+      // The log (stacked above the bar) keeps room for its 3 lines (≈ 16 art px each) even while they fade.
+      const logTop = stacked ? this.logEl.getBoundingClientRect().bottom - 3 * 16 * u : H;
+      const anchor = Math.min(cl.width ? cl.top : H, this.hotbar.getBoundingClientRect().top, logTop);
+      this.toastEl.classList.add('rise');
+      this.setVar('--toast-top', 'auto');
+      this.setVar('--toast-bottom', `${snap(H - anchor + 6 * u)}px`);
+      this.setVar('--toast-x', `${snap(W / 2)}px`);
+      this.setVar('--centre-w', `${Math.floor(W - 2 * m)}px`);
+    } else {
+      const below = centreBottom;
+      const side = (r: DOMRect) => r.width > 0 && r.top < below + 200 * u && r.bottom > below;
+      const leftBlocks = [me, this.el.querySelector('.quick')!.getBoundingClientRect()].filter(side);
+      const rightBlocks = [this.mmDock.getBoundingClientRect(), this.pzEl.getBoundingClientRect(), menu].filter(side);
+      const lo2 = Math.max(m, ...leftBlocks.map((r) => r.right + 8 * u));
+      const hi2 = Math.min(W - m, ...rightBlocks.map((r) => r.left - 8 * u));
+      const cx = x + width / 2;
+      const want = Math.min(440 * u, Math.max(width, hi2 - lo2));
+      const tcx = 2 * Math.min(cx - lo2, hi2 - cx) >= want ? cx : Math.max(lo2 + want / 2, Math.min(hi2 - want / 2, cx));
+      this.toastEl.classList.remove('rise');
+      this.setVar('--toast-top', `${snap(below + 4 * u)}px`);
+      this.setVar('--toast-bottom', 'auto');
+      this.setVar('--toast-x', `${snap(tcx)}px`);
+      this.setVar('--centre-w', `${Math.floor(Math.max(width, 2 * Math.min(tcx - lo2, hi2 - tcx)))}px`);
+    }
     this.fitToasts();
   }
 
-  /** Toasts never reach the skill bar: on short screens the oldest steps aside first. */
+  /**
+   * Toasts never reach the skill bar (landscape) nor climb into the middle of the screen (portrait): the oldest steps
+   * aside first.
+   */
   private fitToasts(): void {
     const kids = Array.from(this.toastEl.children) as HTMLElement[];
     for (const k of kids) k.classList.remove('cut');
     if (!kids.length) return;
+    const rise = this.toastEl.classList.contains('rise');
     const bar = this.hotbar.getBoundingClientRect();
     if (!bar.height) return;
     const limit = bar.top - 4 * this.scale.px;
+    const ceiling = window.innerHeight * 0.55;
     for (const k of kids.slice(0, -1)) {
-      if (this.toastEl.getBoundingClientRect().bottom <= limit) break;
+      const r = this.toastEl.getBoundingClientRect();
+      if (rise ? r.top >= ceiling : r.bottom <= limit) break;
       k.classList.add('cut');
     }
   }
@@ -604,18 +705,35 @@ export class Hud {
     this.el.style.setProperty(name, value);
   }
 
+  /** The open tracker: at most PURSUIT_ROWS rows, only those above `limit`; "+N" (→ the quest log) for the rest. */
   private fitPursuits(limit: number): void {
+    // The default open state follows the screen (folded on portrait phones): keep the list's class in step after a
+    // rotation, so what shows is what is fitted.
+    const open = this.pursuitsOpen();
+    if (this.pzEl.classList.contains('open') !== open) {
+      this.pzEl.classList.toggle('open', open);
+      $(this.pzEl, '.pz-tab').setAttribute('aria-expanded', String(open));
+    }
     const rows = $$<HTMLElement>(this.pzList, '.pz-row');
     rows.forEach((r) => r.classList.remove('cut'));
-    if (!rows.length || !this.pursuitsOpen()) return;
-    const n = rowsThatFit(
-      rows.map((r) => {
-        const b = r.getBoundingClientRect();
-        return { top: b.top, bottom: b.bottom };
-      }),
-      limit,
-    );
-    rows.forEach((r, i) => r.classList.toggle('cut', i >= n));
+    const more = $(this.pzEl, '.pz-more');
+    let shown = rows.length;
+    if (rows.length && open) {
+      const fit = rowsThatFit(
+        rows.map((r) => {
+          const b = r.getBoundingClientRect();
+          return { top: b.top, bottom: b.bottom };
+        }),
+        limit,
+      );
+      shown = Math.min(PURSUIT_ROWS, fit);
+      rows.forEach((r, i) => r.classList.toggle('cut', i >= shown));
+    }
+    const rest = rows.length - shown;
+    more.classList.toggle('hidden', rest <= 0);
+    more.textContent = rest > 0 ? `+${rest}` : '';
+    // No room for "+N" under the tab (a short portrait band): leave it out — every row and the tab still lead on.
+    if (rest > 0 && more.getBoundingClientRect().bottom > limit) more.classList.add('hidden');
   }
 
   // ================================================================ vitals, stats, portrait, badges (≤ 10 Hz)
@@ -802,7 +920,21 @@ export class Hud {
     $(this.zoneEl, '.zone-plate').innerHTML = plate;
     $(this.zoneEl, '.zone-strip').innerHTML = strip;
     this.zoneEl.setAttribute('aria-label', `${view.name}: open the map`);
+    if (view.name !== this.zoneName) {
+      this.zoneName = view.name;
+      this.armZoneFade();
+    }
     this.queueLayout();
+  }
+
+  /** Portrait: the zone plate shows on arrival and fades after a few seconds (CSS: only on .hud-port). */
+  private armZoneFade(): void {
+    this.zoneEl.classList.remove('faded', 'gone');
+    clearTimeout(this.zoneFade);
+    this.zoneFade = window.setTimeout(() => {
+      this.zoneEl.classList.add('faded');
+      this.zoneFade = window.setTimeout(() => this.zoneEl.classList.add('gone'), 650);
+    }, 4000);
   }
 
   /** Map entry: the zone plate shows the new place and pops. */
@@ -816,19 +948,31 @@ export class Hud {
     if (!z || z.name !== title) z = { name: title, tag: z?.tag ?? 'Safe', band: /^Lv\b/.test(sub) ? sub : (z?.band ?? ''), explored: z?.explored ?? 0, sources: z?.sources ?? [], warden: z?.warden ?? null };
     this.t.zone = performance.now();
     this.renderZone(z);
+    this.armZoneFade();
     this.zoneEl.classList.remove('arrive');
     void this.zoneEl.offsetWidth;
     this.zoneEl.classList.add('arrive');
   }
 
-  sparkBanner(title: string, sub = ''): void {
+  /** Mid-fight banner (a sudden insight). With `skillId` it carries a "See it" button to that skill's card. */
+  sparkBanner(title: string, sub = '', skillId = ''): void {
     const b = $(this.sparkEl, 'b');
     if (title.startsWith('✦')) b.innerHTML = `${SPARK_RUNE}<span>${esc(title.replace(/^✦\s*/, ''))}</span>`;
     else b.textContent = title;
     $(this.sparkEl, 'small').textContent = sub;
+    this.sparkSkill = skillId;
+    this.sparkEl.classList.toggle('has-see', !!skillId);
     this.sparkEl.classList.remove('show');
     void this.sparkEl.offsetWidth;
     this.sparkEl.classList.add('show');
+    clearTimeout(this.sparkTimer);
+    // The animation ends invisible: drop .show then, so its button can never be tapped unseen.
+    this.sparkTimer = window.setTimeout(() => this.hideSpark(), 3700);
+  }
+
+  private hideSpark(): void {
+    clearTimeout(this.sparkTimer);
+    this.sparkEl.classList.remove('show');
   }
 
   /** Big centre banner ("You are now a Pyroblade"): parchment card, the new look and the class emblem. */
@@ -877,6 +1021,10 @@ export class Hud {
     if (key === this.targetKey) return;
     const fresh = this.targetKey === '' || !this.targetKey.startsWith(`${t.name}|`);
     this.targetKey = key;
+    if (fresh) {
+      this.targetSince = performance.now();
+      this.setTargetIdle(false);
+    }
     this.targetEl.classList.remove('hidden');
     this.targetEl.classList.toggle('boss', !!t.boss);
     this.targetEl.classList.toggle('elite', !!t.elite && !t.boss);
@@ -898,6 +1046,65 @@ export class Hud {
     const span = this.targetEl.querySelector('.tbar span');
     if (span) span.textContent = t.boss ? `${Math.max(0, Math.ceil(t.hp))} / ${t.maxHp}` : t.hp < t.maxHp ? `${Math.round(pct)}%` : '';
     this.targetEl.classList.toggle('enraged', !!t.boss && t.hp > 0 && (enragedTag || pct < 50));
+  }
+
+  private setTargetIdle(idle: boolean): void {
+    if (this.targetIdle === idle) return;
+    this.targetIdle = idle;
+    this.targetEl.classList.toggle('idle', idle);
+    this.queueLayout();
+  }
+
+  /**
+   * ≤ 10 Hz: the target plate shows while you fight, while the target is hurt, and for a few seconds after you pick
+   * one; a full-HP target nobody is fighting (walked away, AUTO switched off) stops covering the field.
+   */
+  updateTarget(): void {
+    if (!this.targetKey) return;
+    let fighting = false;
+    try {
+      fighting = !!this.ctrl.inCombat?.();
+    } catch {
+      /* scene not ready */
+    }
+    const [, , hp, max] = this.targetKey.split('|');
+    const full = Number(hp) >= Number(max);
+    this.setTargetIdle(!fighting && full && performance.now() - this.targetSince > 4000);
+  }
+
+  /** The NPC quest marker as a data URL (the actors lane's art: '…' in progress, '?' ready), drawn once. */
+  private markArt(ready: boolean): QuestMarkArt | null {
+    const key = ready ? 'ready' : 'busy';
+    if (this.marks[key] !== undefined) return this.marks[key] ?? null;
+    let art: QuestMarkArt | null = null;
+    try {
+      const def = MARKER_ART[ready ? '?' : '…'];
+      const c = document.createElement('canvas');
+      c.width = def.w;
+      c.height = def.h;
+      const g = c.getContext('2d');
+      if (g) {
+        def.rows.forEach((row, y) =>
+          [...row].forEach((ch, x) => {
+            const col = def.pal[ch];
+            if (!col) return;
+            g.fillStyle = col;
+            g.fillRect(x + 1, y + 1, 1, 1);
+          }),
+        );
+        // The 1 px dark outline the world's markers wear.
+        const img = g.getImageData(0, 0, def.w, def.h);
+        const a = (x: number, y: number) => x >= 0 && y >= 0 && x < def.w && y < def.h && img.data[(y * def.w + x) * 4 + 3] > 128;
+        g.fillStyle = '#24180f';
+        for (let y = 0; y < def.h; y++)
+          for (let x = 0; x < def.w; x++) if (!a(x, y) && (a(x - 1, y) || a(x + 1, y) || a(x, y - 1) || a(x, y + 1))) g.fillRect(x, y, 1, 1);
+        art = { url: c.toDataURL(), w: def.w, h: def.h };
+      }
+    } catch {
+      art = null;
+    }
+    this.marks[key] = art;
+    return art;
   }
 
   setChannel(label: string | null, progress = 0): void {
@@ -1058,7 +1265,7 @@ export class Hud {
       return;
     }
     this.pursuits = list;
-    const html = list.map((p, i) => pursuitHtml(p, i, p.icon ? this.ctrl.iconUrl(p.icon.kind, p.icon.id) : '')).join('');
+    const html = list.map((p, i) => pursuitHtml(p, i, p.icon ? this.ctrl.iconUrl(p.icon.kind, p.icon.id) : '', p.kind === 'quest' ? this.markArt(!!p.ready) : null)).join('');
     if (this.last.pz !== html) {
       const before = this.last.pzKeys ?? '';
       const keys = list.map((p) => p.key).join(',');
@@ -1219,7 +1426,8 @@ export class Hud {
     }
     const txt = cd.querySelector('b');
     if (txt) {
-      const s = f > 0 ? cooldownText(remain) : '';
+      // Seconds from 1 s left (below that the wedge says enough; the icon stays clean).
+      const s = f > 0 && remain >= 1000 ? cooldownText(remain) : '';
       if (txt.textContent !== s) txt.textContent = s;
     }
   }

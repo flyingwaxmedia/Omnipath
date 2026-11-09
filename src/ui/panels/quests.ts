@@ -132,9 +132,17 @@ export function focusQuest(quests: readonly NpcQuestView[], want?: string | null
   );
 }
 
-/** What the NPC says: the focus quest's offer / thanks, else their own line (HTML from the game). */
+/**
+ * What the NPC says: the focus quest's offer / thanks (with its flavour behind a small "More" toggle, closed by
+ * default — wireToggles), else their own line (HTML from the game).
+ */
 export function npcSpeech(lineHtml: string, focus: NpcQuestView | null): string {
-  if (focus && (focus.status === 'available' || focus.status === 'ready') && focus.dialog) return esc(focus.dialog);
+  if (focus && (focus.status === 'available' || focus.status === 'ready') && focus.dialog) {
+    const more = focus.more
+      ? ` <button class="hint-t say-t" data-more aria-expanded="false">More</button><span class="say-more hidden">${esc(focus.more)}</span>`
+      : '';
+    return esc(focus.dialog) + more;
+  }
   return lineHtml;
 }
 

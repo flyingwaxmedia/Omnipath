@@ -105,6 +105,17 @@ export function stars(rank: number, max: number): string {
   return '★'.repeat(on) + '☆'.repeat(n - on);
 }
 
+/**
+ * A quest objective line in player words (the core writes 'Use basic skills 3/12', 'Witness Boulder Roll 1/3',
+ * 'Cast dash at Greenmeadow 0/3'): the weapon's basic attack is "your attack", a witness mark is "seen".
+ */
+export function objectiveWords(text: string): string {
+  return text
+    .replace(/^Use basic skills\b/, 'Use your attack')
+    .replace(/^Witness\b/, 'See')
+    .replace(/^Cast dash at\b/, 'Dash in');
+}
+
 /** "Seen 2/3" (witness marks). */
 export function seen(marks: number, need: number): string {
   return `${FRIENDLY.witness} ${Math.min(marks, need)}/${need}`;

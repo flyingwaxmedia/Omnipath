@@ -34,17 +34,25 @@ Layout per ART-DIRECTION §5 with **no joystick**:
 - top-left portrait medallion (player head render) + level badge, framed "Lv N · Name", HP/SP bars with numbers, stat
   strip (ATK · MATK · DEF · worn class + CR);
 - top-centre zone plate (name, safety tag Safe/Hunting/Dungeon/Warden, level band) with a slim strip (exploration %,
-  local element-source icons, warden status);
-- top-right row of framed buttons with labels: Skills (opens the Star Chart), Fuse, Class, Codex, Bag, Map, ☰ menu;
+  local element-source icons, warden status); when the top row has no room it takes the row right under the buttons
+  (between the stat strip and the minimap), then a compact plate (no band / pill) — never a spot down in the field.
+  The target plate sits under it and hides while nothing is fought (a full-HP target left alone for 4 s);
+- top-right row of framed buttons with labels: Skills (opens the Star Chart), Fuse, Class, Codex, Bag, Map, ☰ menu
+  (Sound On/Off + Volume, "Reduce shake & flashes", New game with a one-line confirm; `src/ui/hud/settings.ts`);
   the minimap is a small collapsible widget under that row;
 - right edge **Pursuits** tracker: tracked quests (objective lines with progress) first, then up to 2 discovery goals
-  (next morph, echo witness, nearest class); tap a quest → quest log; tap a goal → the relevant panel;
+  (next morph, echo witness, nearest class); tap a quest → quest log; tap a goal → the relevant panel. At most **2 rows**
+  show (see-through rows); the rest wait behind a "+N" button under the tab (→ the quest log). Quest rows wear the NPC
+  marker set: grey '…' in progress, gold '?' ready to turn in ('!' only ever means "new quest here");
 - left edge round buttons: quick heal (count), recall shard (count), rest;
 - bottom-left compact log (3 lines, fades) above the EXP bar;
-- bottom-centre horizontal skill bar: **8** framed slots (portrait: two rows of 4) with pixel icons (`iconUrl`), cooldown sweep, rank badge, element
-  pip, AUTO ring (all slots while AUTO is on), spark rune; tap = cast;
+- bottom-centre horizontal skill bar: **8** framed slots (portrait: the 5 class slots on row 1 and your 3 centred on
+  row 2, slots shrunk to ≥ 44 art px to fit; two even rows of 4 only on very narrow phones) with pixel icons
+  (`iconUrl`), a light cooldown wedge (seconds small in the corner from 1 s left), rank badge, element pip, AUTO ring
+  (all slots while AUTO is on), spark rune; the class slots carry the class emblem and one class-coloured bracket
+  under the group; tap = cast (each finger on its own: two thumbs on two slots both cast); hold = edit;
 - bottom-right attack cluster: big round attack button (`ui_round_big`), small round buttons on its arc: AUTO, Target
-  (cycle to the next nearest enemy), Potion (count);
+  (cycle to the next nearest enemy), SP potion (blue flask, "SP", count — shown only while you carry one);
 - full-width thin EXP bar at the very bottom with percentage.
 **HUD pixel size**: the HUD's art pixels are the world's — every HUD length is in art px (`calc(N * var(--px))`,
 `--px` = `--ui-px`) and the HUD sets `--ui-px` = k / devicePixelRatio CSS px (k = the world's device px per art px), so
@@ -52,9 +60,15 @@ Layout per ART-DIRECTION §5 with **no joystick**:
 not fit at that size it takes the largest whole-device-pixel size that fits, never below 1 CSS px (44-art-px touch
 targets); re-evaluated on resize / orientation / DPR change (`src/ui/hud/layout.ts` `hudScale`). The screen-size
 variants (portrait phone, narrow, short landscape) are measured in art px too (classes on `#hud-root`).
-Frames via `uiCss(scene)` custom properties (`border-image`), palette and font from ART-DIRECTION. Portrait and
+Frames via `uiCss(scene)` custom properties (`border-image`, sampled nearest-neighbour: `image-rendering: pixelated`
+on `.hud-layer`), palette and font from ART-DIRECTION; boxes sit on whole device px and are whole art px in size
+(rounded cluster arc, player plate, zone plate, target plate), Tiny5 numbers only at its native 8 / 16 px. Portrait and
 landscape phones, iPad and desktop must all look intentional (portrait: tracker collapses to a tab, button row wraps
-into two rows of 4, skill bar stays bottom-centre above the attack cluster).
+into two rows of 4, skill bar stays bottom-centre above the attack cluster). **Portrait keeps the middle band free**
+(40–60 % of the height, where the player stands and every tap must reach the world): the zone plate fades 4 s after
+arrival (its strip stays on the map) and folds away so the target takes its place in the top band, the Pursuits stop
+above the band, and toasts rise from just above the skill bar instead of stacking down the screen (playtest
+`middleBand` check; `src/ui/hud/layout.ts` `placeZone` / `barPlan`).
 
 ## 3. Star Chart (`src/ui/panels/starchart.ts`, `src/ui/starchart/layout.ts`)
 The Skills button opens the **Star Chart** (tabs: Chart | List | Passives | Essences — List/Passives/Essences are the

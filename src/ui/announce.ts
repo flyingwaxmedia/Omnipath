@@ -17,14 +17,15 @@ import type { DiscoveryCard } from './dialogs';
 import type { LogKind } from './hud';
 import { learnIconUrl, learnedLine, rewardChipsHtml } from './panels/quests';
 import { esc, gate, hex, sourceText } from './util';
-import { FRIENDLY, article, classLevel, oneLine, seen, shapeWord, stars } from './words';
+import { FRIENDLY, article, classLevel, objectiveWords, oneLine, seen, shapeWord, stars } from './words';
 
 /** What announcements need from the UI facade. */
 export interface AnnounceHost {
   log(msg: string, kind?: LogKind): void;
   toast(msg: string): void;
   discovery(card: DiscoveryCard): void;
-  sparkBanner(title: string, sub?: string): void;
+  /** Mid-fight banner; `skillId` adds its "See it" button (that skill's card). */
+  sparkBanner(title: string, sub?: string, skillId?: string): void;
   /** Big centre banner ("You are now a Pyroblade"). */
   headline(title: string, sub?: string, accent?: string): void;
   /** Opens a panel (cards' buttons: the picker when every own slot is full, a skill card). Optional: UI has it. */
@@ -113,6 +114,21 @@ export function wireAnnouncements(ui: AnnounceHost, ctrl: GameController): () =>
     }
   };
   const onBar = (id: string) => ctrl.barSlots().some((s) => s.skillId === id);
+  // One channel per moment (docs/UX-SIMPLE.md rule 9): a skill whose moment already has a card or a banner gets no
+  // "is on your bar" / "Blademaster equipped …" toast too. Bar toasts wait one microtask (a moment's card event can
+  // come after its bar event in the same burst) and drop when a card claimed their skill — or, for a new class's
+  // card ('*'), every bar toast of that burst: the card shows the class skills.
+  const claims = new Map<string, number>();
+  const claim = (id: string, ms = 1500) => claims.set(id, Date.now() + ms);
+  const claimed = (id: string): boolean => {
+    const now = Date.now();
+    for (const [k, until] of claims) if (until < now) claims.delete(k);
+    return claims.has(id) || claims.has('*');
+  };
+  const barToast = (id: string, msg: string) =>
+    queueMicrotask(() => {
+      if (!claimed(id)) ui.toast(msg);
+    });
   /** Class slots the worn class has filled right now, of how many (none filled when the view is not ready). */
   const classFill = (): { filled: number; slots: number } => {
     try {
@@ -147,6 +163,7 @@ export function wireAnnouncements(ui: AnnounceHost, ctrl: GameController): () =>
       ui.log(`📖 New skill: <b>${esc(skill.name)}</b>`, 'rare');
       if (quietLearn(source)) return;
       const el = skill.element ? reg.element(skill.element) : undefined;
+      claim(skill.id);
       ui.discovery({
         kind: source.startsWith('echo:') ? 'echo' : 'skill',
         icon: skill.icon,
@@ -194,7 +211,13 @@ export function wireAnnouncements(ui: AnnounceHost, ctrl: GameController): () =>
       if (charges > 1) ui.toast(`✨ <b>${esc(skill.name)}</b>: another Transform ready`);
     }),
   );
-  add(ev.on('spark', ({ from, to }) => ui.sparkBanner(`✦ ${FRIENDLY.spark}: ${to.name}`, `${from.name} changed mid-fight`)));
+  // A sudden insight's one announcement: the banner (with "See it" → the new skill's card); no card later, no toast.
+  add(
+    ev.on('spark', ({ from, to }) => {
+      claim(to.id);
+      ui.sparkBanner(`✦ ${FRIENDLY.spark}: ${to.name}`, `${from.name} changed mid-fight`, to.id);
+    }),
+  );
   add(
     ev.on('witness', ({ skill, status, marks, need, anchorShape }) => {
       if (status === 'progress') ui.toast(`👁 <b>${esc(skill.name)}</b> · ${seen(marks, need)}`);
@@ -226,53 +249,68 @@ export function wireAnnouncements(ui: AnnounceHost, ctrl: GameController): () =>
   add(
     ev.on('classDiscovered', ({ cls, worn }) => {
       ui.log(`🏛️ New class: <b>${esc(cls.name)}</b>`, 'rare');
-      let skills: string[] = [];
-      let color: string | undefined;
-      try {
-        const v = ctrl.classCards();
-        const card = [v.current, ...v.unlocked].find((c) => c?.id === cls.id);
-        skills = card?.skills ?? [];
-        color = card?.color;
-      } catch {
-        skills = [];
+      if (worn) {
+        claim('*', 300);
+        // The card says it ("Its skills are in your class slots"): the HUD's first-time hint is spent.
+        try {
+          ctrl.firstTime('class_slots');
+        } catch {
+          /* scene not ready */
+        }
       }
-      const icons = skills
-        .map((id) => icon('skill', id))
-        .filter((u): u is string => !!u)
-        .map((u) => `<img class="px" src="${u}" width="32" height="32" alt="" draggable="false">`)
-        .join('');
-      let outfit: string | undefined;
-      try {
-        outfit = ctrl.outfitUrl(cls.id) || undefined;
-      } catch {
-        outfit = undefined;
-      }
-      ui.discovery({
-        kind: 'class',
-        icon: cls.icon,
-        image: outfit,
-        imageSize: 80,
-        kicker: 'NEW CLASS',
-        accent: color,
-        title: worn ? `You are now ${article(cls.name)}` : cls.name,
-        body: worn
-          ? `${esc(oneLine(cls.desc))}<br><small>${classFill().filled > 0 ? 'Its skills are in your class slots.' : `${esc(classSlotsLine(reg, cls, 0))}.`}</small>`
-          : `${esc(oneLine(cls.desc))}`,
-        extra: icons ? `<div class="cskills">${icons}</div>` : undefined,
-        ...(worn
-          ? { okLabel: 'Great!' }
-          : {
-              action: {
-                label: FRIENDLY.becomeClass,
-                run: () => {
-                  const r = ctrl.becomeClass(cls.id);
-                  if (!r.ok && r.message) ui.toast(esc(r.message));
-                },
-              },
-            }),
-      });
+      // The book learns the class's signature skills right after this event: build the card once they are in (its
+      // skill icons and "Its skills are in your class slots" then match the bar).
+      queueMicrotask(() => classCard(cls, worn));
     }),
   );
+  /** The new-class card ("You are now a Blademaster"): built after the class's signature skills are learned. */
+  const classCard = (cls: ClassDef, worn: boolean): void => {
+    let skills: string[] = [];
+    let color: string | undefined;
+    try {
+      const v = ctrl.classCards();
+      const card = [v.current, ...v.unlocked].find((c) => c?.id === cls.id);
+      skills = card?.skills ?? [];
+      color = card?.color;
+    } catch {
+      skills = [];
+    }
+    const icons = skills
+      .map((id) => icon('skill', id))
+      .filter((u): u is string => !!u)
+      .map((u) => `<img class="px" src="${u}" width="32" height="32" alt="" draggable="false">`)
+      .join('');
+    let outfit: string | undefined;
+    try {
+      outfit = ctrl.outfitUrl(cls.id) || undefined;
+    } catch {
+      outfit = undefined;
+    }
+    ui.discovery({
+      kind: 'class',
+      icon: cls.icon,
+      image: outfit,
+      imageSize: 80,
+      kicker: 'NEW CLASS',
+      accent: color,
+      title: worn ? `You are now ${article(cls.name)}` : cls.name,
+      body: worn
+        ? `${esc(oneLine(cls.desc))}<br><small>${classFill().filled > 0 ? 'Its skills are in your class slots.' : `${esc(classSlotsLine(reg, cls, 0))}.`}</small>`
+        : `${esc(oneLine(cls.desc))}`,
+      extra: icons ? `<div class="cskills">${icons}</div>` : undefined,
+      ...(worn
+        ? { okLabel: 'Great!' }
+        : {
+            action: {
+              label: FRIENDLY.becomeClass,
+              run: () => {
+                const r = ctrl.becomeClass(cls.id);
+                if (!r.ok && r.message) ui.toast(esc(r.message));
+              },
+            },
+          }),
+    });
+  };
   add(ev.on('classRank', ({ cls, rank }) => ui.toast(`🏛️ <b>${esc(cls.name)}</b> · ${classLevel(rank)}`)));
   add(
     gameBus.on('classChanged', ({ classId, reason }) => {
@@ -291,10 +329,12 @@ export function wireAnnouncements(ui: AnnounceHost, ctrl: GameController): () =>
     gameBus.on('barChanged', ({ reason, skillId, classId }) => {
       const skill = skillId ? reg.skill(skillId) : undefined;
       if (!skill) return;
-      if (reason === 'learned') ui.toast(`<b>${esc(skill.name)}</b> is on your bar`);
-      else if (reason === 'classLearned') {
+      if (reason === 'learned') barToast(skill.id, `<b>${esc(skill.name)}</b> is on your bar`);
+      // classLearned: the class took a new skill; assign + classId: a player edit emptied a class slot and the class
+      // filled it ("Blademaster equipped Blindside"), so the change never goes unexplained.
+      else if (reason === 'classLearned' || (reason === 'assign' && classId)) {
         const cls = classId ? reg.classDef(classId) : undefined;
-        ui.toast(cls ? `<b>${esc(cls.name)}</b> equipped <b>${esc(skill.name)}</b>` : `<b>${esc(skill.name)}</b> is on your bar`);
+        barToast(skill.id, cls ? `<b>${esc(cls.name)}</b> equipped <b>${esc(skill.name)}</b>` : `<b>${esc(skill.name)}</b> is on your bar`);
       }
     }),
   );
@@ -323,7 +363,7 @@ export function wireAnnouncements(ui: AnnounceHost, ctrl: GameController): () =>
       if (!notableStep(before, o.have, o.need, o.done)) return;
       let g = gates.get(quest.id);
       if (!g) gates.set(quest.id, (g = gate(PROGRESS_TOAST_MS)));
-      if (o.done || g()) ui.toast(`📜 ${esc(o.text.replace(/\s*✓\s*$/, ''))}${o.done ? ' ✓' : ''}`);
+      if (o.done || g()) ui.toast(`📜 ${esc(objectiveWords(o.text).replace(/\s*✓\s*$/, ''))}${o.done ? ' ✓' : ''}`);
     }),
   );
   add(

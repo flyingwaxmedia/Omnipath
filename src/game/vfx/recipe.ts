@@ -500,17 +500,31 @@ function spinPieces(c: Ctx, style: SpinStyle, ph: Phases): void {
   const famStyle = c.look.ring === 'dashed' ? 'solid' : c.look.ring;
   switch (style) {
     case 'blades':
-      push(ph, 'cast', ring({ thick: isHeavy(c.weight) ? 4 : 3, ink: 'hot', anim: 'sweep', heads: c.has('pierce') ? 3 : 2, ms: 117 }, { tags: [...c.geoTags, 'hero'] }));
+      // A real blade smear per head (white-hot leading edge, tapering tail) and sparks thrown off the rim.
+      push(
+        ph,
+        'cast',
+        ring({ thick: isHeavy(c.weight) ? 4 : 3, ink: 'hot', anim: 'sweep', heads: c.has('pierce') ? 3 : 2, ms: 117, smear: isHeavy(c.weight) ? 8 : 6 }, { tags: [...c.geoTags, 'hero'] }),
+        piece('motes', { kind: 'spark', size: isHeavy(c.weight) ? 2 : 1 }, c.ink, { anchor, place: { pattern: 'rim', count: 6, radius: R, aspect: c.aspect, staggerMs: 17 } }),
+      );
       break;
     case 'ring':
       push(ph, 'cast', ring({ style: famStyle }), ring({ r: round(R * 0.7), r0: round(R * 0.15), thick: 1, ms: 167 }, { delayMs: 33 }));
       break;
-    case 'vortex':
-      for (let i = 0; i < 3; i++) {
-        push(ph, 'cast', ring({ r: R - 5 - 4 * i, r0: R - 4 * i, anim: 'contract', style: famStyle, ms: 167 }, { delayMs: i * 33 }));
-      }
-      push(ph, 'cast', piece('motes', { kind: c.accLook.spin.mote ?? 'chip', size: 2 }, c.acc, { anchor, place: { pattern: 'spiral', count: 12, radius: R } }));
+    case 'vortex': {
+      // A pull reads inward: three rings collapse from the rim toward the caster one after another, under a 2-head
+      // swirl smear and spiral motes (solid bands: gapped / dashed rings would read as a monster rim).
+      // One collapsing ring per pulse (three read as a fan of loose 10 px chunks once they shrink under the rim).
+      const pullStyle = famStyle === 'jagged' ? 'jagged' : 'solid';
+      push(
+        ph,
+        'cast',
+        ring({ r: round(R * 0.3), r0: R, thick: 2, ink: 'hot', anim: 'contract', style: pullStyle, ms: 250 }),
+        ring({ r: round(R * 0.7), thick: 3, ink: 'hot', anim: 'sweep', heads: 2, ms: 150, smear: 4 }, { tags: [...c.geoTags, 'hero'] }),
+        piece('motes', { kind: c.accLook.spin.mote ?? 'chip', size: 2 }, c.acc, { anchor, place: { pattern: 'spiral', count: 8, radius: R, aspect: c.aspect } }),
+      );
       break;
+    }
     case 'halo':
       push(ph, 'cast', ring({ style: 'double' }), piece('motes', { kind: 'glint', size: 1 }, c.ink, { anchor, place: { pattern: 'rise', count: 8, radius: R } }));
       break;
@@ -522,13 +536,18 @@ function spinPieces(c: Ctx, style: SpinStyle, ph: Phases): void {
       break;
   }
   if (style !== 'vortex' && style !== 'halo' && style !== 'wail') {
-    push(ph, 'cast', ...overlay(c.acc, c.accLook.spin, anchor, { pattern: 'orbit', count: clamp(round(R / 10), 4, VFX_BUDGET.perEvent.spinPulseMotes), radius: R }));
+    push(ph, 'cast', ...overlay(c.acc, c.accLook.spin, anchor, { pattern: 'orbit', count: clamp(round(R / 10), 4, VFX_BUDGET.perEvent.spinPulseMotes), radius: R, aspect: c.aspect }));
   }
-  // Floor band (0 -> R over 300 ms, ink mid -> dim); it flares on the first and last pulse only.
-  const band = (ink: 'mid' | 'hot', tags: readonly PieceTag[]) =>
-    piece('ring', { r: R, r0: 0, aspect: c.aspect, thick: 1, style: 'solid', ink, anim: 'expand', ms: 300 }, c.ink, { anchor, layer: 'ground', tags: [...c.geoTags, ...tags] });
-  push(ph, 'area', band('mid', []));
-  if ((sh.pulses ?? 1) > 1) push(ph, 'area', band('hot', ['firstHitOnly']), band('hot', ['lastHit']));
+  // Floor band (0 -> R over 300 ms, ink mid -> dim); it flares on the first and last pulse only. 2 px with a darker
+  // inner line: a ground ripple, not a hairline circle.
+  const band = (ink: 'dim' | 'mid' | 'hot', tags: readonly PieceTag[]) =>
+    piece('ring', { r: R, r0: 0, aspect: c.aspect, thick: 2, style: 'solid', ink, anim: 'expand', ms: 300 }, c.ink, { anchor, layer: 'ground', tags: [...c.geoTags, ...tags] });
+  // Blade smears are the hero already: their floor band stays a dim dithered ripple and never flares.
+  if (style === 'blades') push(ph, 'area', band('dim', []));
+  else {
+    push(ph, 'area', band('mid', []));
+    if ((sh.pulses ?? 1) > 1) push(ph, 'area', band('hot', ['firstHitOnly']), band('hot', ['lastHit']));
+  }
 }
 
 function projectilePieces(c: Ctx, body: Body, ph: Phases): void {
@@ -595,7 +614,7 @@ function dashPieces(c: Ctx, mode: DashMode, ph: Phases): void {
     if (mode === 'charge') push(ph, 'area', piece('decal', { kind: 'cracks', r: 16, aspect: c.aspect, density: 0.5, shape: 'disc' }, utilInk(c, 'dust'), { anchor: end, layer: 'ground', delayMs: durMs, lifeMs: 800 }));
   }
   if (mode === 'spin') {
-    push(ph, 'area', piece('ring', { r: landR, aspect: c.aspect, thick: 3, style: 'solid', ink: 'hot', anim: 'sweep', heads: 2, ms: 117 }, c.ink, { anchor: at('path', 0), place: { pattern: 'path', staggerMs: 67 } }));
+    push(ph, 'area', piece('ring', { r: landR, aspect: c.aspect, thick: 3, style: 'solid', ink: 'hot', anim: 'sweep', heads: 2, ms: 117, smear: landR >= 20 ? 6 : 4 }, c.ink, { anchor: at('path', 0), place: { pattern: 'path', staggerMs: 67 } }));
   }
 }
 
@@ -628,7 +647,8 @@ function novaPieces(c: Ctx, carrier: Extract<Carrier, { kind: 'nova' }>, ph: Pha
     push(
       ph,
       'area',
-      piece('decal', { kind: decal, r: aftermathR(R), aspect: asp, density: 0.5, shape: 'disc' }, c.acc, {
+      // A wet sheen starts at 25 %: at 50 % an r96 disc reads as a flat grey hole in the ground (in-game QA).
+      piece('decal', { kind: decal, r: aftermathR(R), aspect: asp, density: decal === 'wet' ? 0.25 : 0.5, shape: 'disc' }, c.acc, {
         anchor: aim,
         layer: 'ground',
         blend: decal === 'scorch' || decal === 'ink' ? 'multiply' : 'normal',
@@ -644,7 +664,8 @@ function novaPieces(c: Ctx, carrier: Extract<Carrier, { kind: 'nova' }>, ph: Pha
       ph,
       'telegraph',
       piece('ring', { r: R, aspect: 1, thick: 2, style: 'solid', ink: 'lit', anim: 'static', ms: vsync(delay) }, c.ink, { anchor: aim, layer: 'preview', lifeMs: delay }),
-      piece('decal', { kind: 'fill', r: decalR(R), aspect: 1, density: 0.125, shape: 'disc' }, c.ink, { anchor: aim, layer: 'preview', lifeMs: delay }),
+      // The fill is the family's darkest stop: a soft tint on the ground, not bright specks.
+      piece('decal', { kind: 'shadow', r: decalR(R), aspect: 1, density: 0.125, shape: 'disc' }, c.ink, { anchor: aim, layer: 'preview', lifeMs: delay }),
     );
     if (delay > 117) push(ph, 'telegraph', piece('ring', { r: R, aspect: 1, thick: 2, style: 'solid', ink: 'hot', anim: 'static', ms: 117 }, c.ink, { anchor: aim, layer: 'preview', delayMs: delay - 117, lifeMs: 117 }));
     // A centre marker (the rim shows the area): r <= 32 keeps big staff novas inside the atlas budget.
@@ -796,8 +817,9 @@ export function statusPieces(kind: StatusKind, source: FamilyId, body: BodySize,
     case 'pull':
       return [
         u('spiral', mid, { place: { pattern: 'spiral', count: 1 } }),
-        piece('motes', { kind: 'streak', size: 2 }, ink, { anchor: mid, place: { pattern: 'spiral', count: 6, radius: 24 } }),
-        piece('ring', { r: 20, aspect: 1, thick: 1, style: 'solid', ink: 'mid', anim: 'static', arc: [0, 120], ms: 300 }, ink, { anchor: feet, layer: 'ground', place: { pattern: 'single', count: 3 } }),
+        piece('motes', { kind: 'streak', size: 2 }, ink, { anchor: mid, place: { pattern: 'spiral', count: 3, radius: 24 } }),
+        // Static arcs are loops: they carry the one-shot's life, or they would outlive the pull.
+        piece('ring', { r: 20, aspect: 1, thick: 1, style: 'solid', ink: 'mid', anim: 'static', arc: [0, 120], ms: 300 }, ink, { anchor: feet, layer: 'ground', place: { pattern: 'single', count: 3 }, lifeMs: life }),
       ];
   }
 }
@@ -1316,7 +1338,8 @@ export function deathPieces(body: BodySize, killer: FamilyId, owner: VfxOwner): 
     piece('nova', { core: 'blast', c, heavy: body === 'L' || body === 'W' }, inkOf(fam, lut), { anchor: mid, tags: ['hero'] }),
     // Chips take the hide colour at runtime (art/monsters.ts exports it); 'dust' is the bake ramp.
     piece('motes', { kind: 'chip', size: 2 }, { ramp: 'dust', motif: fam, lut }, { anchor: mid, place: { pattern: 'burst', count: body === 'S' ? 4 : body === 'W' ? 8 : 6 } }),
-    piece('puff', { kind: 'dust', r: body === 'S' ? 5 : body === 'W' ? 10 : 7 }, { ramp: 'smoke', motif: fam, lut }, { anchor: feet, layer: 'ground' }),
+    // A light dust puff: the dark smoke ramp read as a black hole on grass once its crescent erosion set in.
+    piece('puff', { kind: 'dust', r: body === 'S' ? 5 : body === 'W' ? 10 : 7 }, { ramp: 'dust', motif: fam, lut }, { anchor: feet, layer: 'ground' }),
   ];
 }
 

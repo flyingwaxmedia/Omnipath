@@ -98,6 +98,7 @@ const AXES: { readonly [C in ComponentId]: { readonly [K in keyof ComponentParam
     anim: ['expand', 'contract', 'sweep', 'march', 'static'],
     arc: [undefined, [-60, 60], [200, 340]],
     heads: [1, 2, 3],
+    smear: [4, 6, 8],
   },
   decal: {
     kind: ['fill', 'scorch', 'frost', 'wet', 'ink', 'rune', 'cracks', 'pool', 'rift', 'shadow'],
@@ -154,7 +155,8 @@ export function gridParams<C extends ComponentId>(c: C): ComponentParams[C][] {
   for (const k of Object.keys(axes)) {
     for (const v of axes[k] ?? []) {
       const p = { ...base, [k]: v } as ComponentParams[C];
-      if (c === 'ring' && k === 'heads') (p as ComponentParams['ring']).anim = 'sweep';
+      if (c === 'ring' && (k === 'heads' || k === 'smear')) (p as ComponentParams['ring']).anim = 'sweep';
+      if (c === 'ring' && k === 'smear') (p as ComponentParams['ring']).heads = 2;
       if (c === 'burst' && k === 'cls' && v === 'strong') (p as ComponentParams['burst']).glyph = 'fire';
       const s = JSON.stringify(p);
       if (seen.has(s)) continue;

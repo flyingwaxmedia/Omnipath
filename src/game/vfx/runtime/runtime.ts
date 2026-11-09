@@ -20,6 +20,8 @@ import type { GhostSource, LivePt, PlayCtx, TellSpec, VfxGroup, VfxStage } from 
 import { RAMPS, hexToRgb } from '../ramps';
 import {
   RING_WHOLE_MAX,
+  smearStage,
+  smearWidth,
   VFX_BUDGET,
   VFX_GOVERNOR,
   pickDir,
@@ -156,6 +158,8 @@ class SpriteInst extends Inst {
   private glowImg: Phaser.GameObjects.Image | null = null;
   private usingFallback = false;
   private started = false;
+  /** Longest strip this one-shot has played (ms): a strip that goes missing mid-play never strands the instance. */
+  private span = 0;
 
   constructor(
     rt: VfxRuntime,
@@ -202,13 +206,20 @@ class SpriteInst extends Inst {
       } else if (!this.started && !loop && t > 160) {
         this.dead = true;
         return;
+      } else if (this.started && !loop && t > this.span + 250) {
+        // Its strip went away mid-play (a direction not baked yet, a re-bake): end on time instead of waiting forever.
+        this.dead = true;
+        return;
       }
       if (!strip) return this.hide();
     } else if (this.usingFallback) {
       const fb = rt.fallback('burst');
       strip = fb?.strips[0] ?? null;
       tintFill = this.o.tint;
-      if (!strip) return this.hide();
+      if (!strip) {
+        if (!loop && t > this.span + 250) this.dead = true;
+        return this.hide();
+      }
     } else if (!this.started) {
       this.started = true;
     }
@@ -217,6 +228,7 @@ class SpriteInst extends Inst {
     if (this.o.holdMs && useT < this.o.holdMs) useT = 0;
     else if (this.o.holdMs) useT -= this.o.holdMs;
     const use = this.usingFallback ? 'once' : (e?.use ?? 'once');
+    if (strip.totalMs > this.span) this.span = strip.totalMs + (this.o.holdMs ?? 0);
     const k = frameAt(strip, use, useT, loop);
     if (k < 0) {
       if (!loop) this.dead = true;
@@ -252,7 +264,14 @@ class SpriteInst extends Inst {
     if (!img) {
       img = pool.get(f.tex, f.name, this.o.low ? 2 / 3 : 1);
       if (!img) return null;
-    } else if (img.texture.key !== f.tex || img.frame.name !== f.name) img.setTexture(f.tex, f.name);
+    } else if (img.texture.key !== f.tex || img.frame.name !== f.name) {
+      // A stale frame (its page was evicted): hide this frame instead of drawing a removed one.
+      if (!this.rt.scene.textures.get(f.tex).has(f.name)) {
+        img.setVisible(false);
+        return img;
+      }
+      img.setTexture(f.tex, f.name);
+    }
     const ax = Math.round(p.x);
     const ay = Math.round(p.y);
     const x = dir.flipX ? ax - (f.w - 1 - f.ox) : ax - f.ox;
@@ -294,7 +313,8 @@ class ChunkRingInst extends Inst {
   private bobs: Phaser.GameObjects.Bob[] = [];
   private glowBobs: Phaser.GameObjects.Bob[] = [];
   private privates = new Map<string, Phaser.GameObjects.Blitter>();
-  private readonly reqs: Map<RingInk, BakeReq>;
+  /** Chunk bakes by ink, or by smear stage (`s0`..`s3`) for a sweep smear. */
+  private readonly reqs: Map<string, BakeReq>;
   /** Static / marching rings skip the re-layout while nothing that places them changed. */
   private laid = '';
 
@@ -307,7 +327,7 @@ class ChunkRingInst extends Inst {
     private readonly o: { layer: VfxLayer; r: number; arcRel: readonly [number, number] | null; ang: () => number; life: number; body: boolean; glow: boolean },
   ) {
     super(rt, group, t0);
-    this.reqs = new Map(rt.chunkInks(piece).map((ink) => [ink, rt.chunkReq(piece, ink)]));
+    this.reqs = rt.chunkReqMap(piece);
   }
 
   keys(): readonly string[] {
@@ -349,9 +369,10 @@ class ChunkRingInst extends Inst {
     // pool (> 60 % of the player share) place every 2nd chunk, which reads like the 50 % dither of whole dim rings.
     const thin = prm.thick <= 1 || ink === 'dim' || ink === 'mid';
     const share = (this.rt.bobs.live - this.rt.bobs.liveTell) / (VFX_BUDGET.bobs - VFX_BUDGET.bobsReservedForTells);
-    // Cue rings (wind-up previews, nova markers, telegraphs) are never thinned: a gameplay rim stays whole.
+    // Cue rings (wind-up previews, nova markers, telegraphs) are never thinned: a gameplay rim stays whole. Thin bands
+    // stay whole too while the pool is calm: every 2nd 10 px chunk reads as a dashed rim, the monsters' language.
     const cue = this.o.layer === 'preview' || (this.piece.tags ?? []).includes('neverGoverned');
-    const step = cue ? 1 : share > 0.85 ? 3 : this.rt.quality < 1 || thin || share > 0.6 ? 2 : 1;
+    const step = cue ? 1 : share > 0.85 ? 3 : this.rt.quality < 1 || share > 0.6 || (thin && share > 0.5) ? 2 : 1;
     if (prm.anim === 'static' || prm.anim === 'march') {
       const key = `${Math.round(c.x)},${Math.round(c.y)},${Math.round(r)},${step},${prm.anim === 'march' ? Math.floor(t / 67) : 0},${this.o.arcRel ? Math.round(this.o.ang() * 32) : 0},${this.rt.glowOn ? 1 : 0}`;
       if (key === this.laid && this.bobs.length) return;
@@ -360,8 +381,15 @@ class ChunkRingInst extends Inst {
     const march = Math.floor(t / 67);
     let nb = 0;
     let ng = 0;
+    // A shock ring (expand / contract) that would thin to every 2nd chunk hides instead: under pressure a missing
+    // fading ring reads better than a dashed one (dashes are the monsters' rim language). It shows again if the pool
+    // calms down before it ends.
+    if (step > 1 && (prm.anim === 'expand' || prm.anim === 'contract')) return this.clearFrom(0, 0);
     const sweepT = prm.anim === 'sweep' ? Math.max(1, prm.ms) : 0;
-    for (let k = 0; k < N; k += step) {
+    // A smear never thins by chunks (every 2nd chunk reads as a dashed rim): under pressure it drops its tail instead.
+    const smear = !!(sweepT && prm.smear);
+    const crowded = step > 1;
+    for (let k = 0; k < N; k += smear ? 1 : step) {
       const th = (k / N) * TAU;
       // Arc filter: aim-relative arcs (cone rims, strike previews) or screen-degree arcs.
       if (prm.arc) {
@@ -372,8 +400,26 @@ class ChunkRingInst extends Inst {
       }
       if (prm.style === 'dashed' && (k + (prm.anim === 'march' ? march : 0)) % 5 >= 3) continue;
       if (prm.style === 'gapped' && k % 4 === 3) continue;
-      let kInk = ink;
-      if (sweepT) {
+      let kKey: string = ink;
+      if (sweepT && prm.smear) {
+        // Blade smear: the stage (head / lit / mid / dim, each its own width) by age since a head passed.
+        const heads = prm.heads ?? 1;
+        const T = sweepT / 33;
+        const now = Math.min(t / 33, T);
+        const rel = ((th + Math.PI / 2 + TAU) % TAU) / TAU;
+        let age = Infinity;
+        for (let j = 0; j < heads; j++) {
+          const tau = ((rel - j / heads + 1) % 1) * T;
+          if (tau <= now) age = Math.min(age, now - tau + (t / 33 - now));
+        }
+        const st = smearStage(age, T);
+        if (st < 0 || (crowded && st >= 2)) continue;
+        kKey = `s${st}`;
+        if (t > sweepT + 200) {
+          this.dead = true;
+          return;
+        }
+      } else if (sweepT) {
         // Ink by age since a head passed (33 ms ticks): hot 1 tick -> lit -> mid 2 -> dim 2 -> gone.
         const heads = prm.heads ?? 1;
         const T = sweepT / 33;
@@ -387,13 +433,13 @@ class ChunkRingInst extends Inst {
         if (best < 0) continue;
         const age = tick - best;
         if (age >= 6) continue;
-        kInk = RING_INKS[Math.min(3, base + (age < 1 ? 0 : age < 2 ? 1 : age < 4 ? 2 : 3))];
+        kKey = RING_INKS[Math.min(3, base + (age < 1 ? 0 : age < 2 ? 1 : age < 4 ? 2 : 3))];
         if (t > sweepT + 200) {
           this.dead = true;
           return;
         }
       }
-      const req = this.reqs.get(kInk);
+      const req = this.reqs.get(kKey);
       const e = req && this.rt.ready(req);
       if (!e) continue;
       this.rt.touch(e, now);
@@ -998,7 +1044,9 @@ export class VfxRuntime implements VfxStage {
     return {
       lut: shift && p.lut === 'base' ? 'shift' : p.lut,
       reduceFlash: vfxSettings.reduceFlash,
-      keyline: this.profile.keyline.includes(p.ramp as FamilyId) && p.component !== 'missile',
+      // No biome keyline on missiles or on dithered status units (a keyline round every dither dot turned the freeze
+      // crystal into a dark checkerboard on frost ground); they carry their own matter outline.
+      keyline: this.profile.keyline.includes(p.ramp as FamilyId) && p.component !== 'missile' && p.component !== 'status',
     };
   }
 
@@ -1028,11 +1076,26 @@ export class VfxRuntime implements VfxStage {
     return bakeReq(piece, this.optsFor(p));
   }
 
+  /** A sweep smear's chunk for one stage: the stage's width (white-hot head) and ink. */
+  smearReq(p: RingPiece, st: 0 | 1 | 2 | 3): BakeReq {
+    const q = p.params;
+    const w = smearWidth(q.smear ?? 4, st);
+    const ink = RING_INKS[Math.min(3, RING_INKS.indexOf(q.ink) + st)];
+    const params = { r: RING_WHOLE_MAX + 36, aspect: q.aspect, thick: Math.min(4, w) as 1 | 2 | 3 | 4, style: 'solid' as const, ink, anim: 'static' as const, ms: 200, ...(w >= 4 ? { smear: w as 4 | 6 | 8 } : {}) };
+    return bakeReq({ ...p, params, anchor: { ...p.anchor, half: undefined } }, this.optsFor(p));
+  }
+
+  /** Every chunk bake of a chunked ring: by ink, or by smear stage. */
+  chunkReqMap(p: RingPiece): Map<string, BakeReq> {
+    if (p.params.smear && p.params.anim === 'sweep') return new Map(([0, 1, 2, 3] as const).map((st) => [`s${st}`, this.smearReq(p, st)]));
+    return new Map(this.chunkInks(p).map((ink) => [ink, this.chunkReq(p, ink)]));
+  }
+
   /** Every bake request a piece can need (warm set): senses, halves, chunk inks. */
   variants(p: VfxPiece, shift = false): BakeReq[] {
     if (p.component === 'afterimage') return [];
     if (p.component === 'bolt' && (p.tags ?? []).includes('geometryFromEvent')) return [];
-    if (p.component === 'ring' && this.chunked(p as RingPiece)) return this.chunkInks(p as RingPiece).map((ink) => this.chunkReq(p as RingPiece, ink));
+    if (p.component === 'ring' && this.chunked(p as RingPiece)) return [...this.chunkReqMap(p as RingPiece).values()];
     const o = this.optsFor(p, shift);
     if (this.splits(p)) return (['back', 'front'] as const).map((h) => bakeReq({ ...p, anchor: { ...p.anchor, half: h } } as VfxPiece, o));
     return [bakeReq(p, o)];
@@ -1254,7 +1317,10 @@ export class VfxRuntime implements VfxStage {
             tier: layer === 'ground' || layer === 'preview' || layer === 'tell' ? 'ground' : 'body',
             holdMs: isSpark && k === 0 ? ctx.holdMs : undefined,
             spark: isSpark ? victim : undefined,
-            low: ctx.low,
+            // Ground dressing (dust, decals, floor bands) may fill only 2/3 of the ground pool: the rest is kept for
+            // gameplay cues on the same pool (wind-up previews, nova markers, tells), which a busy fight's death
+            // puffs could otherwise crowd out.
+            low: ctx.low || (layer === 'ground' && !(p.tags ?? []).includes('neverGoverned')),
           });
         if (repeat && life) for (let w = 0; w * repeat < life; w++) g.insts.push(mk(t0 + s.delay + w * repeat));
         else g.insts.push(mk(t0 + s.delay));
@@ -1498,7 +1564,7 @@ export class VfxRuntime implements VfxStage {
         case 'orbit': {
           const a = pt.l.a + age / 140;
           x = base.x + Math.cos(a) * pt.l.r;
-          y = base.y + Math.sin(a) * pt.l.r * 0.5;
+          y = base.y + Math.sin(a) * pt.l.r * (pt.l.asp ?? 0.5);
           heading = a + Math.PI / 2;
           break;
         }
@@ -1506,7 +1572,7 @@ export class VfxRuntime implements VfxStage {
           const r = pt.l.r * (1 - u);
           const a = pt.l.a + u * 5;
           x = base.x + Math.cos(a) * r;
-          y = base.y + Math.sin(a) * r * 0.65;
+          y = base.y + Math.sin(a) * r * (pt.l.asp ?? 0.65);
           heading = a + Math.PI / 2;
           break;
         }

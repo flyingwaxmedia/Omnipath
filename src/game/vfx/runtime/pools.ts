@@ -29,6 +29,8 @@ export class ImagePool {
 
   /** `soft` (0..1): refuse beyond that share of the cap (low-priority pieces). */
   get(tex: string, frame: string, soft = 1): Phaser.GameObjects.Image | null {
+    // A frame freed with its atlas page (LRU eviction) is never drawn: Phaser would fall back to a removed first frame.
+    if (!this.scene.textures.get(tex).has(frame)) return null;
     if (this.live >= this.cap * soft) {
       this.refused++;
       return null;
@@ -122,6 +124,7 @@ export class BobPool {
       this.refused++;
       return null;
     }
+    if (!b.texture.has(frame)) return null;
     const list = this.freeBobs.get(b);
     let bob = list?.pop();
     if (bob) {
@@ -164,7 +167,8 @@ export class BobPool {
   }
 
   private make(tex: string, glow: boolean): Phaser.GameObjects.Blitter {
-    const b = this.scene.make.blitter({ x: 0, y: 0, key: tex }, false);
+    // '__BASE' explicitly: an atlas page's first named frame may have gone with an eviction (Phaser would look it up).
+    const b = this.scene.make.blitter({ x: 0, y: 0, key: tex, frame: '__BASE' }, false);
     if (glow) {
       b.setBlendMode(Phaser.BlendModes.ADD);
       this.glowLayer.add(b);

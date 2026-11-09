@@ -411,9 +411,36 @@ export interface RingParams {
   arc?: readonly [number, number];
   /** Sweep heads (spin bands): 1-3, 360/heads apart. */
   heads?: 1 | 2 | 3;
+  /**
+   * Sweep only: a tapered blade smear instead of an even band. Each head is a white-hot leading edge this wide (px,
+   * growing inward from the rim); behind it the band thins and cools (lit -> mid -> dim) and is gone after SMEAR_TAIL of
+   * a turn (docs/VFX.md §5 ring).
+   */
+  smear?: 4 | 6 | 8;
   /** Total animation time (ms). */
   ms: number;
 }
+
+/** Share of a full turn a sweep smear's tail covers behind each head. */
+export const SMEAR_TAIL = 0.32;
+
+/**
+ * Smear stage of a sweep unit `age` ticks (33 ms) behind its head, a turn being `T` ticks: 0 = white-hot head, 1 lit,
+ * 2 mid, 3 dim, -1 gone. The width of a stage is `smearWidth` (whole rings taper per pixel column instead).
+ */
+export function smearStage(age: number, T: number): -1 | 0 | 1 | 2 | 3 {
+  const tail = Math.max(1.2, T * SMEAR_TAIL);
+  if (age < 0) return -1;
+  if (age < 0.6) return 0;
+  const f = age / tail;
+  if (f < 0.4) return 1;
+  if (f < 0.75) return 2;
+  if (f < 1) return 3;
+  return -1;
+}
+
+/** Band width (px) of a smear stage for a head width `w`. */
+export const smearWidth = (w: number, stage: 0 | 1 | 2 | 3): number => Math.max(1, [w, Math.round(w * 0.7), Math.round(w * 0.45), 2][stage]);
 
 export type DecalKind = 'fill' | 'scorch' | 'frost' | 'wet' | 'ink' | 'rune' | 'cracks' | 'pool' | 'rift' | 'shadow';
 

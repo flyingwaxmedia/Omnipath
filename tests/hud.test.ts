@@ -15,9 +15,14 @@ import {
   type HudArt,
 } from '../src/ui/hud/html';
 import {
+  PURSUIT_ROWS,
   barLeft,
+  barPlan,
   barRows,
   barWidth,
+  crossesMiddle,
+  freeSpan,
+  placeZone,
   cooldownText,
   countText,
   expPercent,
@@ -62,6 +67,20 @@ describe('layout maths', () => {
     expect(barRows(0, true)).toEqual([]);
     expect(barWidth(8, 46, 3)).toBe(8 * 46 + 7 * 3);
     expect(barWidth(0, 46, 3)).toBe(0);
+  });
+
+  it('splits a two-row bar by group (5 class slots, then your 3) when it fits, never under the touch floor', () => {
+    // iPad portrait (1.5 CSS px per art px): 5 × 72 px slots fit left of the cluster.
+    expect(barPlan({ n: 8, classSlots: 5, twoRows: true, room: 517, slot: 72, minSlot: 66, gap: 6, unit: 1.5 })).toEqual({ rows: [5, 3], slot: 72, split: true, ownCol: 2 });
+    // 390 px phone: the slots shrink from 48 to 44 to fit.
+    const phone = barPlan({ n: 8, classSlots: 5, twoRows: true, room: 237, slot: 48, minSlot: 44, gap: 4, unit: 1 });
+    expect(phone.rows).toEqual([5, 3]);
+    expect(phone.slot).toBe(44);
+    // 360 px phone: 44 does not fit → two even rows at full size.
+    expect(barPlan({ n: 8, classSlots: 5, twoRows: true, room: 207, slot: 48, minSlot: 44, gap: 4, unit: 1 })).toEqual({ rows: [4, 4], slot: 48, split: false, ownCol: 0 });
+    // No class (every slot yours) or one row: as before.
+    expect(barPlan({ n: 8, classSlots: 0, twoRows: true, room: 999, slot: 48, minSlot: 44, gap: 4 }).rows).toEqual([4, 4]);
+    expect(barPlan({ n: 8, classSlots: 5, twoRows: false, room: 999, slot: 48, minSlot: 44, gap: 4 }).rows).toEqual([8]);
   });
 
   it('centres the zone plate in the free span, or reports that it does not fit', () => {
@@ -215,10 +234,16 @@ describe('zone plate, stat strip, Pursuits', () => {
     expect(html).toContain('Defeat Jellops');
     expect(html).toContain('<em class="num">3/8</em>');
     expect(html).toContain('width:38%');
-    expect(html).toContain('g-quest');
+    // The NPC marker set (docs/UX-SIMPLE.md rule 10): '…' in progress, '?' ready; '!' (new quest) never in the tracker.
+    expect(html).not.toContain('g-quest');
+    expect(html).toContain('>…<');
     const ready = pursuitHtml({ ...q, line: 'Return to Brann', ready: true, progress: undefined }, 1, '');
     expect(ready).toContain('pz-row quest ready');
     expect(ready).not.toContain('pz-bar');
+    expect(ready).toContain('>?<');
+    const art = pursuitHtml(q, 0, '', { url: 'data:mark/busy', w: 15, h: 12 });
+    expect(art).toContain('class="qm" src="data:mark/busy"');
+    expect(art).toContain('--w:15;--h:12');
     const goal: PursuitView = { key: 'goal:class:pyro', kind: 'goal', title: 'Pyroblade', line: 'Learn 1 more fire skill.', icon: { kind: 'cls', id: 'pyroblade' }, open: { panel: 'classes', arg: 'pyroblade' } };
     const g = pursuitHtml(goal, 2, 'data:cls/pyroblade');
     expect(g).toContain('pz-row goal');
@@ -244,10 +269,23 @@ describe('the own-slot picker', () => {
     expect(html.indexOf('Flame Spin')).toBeLessThan(html.indexOf('Whirlwind'));
     expect(html).toContain('>New<');
     expect(html).toContain('Equipped'); // the slot's own skill
-    expect(html).toContain('inclass'); // sits in a class slot: managed by the class
     expect(html).toContain('Slot 8'); // already in another slot of yours: equipping moves it
+    // A skill in a class slot is no choice: not a tile, only dimmed in the "Already in your class slots" row.
+    expect(html).not.toContain('data-skill="slash_up"');
+    expect(html).toContain('Already in your class slots');
+    expect(html).toContain('class="inclass"');
     expect(pickerHtml({ ...view, current: null }, () => '', 5)).not.toContain('pk-empty');
     expect(pickerHtml({ slot: 6, current: null, choices: [] }, () => '', 5)).toContain('pk-none');
+  });
+
+  it('says what to do when nothing can go in the slot: one line, one button to the quests', () => {
+    const allInClass: SlotPickerView = { slot: 6, current: null, choices: [{ skillId: 'slash_up', name: 'Rising Slash', fresh: false, slot: 1 }] };
+    const html = pickerHtml(allInClass, (id) => `data:skill/${id}`, 5);
+    expect(html).toContain('Learn a new skill to fill this slot.');
+    expect(html).toContain('pk-quests');
+    expect(html).not.toContain('pk-grid');
+    expect(html).toContain('Already in your class slots');
+    expect(pickerHtml({ slot: 6, current: null, choices: [] }, () => '', 5)).toContain('pk-quests');
   });
 
   it('offers your slots when a skill needs a place', () => {
@@ -323,5 +361,51 @@ describe('HUD pixel size (the HUD draws its art pixels the size of the world\'s)
     expect(hudLayoutClasses(1180 / 1.5, 820 / 1.5)).toEqual({ port: false, narrow: false, short: false, big: false });
     expect(hudLayoutClasses(820 / 1.5, 1180 / 1.5).port).toBe(true);
     expect(hudLayoutClasses(1440, 900).big).toBe(true);
+  });
+});
+
+describe('HUD placement keeps the field clear', () => {
+  const R = (left: number, top: number, w: number, h: number) => ({ left, top, right: left + w, bottom: top + h });
+
+  it('finds the free span of a band between the blocks on either side', () => {
+    expect(freeSpan([R(0, 0, 200, 100), R(800, 50, 200, 100), R(300, 500, 100, 100)], 60, 120, 1000, 6, 8)).toEqual({ lo: 208, hi: 792 });
+    expect(freeSpan([R(0, 0, 200, 40)], 60, 120, 1000, 6, 8)).toEqual({ lo: 6, hi: 994 });
+  });
+
+  // Phone portrait 390 × 844 at 1 CSS px per art px (measured in the browser).
+  const phone = {
+    W: 390, m: 6, u: 1, zh: 44, below: 0, portrait: true,
+    plate: R(51, 10, 132, 63), me: R(6, 10, 201, 103), stats: R(64, 75, 143, 38), menu: R(199, 6, 185, 92),
+    minimap: R(296, 104, 88, 88), pursuits: R(136, 198, 248, 102), quick: R(6, 371, 46, 170),
+  };
+
+  it('portrait: the zone plate stays in the top band beside the minimap, never under the Pursuits', () => {
+    const p = placeZone({ ...phone, zw: 150, zwCompact: 120 });
+    expect(p.top).toBeLessThan(phone.pursuits.top);
+    expect(p.x + 150).toBeLessThanOrEqual(phone.minimap.left);
+    // A name too long for the band: compact, then capped — still in the band.
+    const long = placeZone({ ...phone, zw: 400, zwCompact: 360 });
+    expect(long.top).toBeLessThan(phone.pursuits.top);
+    expect(long.compact).toBe(true);
+    expect(long.maxW).toBeLessThanOrEqual(phone.minimap.left - long.x);
+  });
+
+  it('iPad landscape: a long place name takes the row under the buttons, not a spot down in the field', () => {
+    const ipad = {
+      W: 1180, m: 9, u: 1.5, zh: 79, below: 72, portrait: false,
+      plate: R(78, 15, 246, 98), me: R(9, 15, 315, 158), stats: R(99, 116, 225, 57), menu: R(682, 9, 489, 66),
+      minimap: R(1033, 84, 138, 138), pursuits: R(835, 231, 336, 151), quick: R(9, 150, 69, 255),
+    };
+    expect(placeZone({ ...ipad, zw: 223, zwCompact: 180 }).top).toBe(9); // fits beside the buttons
+    const long = placeZone({ ...ipad, zw: 420, zwCompact: 340 });
+    expect(long.top).toBe(ipad.menu.bottom + 6 * 1.5);
+    expect(long.x).toBeGreaterThanOrEqual(ipad.stats.right);
+    expect(long.x + 420).toBeLessThanOrEqual(ipad.minimap.left);
+  });
+
+  it('names the boxes crossing the middle band (40–60 % of the height)', () => {
+    expect(crossesMiddle({ pursuits: R(136, 198, 248, 102), zone: R(121, 104, 149, 44) }, 844)).toEqual([]);
+    expect(crossesMiddle({ pursuits: R(136, 198, 248, 200), zone: R(88, 402, 213, 49) }, 844)).toEqual(['pursuits', 'zone']);
+    expect(PURSUIT_ROWS).toBe(2);
   });
 });

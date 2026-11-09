@@ -10,7 +10,7 @@ import { NPCS } from '../data/npcs';
 import { WEAPONS } from '../data/weapons';
 import { mapById } from '../data/world';
 import { gameBus } from './events';
-import { classSlotsFor, noteWorn, padBar, refillClassSlots, slotLearned } from './loadout';
+import { becomeRefill, classSlotsFor, noteWorn, padBar, refillClassSlots, slotLearned } from './loadout';
 
 /** Skill-bar slots: 1-5 are class slots while a class is worn, 6-8 are always the player's own (SPEC-v2 §5.1). */
 export const HOTBAR_SIZE = 8;
@@ -279,7 +279,7 @@ export class Session {
     // The first class (or one found while wearing none) is worn at once: it fills its class slots.
     ev.on('classDiscovered', ({ cls, worn }) => {
       if (!worn) return;
-      refillClassSlots(this, 'class', { rehome: true });
+      becomeRefill(this);
       noteWorn(this.book);
       gameBus.emit('classChanged', { classId: cls.id, prev: null, reason: 'discovered' });
     });

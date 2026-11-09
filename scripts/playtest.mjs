@@ -15,7 +15,8 @@
 // Starts a new game, checks the HUD's pixel size (HUD art px = the world's), opens every panel (and tab), then the v3
 // flows: the loop sleeps under the Star Chart (and again after a card over it), a star card shows ONE action, Become a
 // class fills the class slots, an empty own slot opens the picker and equips, Equip on a star card with every slot full
-// picks a slot and comes back to that card, AUTO on / off; walks Hearthvale -> Greenmeadow through a real portal, fights,
+// picks a slot and comes back to that card, AUTO on / off, the ☰ menu's Sound and "Reduce shake & flashes" switches;
+// walks Hearthvale -> Greenmeadow through a real portal, fights,
 // reveals a hidden portal by casting, opens a Prism Gate, warps through every map via window.omnipath.debug, checks
 // that warping does not grow listener counts, takes Hale's First Drill quest (accept in the dialog, complete, turn in)
 // for Rising Kick, and takes portrait-phone / landscape-phone / iPad screenshots.
@@ -314,6 +315,28 @@ try {
   if (a1.on === !a0.on && a1.btn === a1.on && a1.atk === a1.on && a2.on === a0.on && a2.btn === a0.on) ok('AUTO switches on and off (button, attack ring)');
   else fail(`AUTO: ${JSON.stringify([a0, a1, a2])}`);
   await closeModal();
+  // 7) ☰ menu settings: Sound off / on and "Reduce shake & flashes" reach the audio and VFX settings.
+  await page.click('.menu button[data-panel="menu"]');
+  await page.waitForTimeout(150);
+  const menuState = () =>
+    page.evaluate(() => ({
+      muted: window.omnipath.debug.audio?.settings.muted ?? null,
+      calm: document.getElementById('hud-root')?.classList.contains('reduce-flash') ?? null,
+      vfx: window.omnipath.scene?.vfx?.reduceFlash ?? null,
+    }));
+  const m0 = await menuState();
+  await page.click('.mn-sw[data-set="sound"]');
+  await page.click('.mn-sw[data-set="calm"]');
+  await page.waitForTimeout(100);
+  const m1 = await menuState();
+  await page.click('.mn-sw[data-set="sound"]');
+  await page.click('.mn-sw[data-set="calm"]');
+  await page.waitForTimeout(100);
+  const m2 = await menuState();
+  if (m1.muted === !m0.muted && m1.calm === !m0.calm && (m1.vfx === null || m1.vfx === m1.calm) && m2.muted === m0.muted && m2.calm === m0.calm) {
+    ok('☰ menu: Sound and "Reduce shake & flashes" switch on and off');
+  } else fail(`menu settings: ${JSON.stringify([m0, m1, m2])}`);
+  await closeModal();
 
   // ------------------------------------------------------------ interactions in Hearthvale (Brann gift, waystone)
   await page.evaluate(() => {
@@ -468,6 +491,23 @@ try {
     }
     await waitFor(async () => !(await info()).open || (await info()).panel !== 'minigame', 4000, 'forge finished');
     ok('forge minigame runs');
+  }
+  await closeModal();
+  // A card that waited behind the NPC dialog must show first, then the forge, then the modal closes (the forge used to
+  // overwrite the card: the modal could never close).
+  await approach("v.kind === 'npc' && v.def.id === 'brann'");
+  if (await waitFor(async () => (await info()).panel === 'dialog', 6000, 'Brann dialog (card + forge)')) {
+    await page.evaluate(() => window.omnipath.ui.discovery({ icon: '🧪', kicker: 'TEST CARD', title: 'Waits behind Brann', body: 'Shown before the forge.' }));
+    await page.click('.dialog [data-opt="0"]');
+    const cardFirst = await waitFor(() => page.evaluate(() => !!document.querySelector('.modal .discovery')), 2000, 'waiting card shows before the forge');
+    if (cardFirst) await page.click('.modal .discovery .ok');
+    if (await waitFor(async () => (await info()).panel === 'minigame', 3000, 'forge after the card')) {
+      for (let i = 0; i < 3; i++) {
+        await page.click('.minigame .strike');
+        await page.waitForTimeout(200);
+      }
+      if (await waitFor(async () => !(await info()).open, 4000, 'modal closes after card + forge')) ok('a waiting card shows before the forge; the modal closes after');
+    }
   }
   await closeModal();
   await approach("v.kind === 'npc' && v.def.id === 'tamsin'");
@@ -665,9 +705,57 @@ try {
   if (saved?.v === 2 && saved.world?.visited?.length >= 10) ok(`save v2 written (${saved.world.visited.length} maps visited)`);
   else fail('save v2 missing or incomplete');
 
+  // ------------------------------------------------------------ long-press (touch): the picker / card opened by a hold
+  // stays open when the finger lifts (the click the lift makes must not land on the new backdrop).
+  if (device.touch) {
+    const idx = await page.evaluate(() => {
+      const s = window.omnipath.scene;
+      const bar = s.barSlots();
+      const own = bar.find((x) => x.kind === 'own' && x.skillId);
+      if (own) return own.index;
+      // No skill in a slot of yours yet: put a known one there (the last own slot).
+      const slot = [...bar].reverse().find((x) => x.kind === 'own');
+      const spare = s.book.known().find((k) => !bar.some((x) => x.skillId === k.id) && s.slotPicker(slot.index).choices.some((c) => c.skillId === k.id));
+      if (slot && spare) window.omnipath.debug.assign(slot.index, spare.id);
+      return slot && spare ? slot.index : null;
+    });
+    const at = await page.evaluate((i) => {
+      if (i === null) return null;
+      const r = document.querySelector(`.hotbar .slot[data-slot="${i}"]`)?.getBoundingClientRect();
+      return r ? { x: r.left + r.width / 2, y: r.top + r.height / 2 } : null;
+    }, idx);
+    if (idx !== null && at) {
+      const cdp = await page.context().newCDPSession(page);
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [at] });
+      await page.waitForTimeout(900);
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+      await page.waitForTimeout(400);
+      const st = await info();
+      if (st.panel === 'picker') ok('long-press on your slot: the picker stays open after the finger lifts');
+      else fail(`long-press on slot ${idx + 1}: picker closed on release (panel ${st.panel})`);
+      await closeModal();
+    }
+  }
+
   // ------------------------------------------------------------ layouts
   await warp('vale.hearthvale');
   await shot('12-portrait-hearthvale');
+  // Portrait screens keep the middle band (40–60 % of the height, where the player stands) free of HUD boxes, with
+  // the Pursuits open: tap-to-move must reach the world there. The bar, the attack cluster, the left-edge quick
+  // buttons, the fading log and toasts are allowed.
+  const middleBand = () =>
+    page.evaluate(() => {
+      const H = innerHeight;
+      const out = [];
+      for (const sel of ['.hud-me .me-plate', '.hud-me .me-stats', '.hud-right .menu', '.hud-right .mm-dock', '.hud-right .pursuits', '.hud-centre .zone-banner', '.hud-centre .target', '.hud-centre .navpill']) {
+        const el = document.querySelector(sel);
+        if (!el || el.offsetParent === null || el.classList.contains('hidden')) continue;
+        const r = el.getBoundingClientRect();
+        if (r.width < 1 || r.height < 1 || getComputedStyle(el).visibility === 'hidden') continue;
+        if (r.top < H * 0.6 && r.bottom > H * 0.4) out.push(`${sel} ${Math.round(r.top)}-${Math.round(r.bottom)}`);
+      }
+      return out;
+    });
   for (const [name, w, h] of [
     ['portrait-phone', 390, 844],
     ['landscape-phone', 844, 390],
@@ -679,6 +767,17 @@ try {
     await page.waitForTimeout(400);
     await shot(`13-${name}`);
     if (await bannerToast()) fail(`${name}: a toast covers the zone banner`);
+    if (h > w) {
+      await page.evaluate(() => {
+        const p = document.querySelector('.pursuits');
+        if (p && !p.classList.contains('open')) p.querySelector('.pz-tab')?.click();
+        window.omnipath.ui.setTarget({ name: 'Jellop', level: 1, hp: 20, maxHp: 30 });
+      });
+      await page.waitForTimeout(400);
+      const mid = await middleBand();
+      if (mid.length) fail(`${name}: HUD in the middle of the screen: ${mid.join(', ')}`);
+      else ok(`${name}: the middle band is free of HUD (Pursuits open, a target up)`);
+    }
     // Every visible HUD and panel button must be a >= 44 px touch target.
     const smallButtons = () =>
       page.evaluate(() =>

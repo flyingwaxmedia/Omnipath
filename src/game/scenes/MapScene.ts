@@ -1292,18 +1292,28 @@ export class MapScene extends Phaser.Scene implements GameController {
     // Mid-warp: let the 220 ms fade finish (a paused camera never completes it, which left the game stuck
     // half-faded when a dialog opened during a warp). create() re-pauses if a panel is still open.
     if (paused && this.warping) return;
-    if (paused && this.scene.isActive()) this.scene.pause();
-    else if (!paused && this.scene.isPaused()) this.scene.resume();
+    if (paused && this.scene.isActive()) {
+      this.scene.pause();
+      this.pausedAt = performance.now();
+    } else if (!paused && this.scene.isPaused()) this.scene.resume();
   }
+
+  /** Wall time (performance.now) when a panel paused the scene: a paused scene's clock stands still. */
+  private pausedAt = 0;
 
   newGame(): void {
     Session.clear();
     location.reload();
   }
 
-  /** Mid-fight (dealt or took damage within the combat window): the UI holds discovery cards until it ends. */
+  /**
+   * Mid-fight (dealt or took damage within the combat window): the UI holds discovery cards until it ends. While a
+   * panel pauses the scene its clock stands still, so the window keeps counting in wall time (the Class screen opened
+   * right after a fight unlocks "Become" once the fight is over, not only after closing it).
+   */
   inCombat(): boolean {
-    return !!this.combat && !this.combat.dead && !this.warping && this.combat.inCombat();
+    const frozen = this.scene.isPaused() ? Math.max(0, performance.now() - this.pausedAt) : 0;
+    return !!this.combat && !this.combat.dead && !this.warping && this.combat.inCombat(this.time.now + frozen);
   }
 
   save(): void {

@@ -73,6 +73,8 @@ export class Player {
   private recoilQ: { x: number; y: number }[] = [];
   private holdUntil = 0;
   private held: { x: number; y: number } | null = null;
+  /** After a hold the sprite catches up with the body over a few frames. */
+  private lag = { x: 0, y: 0 };
   private castColor = 0x9fe0ff;
   private castProgress: number | null = null;
   private icons: Phaser.GameObjects.Image[] = [];
@@ -204,8 +206,15 @@ export class Player {
   sync(dt: number, _auraColors?: number[]): void {
     const now = this.scene.time.now;
     const held = now < this.holdUntil && this.held !== null;
-    if (!held) this.held = null;
+    if (!held && this.held) {
+      this.lag = { x: this.held.x - this.x, y: this.held.y - this.y };
+      this.held = null;
+    }
     if (!held) this.lunge = Math.max(0, this.lunge - dt * 6);
+    if (!held && (this.lag.x || this.lag.y)) {
+      this.lag.x = Math.abs(this.lag.x) < 1 ? 0 : this.lag.x * 0.45;
+      this.lag.y = Math.abs(this.lag.y) < 1 ? 0 : this.lag.y * 0.45;
+    }
     const lx = Math.cos(this.aimAngle) * this.lunge * 3;
     const ly = Math.sin(this.aimAngle) * this.lunge * 3;
     const stunned = now < this.stunUntil;
@@ -213,8 +222,8 @@ export class Player {
     const s = this.sprite;
     const rc = this.recoilQ[0];
     if (rc && !held) this.recoilQ.shift();
-    const bx = held ? this.held!.x : this.x;
-    const by = held ? this.held!.y : this.y;
+    const bx = held ? this.held!.x : this.x + this.lag.x;
+    const by = held ? this.held!.y : this.y + this.lag.y;
     s.setPosition(bx + lx + shake + (rc?.x ?? 0), by + ly + (rc?.y ?? 0));
     s.setFlipX(this.facing < 0);
     s.setDepth(ySort(this.y));

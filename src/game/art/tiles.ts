@@ -251,12 +251,14 @@ function grassGround(g: GrassLook): Ground {
   };
 }
 
+// Olive, earthy greens (docs/ART-DIRECTION.md; measured against the reference: hue ~72, saturation ~0.42). Reds,
+// banners and flowers stay saturated so the accents still pop.
 const GRASS_LOOK: GrassLook = {
-  base: '#6f8a42',
-  dark: '#5a7536',
-  deep: '#4a612c',
-  light: '#83a04d',
-  hi: '#99b75c',
+  base: '#6c7a45',
+  dark: '#58653a',
+  deep: '#465230',
+  light: '#7e8a50',
+  hi: '#939e5f',
   tufts: 4,
   specks: 5,
 };
@@ -359,11 +361,11 @@ function dirtGround(g: DirtLook): Ground {
 }
 
 const PATH_LOOK: DirtLook = {
-  base: '#a08a63',
-  dark: '#8a7553',
-  light: '#b09b75',
-  stone: '#b5a585',
-  stoneHi: '#cbbd9d',
+  base: '#a08f72',
+  dark: '#8a7a61',
+  light: '#b0a084',
+  stone: '#b5a991',
+  stoneHi: '#cbc1a9',
   pebbles: 1,
   specks: 5,
 };
@@ -731,7 +733,44 @@ function paintCrypt(b: Buf, v: number): void {
       }
     // worn speckles
     for (let q = 0; q < 3; q++) b.set((st.x + 3 + ri(rnd, 10)) % S, st.y + 3 + ri(rnd, 10), sh(body, rnd() < 0.5 ? -8 : 6));
+    // one slab per variant tile gets a feature (a slab across the tile edge looks the same in every variant: seamless)
+    if (st.wraps || SLABS.indexOf(st) !== [0, 1, 2][(v * 2 + 1) % 3]) return;
+    if (v === 1) {
+      // cracked flagstone: a dark zigzag with a lit lower lip, and a chipped corner
+      let y = st.y + 4 + ri(rnd, 6);
+      for (let k = 2; k < st.w - 3; k++) {
+        b.set(st.x + k, y, sh(body, -26));
+        b.set(st.x + k, y + 1, sh(body, 9));
+        if (rnd() < 0.35) y = clamp(y + (rnd() < 0.5 ? -1 : 1), st.y + 2, st.y + st.h - 5);
+      }
+      b.rect(st.x + st.w - 4, st.y + st.h - 4, 2, 2, mixc(base, hx('#2e2a38'), 0.45));
+    } else if (v === 2) {
+      // an irregular flagstone: split in two by a crooked joint, dirt packed into it, a rubble chip on top
+      const dirt = mixc(hx('#3e352e'), base, 0.35);
+      let x = st.x + 5 + ri(rnd, 5);
+      for (let j = 1; j < st.h - 2; j++) {
+        b.set(x, st.y + j, dirt);
+        b.set(x + 1, st.y + j, sh(body, 6));
+        if (rnd() < 0.3) x = clamp(x + (rnd() < 0.5 ? -1 : 1), st.x + 3, st.x + st.w - 5);
+      }
+      const rx = st.x + 2 + ri(rnd, st.w - 6);
+      const ry = st.y + 2 + ri(rnd, st.h - 6);
+      b.rect(rx, ry, 2, 1, sh(body, 16));
+      b.set(rx + 2, ry + 1, sh(body, -20));
+      b.set(rx, ry + 1, sh(body, 4));
+    }
   });
+  // dirt in the seams away from the tile edge (the edge rows stay identical in every variant)
+  if (v > 0) {
+    const rnd = artRng(keySeed('crypt-seams') + v * 31);
+    // seams: row 0 joint at x 15 (y 0..14), row 1 joints at x 7 / 23 (y 16..30), the course joint at y 15
+    for (let q = 0; q < 3; q++) {
+      const kind = ri(rnd, 3);
+      const [x, y, dx, dy] =
+        kind === 0 ? [15, 2 + ri(rnd, 9), 0, 1] : kind === 1 ? [[7, 23][ri(rnd, 2)], 18 + ri(rnd, 9), 0, 1] : [2 + ri(rnd, S - 8), 15, 1, 0];
+      for (let k = 0; k < 4; k++) b.set(x + dx * k, y + dy * k, hx(rnd() < 0.6 ? '#3e352e' : '#4a3f36'));
+    }
+  }
 }
 
 /** Toroidal Voronoi cells (layout shared by every variant so tile edges always match). */
@@ -828,6 +867,8 @@ interface PavingLook {
   /** tone spread between cells, and the share of warm-tinted cells */
   spread: number;
   warm?: [RGB, number];
+  /** Variant rows split the cells wholly inside the tile in two (smaller stones; edge cells never change). */
+  split?: boolean;
 }
 
 const COBBLE_PAVE: PavingLook = {
@@ -842,6 +883,7 @@ const COBBLE_PAVE: PavingLook = {
   round: 3.2,
   spread: 16,
   warm: [hx('#a8957a'), 0.3],
+  split: true,
 };
 const BASALT = { gap: hx('#1c1a20'), top: hx('#423e48'), hi: hx('#57525f'), lo: hx('#34313a') };
 const BASALT_PAVE: PavingLook = {
@@ -897,8 +939,17 @@ function paintPaving(b: Buf, look: PavingLook, v: number): void {
       if (look.warm && rnd() < look.warm[1]) tone = mixc(tone, look.warm[0], 0.4);
       const e = pl.edge[i];
       let c = tone;
-      if (e < look.joint || pl.vert[i] < look.round) c = look.gap;
+      // a split stone: a joint through the cell centre at a per-cell angle, the far half a shade apart
+      let d = Infinity;
+      if (look.split && v > 0 && inner && x1 - x0 >= 7 && y1 - y0 >= 6) {
+        const a = (rnd() + v * 0.37) * Math.PI;
+        d = (x - pl.cx[i]) * Math.cos(a) + (y - pl.cy[i]) * Math.sin(a);
+        if (d > 0) tone = sh(tone, rnd() < 0.5 ? -7 : 6);
+        c = tone;
+      }
+      if (e < look.joint || pl.vert[i] < look.round || Math.abs(d) < 0.55) c = look.gap;
       else if (e < look.bevel || pl.vert[i] < look.round + 1.2) c = pl.side[i] > 0 ? mixc(tone, look.lo, 0.7) : mixc(tone, look.hi, 0.7);
+      else if (Math.abs(d) < 1.6) c = d > 0 ? mixc(tone, look.hi, 0.6) : mixc(tone, look.lo, 0.6);
       b.set(x, y, c);
     }
 }
@@ -1002,19 +1053,46 @@ function paintWallTop(b: Buf, t: number, v: number): void {
   const rnd = artRng(keySeed('walltop') + t * 101 + v * 7);
   const place = makePlacer(rnd, () => true);
   if (L.masonry) {
-    // dark capstones: big 16 px slabs, faint seams, worn specks
+    // capstones: big 16 px slabs, each a shade apart (by slab, so tile edges always match), a 2 px lit rim along the
+    // top-left of each slab, dark seams, worn specks; variants add rubble (v1) and creeping roots (v2)
     b.fill(L.top);
     for (let y = 0; y < S; y++)
       for (let x = 0; x < S; x++) {
-        const sx = (x + (y < 16 ? 0 : 8)) % 16;
+        const off = y < 16 ? 0 : 8;
+        const sx = (x + off) % 16;
         const sy = y % 16;
+        const slab = (Math.floor((x + off) / 16) % 2) * 2 + (y < 16 ? 0 : 1);
+        const tone = sh(L.top, [3, -3, 0, 5][slab]);
         if (sx === 15 || sy === 15) b.set(x, y, L.crevice);
         else if (sx === 0 || sy === 0) b.set(x, y, L.topLight);
+        else if (sx === 1 || sy === 1) b.set(x, y, mixc(tone, L.topLight, 0.5));
+        else if (sx === 14 || sy === 14) b.set(x, y, L.topDark);
+        else b.set(x, y, ((x * 7 + y * 13) % 23 === 0) ? L.topDark : tone);
       }
     const n = 2 + v;
     for (let i = 0; i < n; i++) {
       const p = place(2, 1, 2);
       if (p) b.set(p[0], p[1], rnd() < 0.5 ? L.topLight : L.topDark);
+    }
+    if (v === 1)
+      for (let i = 0; i < 3; i++) {
+        const p = place(3, 2, 2);
+        if (!p) continue;
+        b.rect(p[0], p[1], 2, 1, L.lip);
+        b.set(p[0] + 2, p[1], L.topLight);
+        b.rect(p[0], p[1] + 1, 3, 1, L.crevice);
+      }
+    if (v === 2) {
+      const root = hx('#3a2a22');
+      const p = place(12, 6, 2);
+      if (p) {
+        let y = p[1] + 2;
+        for (let k = 0; k < 12; k++) {
+          b.set(p[0] + k, y, root);
+          if (k % 4 === 2) b.set(p[0] + k, y - 1, hx('#56402f'));
+          if (rnd() < 0.4) y = clamp(y + (rnd() < 0.5 ? -1 : 1), p[1], p[1] + 5);
+        }
+      }
     }
     return;
   }
@@ -1804,6 +1882,12 @@ const patch = (color: RGB, a: number): DecalPainter => (b, rnd) => {
       if (dx * dx + dy * dy < 0.9 - rnd() * 0.35) b.set(x0 + i, y0 + j, color, a);
     }
 };
+/** A small bone (crypt floors). */
+const bone = (): DecalPainter => (b, rnd) =>
+  centred(b, rnd() < 0.5 ? ['b.....b', 'bbbbbbb', 'B.....B'] : ['.b...', 'bBb..', '.bBb.', '..bBb', '...bB'], {
+    b: hx('#cfc6b0'),
+    B: hx('#8f8774'),
+  });
 const crack = (dark: string, light?: string): DecalPainter => (b, rnd) => {
   let x = 2 + ri(rnd, 2);
   let y = 6 + ri(rnd, 4);
@@ -1984,12 +2068,12 @@ function blitOver(b: Buf, src: Buf): void {
     }
 }
 
-const PATHP = { body: PATH_LOOK.stone, hi: PATH_LOOK.stoneHi, lo: '#8f7f62', sh: PATH_LOOK.dark };
+const PATHP = { body: PATH_LOOK.stone, hi: PATH_LOOK.stoneHi, lo: '#8f836e', sh: PATH_LOOK.dark };
 const GREY_STONE = stone('#9a958b', '#b8b3a8', '#77726a', '#3a352c');
 const GRASS_STONE = stone('#9c9784', '#b5b09c', '#7c7766', '#4a5530');
 
 const DECAL_PAINT: Readonly<Record<DecalSet, readonly DecalPainter[]>> = {
-  grass: [tuft(DG, true), tuft(DG, false), tuft(DG, false), clover('#7c9a48', '#5f7d38'), daisies(PAL.cream, '#e8c040', DG.d), GRASS_STONE, patch(hx(GRASS_LOOK.dark), 0.35), tuft(DG, true)],
+  grass: [tuft(DG, true), tuft(DG, false), tuft(DG, false), clover('#7a8848', '#5d6a38'), daisies(PAL.cream, '#e8c040', DG.d), GRASS_STONE, patch(hx(GRASS_LOOK.dark), 0.35), tuft(DG, true)],
   flowers: [
     flowerClump(PAL.crimson, '#f0c050', DG),
     flowerClump(PAL.rose, '#fff0c0', DG),
@@ -2034,7 +2118,7 @@ const DECAL_PAINT: Readonly<Record<DecalSet, readonly DecalPainter[]>> = {
   sand: [shell(), pebbles('#e8dcc0', '#f6eedb', '#b8a473'), ripple('#e2d2a4', '#b8a473'), patch(hx('#b8a473'), 0.3), twig('#8a7050', '#b89a70'), tuft(pal4('#8a9a50', '#6a7a40', '#a8b468', '#c0c880'), false), pebbles('#d8ccb0', '#f0e8d8', '#b8a473'), shell()],
   stone: [crack('#5c574f', '#a29c91'), pebbles('#a29d93', '#bdb8ae', '#5c574f'), GREY_STONE, patch(hx('#6d6860'), 0.35), clover('#6a7e45', '#4f6233'), crack('#5c574f', '#a29c91'), stone('#9a958b', '#b8b3a8', '#77726a', '#3a352c', true), pebbles('#a29d93', '#bdb8ae', '#5c574f')],
   cave: [pebbles('#6b6055', '#80746a', '#2e2823'), crack('#2e2823', '#5f554a'), stone('#6b6055', '#80746a', '#4a4038', '#1a1512'), patch(hx('#2e3a44'), 0.45), mushrooms('#5a8ab0', '#8cc0e0', '#c8d8e0'), patch(hx('#3f372f'), 0.4), pebbles('#6b6055', '#80746a', '#2e2823'), crack('#2e2823', '#5f554a')],
-  crypt: [crack('#3a3645', '#6a6576'), crack('#3a3645'), patch(hx('#6a6576'), 0.25), pebbles('#6e697a', '#8a8496', '#2a2733'), clover('#4f6a3e', '#3a5030'), stone('#6e697a', '#8a8496', '#4a4656', '#16141b'), crack('#3a3645', '#6a6576'), pebbles('#6e697a', '#8a8496', '#2a2733')],
+  crypt: [crack('#3a3645', '#6a6576'), crack('#3a3645'), patch(hx('#3e352e'), 0.3), pebbles('#6e697a', '#8a8496', '#2a2733'), bone(), stone('#6e697a', '#8a8496', '#4a4656', '#16141b'), crack('#3a3645', '#6a6576'), bone()],
   snow: [drift(false), drift(true), sparkle('#ffffff'), stone('#8a8f98', '#b8bec8', '#6a7078', '#3a4250'), patch(hx(SNOW_LOOK.shade), 0.45), drift(false), drift(true), sparkle('#ffffff', true)],
   ice: [crack(ICE_LOOK.deep, ICE_LOOK.light), crack(ICE_LOOK.deep), sparkle('#ffffff'), patch(hx(ICE_LOOK.light), 0.5), sparkle('#ffffff', true), crack(ICE_LOOK.deep, ICE_LOOK.hi), patch(hx(ICE_LOOK.dark), 0.3), sparkle(ICE_LOOK.hi)],
   ember: [glowCrack(), glowCrack(), patch(hx('#7a6a62'), 0.35), cinders(), twig('#2a1a14', '#4a3028'), glowCrack(), patch(hx('#46302a'), 0.4), cinders()],

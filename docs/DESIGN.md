@@ -1,223 +1,101 @@
-# Omnipath — Game Design Document
+# Omnipath — Design overview (v3)
 
-> A 2D open-world action RPG for mobile, in the spirit of early-2000s MMOs.
-> No skill is ever handed to you from a menu. Every technique, element, and class
-> is **discovered** by mastering, morphing, and fusing what you already know.
+> An original 2D pixel-art action RPG for the iPad and phones, in the spirit of early-2000s MMOs.
+> No skill is ever handed to you from a menu: every technique, element and class is **discovered** by mastering,
+> transforming and fusing what you already know, and by helping the people of the world.
+
+This page is the short overview. The detailed, binding documents are:
+
+| Document | What it decides |
+|---|---|
+| [SPEC-v2.md](SPEC-v2.md) | The rules: mastery, combat, essences and fusion, discovery systems, classes (§5.1: class slots + your slots), saves, world and content manifests. The contract for `src/core` and `src/data`. |
+| [CLIENT-v3.md](CLIENT-v3.md) | The v3 client: art integration, HUD v3 (no joystick), Star Chart, quest UI, class looks, the 8-slot bar. Builds on [CLIENT-v2.md](CLIENT-v2.md) (scenes, interactions, AUTO, saves). |
+| [UX-SIMPLE.md](UX-SIMPLE.md) | The plain-language rules every screen follows: one short line, show don't tell, one primary action, automatic by default, friendly names. **Binding.** |
+| [QUESTS.md](QUESTS.md) | Quests: data model, engine, content rules. Every NPC has quests; trainers teach only through them. |
+| [QUALITY-PLAN.md](QUALITY-PLAN.md) | The free quality plan: pixel-perfect rendering, depth layers, event bus, pixel fonts, audio, hit feel, mood, QA. |
+| [VFX.md](VFX.md) | Spell and combat effects: 17 families, components, recipes, the runtime and its budgets. |
+| [INTEGRATION-v3.md](INTEGRATION-v3.md) | How the v3 client was split into lanes: file ownership, seams, depth layers, the game event bus, controller views, playtest selectors. |
+| [ART-DIRECTION.md](ART-DIRECTION.md) | The "Lush Pixel" look: palette, world and character rules, HUD layout, icons, camera. |
 
 ---
 
 ## 1. Pillars
 
 1. **Every skill is earned by doing.** Using a skill is the only way to grow it.
-2. **Discovery over selection.** No class picker and no skill-point menu. Players experiment the way they would in an alchemy game.
-3. **Keep what you had.** Morphing and fusing *add* skills. Nothing is consumed, so experimenting never costs the player a skill.
-4. **The world is the tutorial.** Elements hide in ordinary activities like forging, fishing, mining, meditating and hunting.
-5. **Every build is a little different.** Two players with the same weapon end up with different grimoires.
-
----
+2. **Discovery over selection.** No class picker, no skill-point menu. Players experiment as in an alchemy game.
+3. **Keep what you had.** Transforming and fusing *add* skills; nothing is consumed.
+4. **The world is the tutorial.** Elements hide in ordinary activities (forging, fishing, mining, meditating,
+   hunting), and every NPC has quests that point the way.
+5. **Simple and automatic** (owner direction, [UX-SIMPLE.md](UX-SIMPLE.md)). Classes equip their own skills, new skills
+   drop into empty slots, AUTO fights for you. The player only decides what is fun to decide.
 
 ## 2. Core loop
 
 ```
- fight ──► skill gains mastery XP ──► rank up ──► MAX RANK
-   ▲                                                 │
-   │                                       morph charge earned
-   │                                                 ▼
- new skills ◄── FUSION ALTAR ◄── elements ◄── MORPH into a new form
-   │             (skill+element,     (found by        (original kept)
-   │              skill+skill,        world activities)
-   │              element+element)
-   ▼
- skill collection matches a hidden pattern ──► CLASS DISCOVERED
+ fight / quest ──► skill gains mastery ──► rank up (★) ──► full rank ──► TRANSFORM (original kept)
+       ▲                                                                       │
+       │                                                                       ▼
+ new skills ◄── FUSION ALTAR ◄── elements found by doing (forge, fish, mine, meditate, wardens)
+       │
+       ▼
+ the skills you KNOW fit a pattern ──► CLASS UNLOCKED ──► Become it: class slots fill, outfit changes
 ```
 
----
+## 3. Systems at a glance
 
-## 3. Skill lifecycle
+- **Skills** (160 authored, plus procedural element infusions). Three weapon trees (sword, dagger, staff), elemental,
+  technique, echo and class-signature skills. Learned skills work with **any weapon**; only the tier-0 basic attack
+  belongs to the held weapon. → SPEC-v2 §1–§4.
+- **Mastery and transforms.** Use a skill to rank it; at full rank it can transform into a new skill (some forms are
+  hidden behind world deeds). → SPEC-v2 §1, §4.1.
+- **Elements and fusion.** 7 primal elements found in the world, 4 fused ones. The altar fuses skill + element,
+  skill + skill and element + element; failed tries whisper hints. → SPEC-v2 §3.
+- **Classes** (30, Tier I–III). Unlocked automatically from the skills you know. **Becoming** a class fills the 5
+  class slots with its most related skills (pattern matches first, then related skills; a pick sitting in one of your
+  slots moves over), gives its bonus, Class Level and outfit. → SPEC-v2 §5, §5.1.
+- **The bar**: 8 slots = 5 class slots + 3 of your own. Tap to cast, hold to edit. With no class all 8 are yours.
+  → CLIENT-v3 §6.
+- **AUTO**: one on/off switch for everything, the basic attack included. Off is fully manual. → CLIENT-v2 §6.1.
+- **Quests**: 55 quests; every NPC has some; markers `!` new, `?` ready, `…` in progress; trainers teach only as
+  quest rewards. → QUESTS.md, CLIENT-v3 §4.
+- **Star Chart**: the Skills screen is a night sky of constellations (weapon trees, The Heart of elements, The Craft,
+  The Wild, The Crown). Tapping a star opens a simple card with one action. → CLIENT-v3 §3.
+- **World**: 28 maps in two regions (the Vale and the Rift), with safe towns, hunting grounds, dungeons and warden
+  arenas, 41 monster kinds. → SPEC-v2 §7.
 
-### 3.1 Starting weapon
-The player picks **Sword**, **Dagger**, or **Staff**. Each one grants a single basic attack:
+## 4. The client
 
-| Weapon | Basic attack | Leans toward |
-|---|---|---|
-| Sword | Slash | spins, throws, heavy blows |
-| Dagger | Quick Stab | stealth, knives, crits |
-| Staff | Arcane Bolt | orbs, novas, elemental spells |
+- **Tap to move**, no joystick. Tapping NPCs, nodes and portals walks there and uses them.
+- **Pixel-perfect**: the world renders to a low-resolution backbuffer and is scaled up by a whole number; the HUD uses
+  the same art pixel. → QUALITY-PLAN §1, CLIENT-v3 §2.
+- **HUD v3**: player plate, zone plate, labelled buttons (Skills, Fuse, Class, Codex, Bag, Map, ☰), minimap, Pursuits
+  tracker, quick buttons, the 8-slot bar and the attack cluster (⚔, AUTO, Target, SP flask). Portrait keeps the
+  middle of the screen free for tapping the world. → CLIENT-v3 §2.
+- **Class looks**: the player's sprite wears the active class's outfit. → CLIENT-v3 §5.
+- **Effects and sound**: every spell has a procedural pixel effect (→ VFX.md); sound is procedural ZzFX with biome
+  ambience (→ QUALITY-PLAN §6, §13). The ☰ menu has Sound on/off, volume and "Reduce shake & flashes".
 
-Other weapons can be bought from the smith later. Equipping one teaches its basic attack, which opens up **cross-weapon fusions** and hybrid classes.
-
-### 3.2 Mastery
-- Each use gives **+1 XP**. Each enemy hit gives **+1**, and each kill gives **+3**, capped at 4 hits per use so AoE skills can't be farmed.
-- XP to the next rank is `ceil(4 · rank^1.15 · (1 + 0.35 · tier))`. Higher-tier skills master more slowly.
-- Each rank adds **+6% power**.
-- Basic and tier-1 skills have 10 ranks, tier-2 skills have 8, and tier-3 skills have 5.
-
-### 3.3 Morphing
-- Reaching max rank grants **1 morph charge**.
-- Using a skill past max fills an **overmastery** bar, and each full bar grants another charge (up to 3 banked).
-- Spending a charge teaches one morph and **keeps the original skill**. For example, Slash can morph into Whirlwind or Sword Throw. The player picks one, then has to earn another charge to get the other.
-- Some morphs are **hidden** behind world conditions. Until the condition is met, the Grimoire shows only `???` and a hint:
-  - *Heavy Cleave*: "Your swing could learn real weight from striking stone." (mine 6 ore)
-  - *Shadowstep*: "Only one who has survived many battles…" (25 kills)
-  - *Focus*: "Seek a place of meditation high in the hills." (meditate once)
-- **Several paths can lead to the same skill.** Stab → Shadowstep, Quickstep + Shadow → Shadowstep, and Meditation → Focus are all valid routes.
-
-### 3.4 Elements
-There are **7 primal elements** and **4 fused elements**. A primal element is learned through a world activity:
-
-| Element | How it's discovered (prototype) |
-|---|---|
-| 🔥 Fire | Forge 3 good pieces with Brann the Smith (timing minigame, costs ore) |
-| 💧 Water | Catch 3 fish at Mirror Lake (reaction minigame) |
-| ⛰️ Earth | Mine 10 ore at Greystone Quarry |
-| 🍃 Wind | Meditate at the Shrine of Winds without being hit |
-| ⚡ Lightning | Drop from the Thunderhoof boss (Storm Shard) |
-| 🌑 Shadow | Defeat 5 Gloomcaps, then touch the Umbral Obelisk |
-| ✨ Holy | Carry 3 elements, then visit Sister Alba |
-| ❄️ Ice | Fuse Water + Wind |
-| 🌋 Magma | Fuse Fire + Earth |
-| ⛈️ Storm | Fuse Wind + Lightning |
-| 🌗 Twilight | Fuse Holy + Shadow |
-
-Each element applies a status effect on hit: burn, slow, stun, knockback, shock, bleed, smite (heals you), or freeze. Elements also follow a matchup chart. A strong matchup deals ×1.5, a weak one ×0.6, and the same element deals ×0.5.
-
-### 3.5 Fusion (the alchemy layer)
-At the **Fusion Altar**, any two essences can be combined:
-
-| Combination | Example |
-|---|---|
-| Element + Skill | Fire + Whirlwind → **Flame Spin** |
-| Skill + Skill | Whirlwind + Sword Throw → **Cyclone Blades** |
-| Element + Element | Water + Wind → **Ice** (new element) |
-| Fusion + Fusion | Flame Spin + Tornado → **Firestorm** |
-| Cross-weapon | Sword Throw + Arcane Bolt → **Spell Sabre** |
-
-Rules:
-- A skill must reach **rank 5** (or its max, if lower) before it can be used as an ingredient.
-- **Authored recipes** have unique names, effects and tuning.
-- **Procedural infusion**: any *unaligned attack* without an authored recipe can still fuse with any element and becomes e.g. *Blazing Sword Throw* or *Umbral Fan of Knives*. Because of this, every attack × every element is a valid discovery, and the combination space grows multiplicatively with each skill and element added.
-- **Every experiment is remembered.** The altar marks pairs as untried, tried with nothing, or already discovered.
-- **Failed experiments whisper hints.** A failure can surface a clue about an undiscovered recipe that uses one of the ingredients, for example *"A spinning blade could carry flame."*
-
-### 3.6 Classes (emergent)
-A class is a pattern over the player's skill collection. Each skill's tags (`blade`, `spin`, `stealth`, `arcane`, …), plus its element and weapon, count toward class clauses:
-
-| Class | Pattern | Grants |
-|---|---|---|
-| Blademaster | 4 × `blade` | Blade Aura |
-| Tempest Dancer | 3 × `spin` | Eye of the Storm |
-| Pyroblade | 2 × `blade`+`fire` | Searing Edge |
-| Shadowstalker | 3 × `stealth` | Shade Cloak |
-| Spellblade | 2 × `blade` and 2 × `arcane` | Runic Blade |
-| Elementalist | skills with 3 distinct elements | Prism Burst |
-| Twilight Sage | 1 × `twilight` and 3 × `arcane` | — |
-| …16 total | | |
-
-- Classes are discovered **automatically** the moment the pattern matches.
-- The player can **wear** any class they have discovered. The active class gives stat and tag-damage bonuses.
-- Undiscovered classes show a riddle and a progress meter, so players can hunt for them on purpose.
-- Class signature skills can feed back into fusion and further class patterns.
-
-### 3.7 "Skill trees"
-There is no fixed tree. Each player's tree is the graph of what they've discovered so far:
-- **Mastery edges**: skill → morph.
-- **Fusion edges**: (a, b) → result.
-- **World edges**: NPC teachers (Meditation from the Hermit), tomes dropped by monsters (Quickstep from Gustlings), boss relics (Static Field from Thunderhoof), and class signatures.
-
-Example of one sword player's graph:
-
-```mermaid
-graph LR
-  Slash -->|morph| Whirlwind
-  Slash -->|morph| SwordThrow[Sword Throw]
-  Slash -->|morph · mine ore| HeavyCleave[Heavy Cleave]
-  Whirlwind -->|morph| SpinningAssault[Spinning Assault]
-  Fire((Fire)) --> FlameSpin[Flame Spin]
-  Whirlwind --> FlameSpin
-  Wind((Wind)) --> Tornado
-  Whirlwind --> Tornado
-  FlameSpin --> Firestorm
-  Tornado --> Firestorm
-  Whirlwind --> CycloneBlades[Cyclone Blades]
-  SwordThrow --> CycloneBlades
-  SwordThrow --> SpellSabre[Spell Sabre]
-  Bolt[Arcane Bolt · staff] --> SpellSabre
-```
-
----
-
-## 4. Combat feel (classic MMO nods)
-
-- **Tap to move** with A* pathfinding. **Tap a monster** to walk into range and auto-attack. Auto-attacks train the basic skill.
-- **Hotbar** of 6 skills plus a big attack button. Skills auto-target the current or nearest enemy.
-- Floating damage numbers, crits, elemental weaknesses, status ticks.
-- Base level and EXP from kills. Dying loses 5% of current EXP.
-- Passive and aggressive monsters, leashing, respawns, and a roaming field boss with a telegraphed stomp.
-
----
-
-## 5. Content in this prototype
-
-| Category | Count |
-|---|---|
-| Authored skills | 58 (plus procedural infusions: every unaligned attack × 11 elements) |
-| Morphs | 22 |
-| Authored fusion recipes | 29 |
-| Elements | 11 (7 primal, 4 fused) |
-| Classes | 16 |
-| Monsters | 7 + 1 boss |
-| Regions | 8 |
-| Discovery activities | forge, fishing, mining, meditation, obelisk, priestess, tomes, boss relic |
-
----
-
-## 6. Architecture
+## 5. Architecture
 
 ```
-src/
-  core/        engine-agnostic rules (no Phaser, no DOM)
-    types.ts       data model
-    registry.ts    content index, procedural infusion, validation
-    skillbook.ts   mastery, morphs, fusion, classes, persistence
-    combat.ts      damage + element chart
-    mastery.ts     tuning curves
-  data/        content as plain TypeScript data
-  game/        Phaser client (world gen, entities, skill FX, scenes)
-  ui/          DOM overlay (HUD, Grimoire, Fusion Altar, dialogs)
-tests/         Vitest: content integrity, mastery/morph/fusion/class rules, world reachability
+src/core   rules engine: no Phaser, no DOM (so an authoritative server can run it)
+src/data   content as plain TypeScript data
+src/game   Phaser client: art, render, entities, systems, vfx, audio, scenes, views for the UI
+src/ui     DOM overlay: HUD, Star Chart, panels, dialogs (reads the game through GameController views)
+tests      Vitest: rules, content integrity and reachability, world, quests, UI layout, VFX, audio
 ```
 
-`core/` is deliberately free of Phaser and the DOM so the **same rules can run on an authoritative server**.
+Tags drive class patterns, tag bonuses and effects, so content only needs consistent tags to plug in. `npm test`
+fails on broken references, duplicate recipes and unreachable skills.
 
-### Adding content
-1. Add a `SkillDef` to `src/data/skills.ts`.
-2. Connect it with a `MorphDef` (`morphs.ts`) or a `FusionRecipe` (`recipes.ts`), or grant it from a class, NPC or item.
-3. Run `npm test`. The integrity test fails on unknown ids, duplicate recipes, and **orphan skills that can't be reached**.
-
-Tags drive everything else: class discovery, tag-damage bonuses and projectile visuals. Content only needs consistent tags to plug in.
-
----
-
-## 7. Road to MMO
+## 6. Road ahead
 
 | Phase | Scope |
 |---|---|
-| **0 — Prototype (this repo)** | Single-player vertical slice with the full discovery loop and local saves. |
-| **1 — Online foundation** | Authoritative server (Colyseus or Nakama) running `core/`. Client sends intents (cast, move, fuse) and the server validates mastery and fusion. Accounts and cloud saves. |
-| **2 — Shared world** | Zone instances with other players visible, party play, chat, trading. |
-| **3 — Social discovery** | **World Codex**: the first player to discover a recipe is credited server-wide. Cooperative fusion, where two party members each supply an essence. Guild libraries of shared hints. |
-| **4 — Depth** | More weapons (bow, fist, shield), more elements, and morph chains 4–5 tiers deep. Class trees with their own skills, plus dungeons, crafting and an economy around tomes and shards. |
+| **Now** | Single-player game with the full discovery loop, quests, classes, local saves, PWA / single-file builds. |
+| **Online foundation** | An authoritative server running `src/core`; the client sends intents (cast, move, fuse) and the server validates mastery and fusion. Accounts and cloud saves. |
+| **Shared world** | Other players visible in zone instances, parties, chat, trading. |
+| **Social discovery** | A world codex crediting first discoveries, cooperative fusion, guild hint libraries. |
 
-### Anti-cheat considerations
-- Mastery XP comes from server-confirmed hits, never from client reports.
-- Fusion results are resolved on the server. Clients receive only the recipes they have personally discovered, so the full recipe table can't be datamined from the client.
-- Procedural infusion IDs (`skill@element`) are deterministic, so the server can validate them without storing extra data.
-
----
-
-## 8. Mobile
-
-- Built as a PWA (fullscreen manifest, touch-first UI, safe-area insets, no pinch zoom).
-- Layout adapts to portrait and landscape. Panels open as bottom sheets.
-- The world pauses while a menu is open in single-player. Online play won't pause.
-- Ship to the App Store and Google Play by wrapping `dist/` with Capacitor (steps in README).
+Anti-cheat follows from the split: mastery XP only from server-confirmed hits, fusion resolved on the server, and
+clients receive only the recipes they have discovered.

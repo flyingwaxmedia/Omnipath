@@ -40,33 +40,48 @@ interface Table {
   flowers?: readonly FlowerColor[];
 }
 
+// Mid-size clumps (tall grass, stumps, logs) weigh more than single flowers: with the patch noise they gather into
+// clumps, so a field reads as clumps and clearings rather than an even sprinkle of small flowers.
 const GREEN: Table = {
   density: 0.22,
   flowers: ['crimson', 'rose', 'cream', 'violet'],
   items: [
-    ['flower', 40],
-    ['dr_tallgrass_a', 14],
-    ['dr_tallgrass_b', 14],
+    ['flower', 32],
+    ['dr_tallgrass_a', 16],
+    ['dr_tallgrass_b', 22],
     ['dr_stone', 7],
     ['dr_pebbles', 4],
     ['dr_mushrooms_red', 5],
-    ['dr_mushrooms_brown', 3],
-    ['dr_stump', 5],
-    ['dr_log', 3],
+    ['dr_mushrooms_brown', 4],
+    ['dr_stump', 8],
+    ['dr_log', 5],
   ],
 };
 const TOWN_GREEN: Table = {
   density: 0.24,
   flowers: ['crimson', 'rose', 'cream', 'violet'],
   items: [
-    ['flower', 50],
+    ['flower', 46],
     ['dr_tallgrass_a', 16],
-    ['dr_tallgrass_b', 8],
+    ['dr_tallgrass_b', 10],
     ['dr_stone', 4],
     ['dr_pebbles', 6],
     ['dr_mushrooms_brown', 2],
+    ['dr_barrel', 3],
+    ['dr_crate', 3],
+    ['dr_crates', 2],
   ],
 };
+
+/** What stands along a plaza's rim (town and outpost cobble with grass or a wall beside it). */
+const PLAZA_RIM: readonly Pick[] = [
+  ['dr_crates', 5],
+  ['dr_barrel', 6],
+  ['dr_crate', 5],
+  ['banner', 2],
+  ['dr_lantern', 2],
+  ['dr_fence_post', 3],
+];
 const STONY: Table = {
   density: 0.14,
   flowers: ['cream', 'violet'],
@@ -373,9 +388,10 @@ export function planDressing(cm: CompiledMap): DressingItem[] {
   if (fenced) planFences();
   if (town || def.kind === 'outpost') planLanterns();
 
-  // --- 2) clutter beside structures, around camps and at portal mouths
+  // --- 2) clutter beside structures, around camps and at portal mouths; then the plaza rims
   planStructureClutter();
   planCampAndPortals();
+  if (town || def.kind === 'outpost') planPlazaRim();
 
   // --- 3) dungeon walls: cobwebs in corners, candles against walls
   if (dungeon) planWallDecor();
@@ -574,6 +590,55 @@ export function planDressing(cm: CompiledMap): DressingItem[] {
           if (!free(tx, ty) || r() < 0.25) continue;
           put(keys[k++ % keys.length], tx * TILE + 16, (ty + 1) * TILE - 6, r() < 0.5, tx, ty);
         }
+      }
+    }
+  }
+
+  /**
+   * Plaza rims: cobble tiles with a non-cobble neighbour get crates, barrels, a banner, a lantern or a fence post
+   * (about 40%), pushed to the outer edge of the tile. Keeps 2 tiles clear of NPCs, objects, nodes and portals
+   * (fenceBan), of road centrelines (def.paths) and of other rim items (none within 2 tiles).
+   */
+  function planPlazaRim(): void {
+    const banner = def.region === 'rift' ? 'dr_banner_red' : 'dr_banner_blue';
+    const placed: [number, number][] = [];
+    // road centrelines (the map's path polylines, rasterised): nothing within 2 tiles of where a road runs in
+    const centre = new Uint8Array(n);
+    for (const line of def.paths ?? [])
+      for (let k = 0; k + 1 < line.length; k++) {
+        const [x0, y0] = line[k];
+        const [x1, y1] = line[k + 1];
+        const steps = Math.max(Math.abs(x1 - x0), Math.abs(y1 - y0), 1);
+        for (let t = 0; t <= steps; t++) {
+          const cx = Math.round(x0 + ((x1 - x0) * t) / steps);
+          const cy = Math.round(y0 + ((y1 - y0) * t) / steps);
+          if (inB(cx, cy)) centre[idx(cx, cy)] = 1;
+        }
+      }
+    const roadNear = (x: number, y: number) => {
+      for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) if (inB(x + dx, y + dy) && centre[idx(x + dx, y + dy)]) return true;
+      return false;
+    };
+    for (let y = 1; y < h - 1; y++) {
+      for (let x = 1; x < w - 1; x++) {
+        if (tileAt(x, y) !== T.COBBLE) continue;
+        const i = idx(x, y);
+        if (ban[i] || used[i] || fenceBan[i] || blocked(x, y)) continue;
+        const N = tileAt(x, y - 1) !== T.COBBLE;
+        const S = tileAt(x, y + 1) !== T.COBBLE;
+        const E = tileAt(x + 1, y) !== T.COBBLE;
+        const W = tileAt(x - 1, y) !== T.COBBLE;
+        if (!(N || S || E || W) || roadNear(x, y)) continue;
+        const r = rng('rim', x, y);
+        if (r() > 0.4 * Math.max(0.5, scale)) continue;
+        if (placed.some(([px, py]) => Math.abs(px - x) <= 2 && Math.abs(py - y) <= 2)) continue;
+        placed.push([x, y]);
+        const pickKey = pick(PLAZA_RIM, r);
+        const key = pickKey === 'banner' ? banner : pickKey;
+        // stand against the rim: toward the outer side of the tile
+        const ox = E ? 24 : W ? 8 : 10 + r() * 12;
+        const oy = S ? 30 : N ? 14 : 18 + r() * 8;
+        put(key, x * TILE + ox, y * TILE + oy, W && !key.startsWith('dr_banner'), x, y);
       }
     }
   }

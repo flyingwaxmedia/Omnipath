@@ -86,6 +86,43 @@ export function barRows(n: number, twoRows: boolean): number[] {
   return [top, n - top];
 }
 
+/** How the skill bar is laid out: its rows, the slot size (CSS px) and whether the rows follow the two groups. */
+export interface BarPlan {
+  rows: number[];
+  slot: number;
+  /** Row 1 = the class slots, row 2 = your slots (centred under them, from grid column `ownCol`). */
+  split: boolean;
+  ownCol: number;
+}
+
+/**
+ * The bar's rows. One row unless `twoRows` (portrait). Two rows follow the groups when they can: the class slots on
+ * row 1 and your slots on row 2 (5 + 3), so the two kinds never share a row — the slots shrink to fit `room` (CSS px
+ * left of the attack cluster) but never below `minSlot` (the touch-target floor), and stay whole multiples of `unit`
+ * (one HUD art px). If that does not fit (very narrow phones) or there is no class, two even rows (barRows).
+ */
+export function barPlan(o: {
+  n: number;
+  classSlots: number;
+  twoRows: boolean;
+  room: number;
+  slot: number;
+  minSlot: number;
+  gap: number;
+  unit?: number;
+}): BarPlan {
+  const even: BarPlan = { rows: barRows(o.n, o.twoRows), slot: o.slot, split: false, ownCol: 0 };
+  const c = o.classSlots;
+  const own = o.n - c;
+  if (!o.twoRows || o.n <= 4 || c <= 0 || own <= 0) return even;
+  const per = Math.max(c, own);
+  const u = o.unit && o.unit > 0 ? o.unit : 1;
+  const fit = Math.floor((o.room - (per - 1) * o.gap) / per / u + 1e-6) * u;
+  const slot = Math.min(o.slot, fit);
+  if (slot < o.minSlot - 1e-6) return even;
+  return { rows: [c, own], slot, split: true, ownCol: c > own ? Math.floor((c - own) / 2) + 1 : 0 };
+}
+
 /** Bar width (CSS px) for `perRow` slots of size `slot` with `gap` between them. */
 export function barWidth(perRow: number, slot: number, gap: number): number {
   return perRow <= 0 ? 0 : perRow * slot + (perRow - 1) * gap;
@@ -136,6 +173,118 @@ export function splitCount(line: string): { text: string; count: string } {
   const m = /^(.*?)[\s:]+(\d+\s*\/\s*\d+)\s*$/.exec(line);
   if (!m || !m[1].trim()) return { text: line, count: '' };
   return { text: m[1].trim(), count: m[2].replace(/\s+/g, '') };
+}
+
+/** Rows the open Pursuits tracker shows at most; the rest wait behind a "+N" button that opens the quest log. */
+export const PURSUIT_ROWS = 2;
+
+/** A screen box (CSS px). */
+export interface Rect {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+}
+
+const live = (r: Rect | null | undefined): r is Rect => !!r && r.right - r.left >= 1 && r.bottom - r.top >= 1;
+
+/**
+ * The free span [lo, hi] (CSS px) of the horizontal band [top, bottom]: every box overlapping the band blocks it — a
+ * box on the left half pushes `lo` past its right edge, one on the right half pulls `hi` before its left edge (`pad`
+ * px clear of both).
+ */
+export function freeSpan(boxes: readonly (Rect | null | undefined)[], top: number, bottom: number, screenW: number, margin: number, pad: number): { lo: number; hi: number } {
+  let lo = margin;
+  let hi = screenW - margin;
+  for (const b of boxes) {
+    if (!live(b) || b.top >= bottom || b.bottom <= top) continue;
+    if ((b.left + b.right) / 2 < screenW / 2) lo = Math.max(lo, b.right + pad);
+    else hi = Math.min(hi, b.left - pad);
+  }
+  return { lo, hi };
+}
+
+/** What placeZone needs: the zone plate's sizes and the boxes around it (CSS px; `u` = one HUD art px). */
+export interface ZoneInput {
+  W: number;
+  m: number;
+  u: number;
+  /** Zone plate width, and its width without the level band and the pill (`.compact`). */
+  zw: number;
+  zwCompact: number;
+  zh: number;
+  /** Room kept under the plate for the target plate (portrait: 0 — the plate fades and the target takes its place). */
+  below: number;
+  portrait: boolean;
+  /** The player plate (its top row), the whole top-left block (plate + stat strip), the stat strip. */
+  plate: Rect;
+  me: Rect;
+  stats?: Rect | null;
+  menu: Rect;
+  minimap?: Rect | null;
+  pursuits?: Rect | null;
+  quick?: Rect | null;
+}
+
+export interface ZonePlace {
+  /** Left edge and top of the plate (CSS px). */
+  x: number;
+  top: number;
+  /** Hide the level band and the pill. */
+  compact: boolean;
+  /** Portrait last resort: the plate is capped to this width (its name ellipsised). */
+  maxW?: number;
+}
+
+/**
+ * Where the zone plate goes (the target plate and, in landscape, the toasts stack under it): (1) centred in the top
+ * row between the player plate and the buttons; (2) a row right under the buttons, between the top-left block and
+ * the minimap — first in full, then compact; (3) portrait: still that band, capped (it never drops below the
+ * Pursuits into the middle of the screen, where the player stands and every tap must reach the world); landscape:
+ * below the top-left block, stepping past whatever sits beside it.
+ */
+export function placeZone(i: ZoneInput): ZonePlace {
+  const { W, m, u } = i;
+  const top1 = Math.max(m, i.menu.top);
+  const x1 = placeCentred(i.zw, W, Math.max(i.plate.right, i.me.left + 8 * u) + 8 * u, i.menu.left - 8 * u);
+  if (x1 !== null) return { x: x1, top: top1, compact: false };
+  // Right under the buttons; then (a tall stat strip beside it) under the whole top-left block too.
+  const side = [i.plate, i.stats, i.quick, i.minimap, i.pursuits];
+  const tops = [i.menu.bottom + 6 * u, Math.max(i.me.bottom, i.menu.bottom) + 6 * u].filter((t, k, a) => a.indexOf(t) === k);
+  let last = { top: tops[0], lo: m, hi: W - m };
+  for (const top of tops) {
+    const span = freeSpan(side, top, top + i.zh + i.below, W, m, 8 * u);
+    last = { top, ...span };
+    const x2 = placeCentred(i.zw, W, span.lo, span.hi);
+    if (x2 !== null) return { x: x2, top, compact: false };
+    const x3 = placeCentred(i.zwCompact, W, span.lo, span.hi);
+    if (x3 !== null) return { x: x3, top, compact: true };
+  }
+  if (i.portrait) return { x: last.lo, top: last.top, compact: true, maxW: Math.max(44 * u, last.hi - last.lo) };
+  let top = Math.max(i.me.bottom, i.menu.bottom) + 6 * u;
+  const right = [i.minimap, i.pursuits].filter(live);
+  let hi = Math.min(W - m, ...right.filter((r) => r.top < top + i.zh + 60 * u && r.bottom > top).map((r) => r.left - 8 * u));
+  let x = placeCentred(i.zw, W, m, hi);
+  // Still no room beside the minimap (long place names): step down past whatever sits in the plate's own row.
+  for (let k = 0; k < 3 && x === null; k++) {
+    const row = right.filter((r) => r.top < top + i.zh && r.bottom > top);
+    if (!row.length) break;
+    top = Math.min(...row.map((r) => r.bottom)) + 6 * u;
+    hi = Math.min(W - m, ...right.filter((r) => r.top < top + i.zh && r.bottom > top).map((r) => r.left - 8 * u));
+    x = placeCentred(i.zw, W, m, hi);
+  }
+  return { x: x ?? m, top, compact: false };
+}
+
+/**
+ * HUD boxes that cross the middle band of the screen (`lo`..`hi` of its height, where the player stands): the names
+ * of every box in `boxes` overlapping it. The layout keeps this empty in portrait (the skill bar, the attack cluster,
+ * the left-edge quick buttons and the fading toasts / log are not passed in).
+ */
+export function crossesMiddle(boxes: Readonly<Record<string, Rect | null | undefined>>, H: number, lo = 0.4, hi = 0.6): string[] {
+  return Object.entries(boxes)
+    .filter(([, r]) => live(r) && r.top < H * hi && r.bottom > H * lo)
+    .map(([k]) => k);
 }
 
 /** Which rows of a stacked list fit above `limit` (CSS px): rows are [top, bottom] pairs; the first always shows. */

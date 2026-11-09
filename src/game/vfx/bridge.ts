@@ -17,7 +17,9 @@
 //                    victim hit-stop on the spark, trauma on the cast's first hit; arc-rider zaps; leech streams
 //   statusApplied    status units on monsters (<= 2 loops per target by priority; one-shots exempt)
 //   combo / spark / levelUp   combo pieces, the spark star, the level-up pillar
-// Monster techniques, auto-attacks, telegraphs, player statuses and death pops are the World lane's (open items).
+//                    + the hit feel through the juice rig (host.juice): coalesced victim-local hit-stop scaled by the damage,
+//                    white -> element impact frames, squash, recoil, a camera kick on heavy casts
+// Monster techniques, auto-attacks, telegraphs, player statuses, deaths, spawns and world moments are world.ts's.
 import type { ComboId } from '../../core/combat';
 import { hashSeed } from '../../core/rng';
 import type { SkillDef, StatusKind } from '../../core/types';
@@ -490,6 +492,14 @@ export class VfxBridge {
     const p = this.host.player();
     if (!r || !p) return;
     this.auras.get(e.skillId)?.end();
+    this.auras.delete(e.skillId);
+    // At most two buff aura loops on the player, like status loops: the oldest gives way (the buff itself stays).
+    for (const [k, g] of this.auras) if (g.done) this.auras.delete(k);
+    while (this.auras.size >= VFX_BUDGET.perEvent.statusLoopsPerTarget) {
+      const [k, g] = this.auras.entries().next().value as [string, VfxGroup];
+      g.end();
+      this.auras.delete(k);
+    }
     const until = e.untilMs ?? this.host.sceneNow() + e.durationMs;
     const ctx: PlayCtx = { owner: 'player', caster: p, ang: 0, seed: this.seed(r, e.castId, 'buff'), alive: () => this.host.sceneNow() < until };
     this.stage.play(r.phases.cast ?? [], ctx);

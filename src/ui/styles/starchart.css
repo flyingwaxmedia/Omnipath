@@ -967,6 +967,30 @@
   white-space: nowrap;
 }
 
+/* List tiles: ≤ 5 stars at 12 px+, filling in half steps (rankStars in panels/skills.ts). */
+.sheet.starchart .sc-tile .sc-tstars {
+  display: inline-flex;
+  gap: 1px;
+  font-size: 13px;
+  line-height: 1;
+  opacity: 1;
+}
+
+.sheet.starchart .sc-tstars i {
+  font-style: normal;
+}
+
+.sheet.starchart .sc-tstars i.e {
+  color: rgba(242, 230, 201, 0.28);
+}
+
+.sheet.starchart .sc-tstars i.h {
+  color: transparent;
+  background: linear-gradient(90deg, var(--sc-gold) 50%, rgba(242, 230, 201, 0.28) 50%);
+  -webkit-background-clip: text;
+  background-clip: text;
+}
+
 .sheet.starchart .sc-tstars.gold {
   opacity: 1;
   text-shadow: 0 0 6px rgba(233, 196, 106, 0.6);

@@ -161,7 +161,7 @@ export const status: Template<'status'> = {
         const hw = bw / 2;
         const block = [-hw, 0, -hw, -bh * 0.75, -hw * 0.45, -bh + 1, hw * 0.55, -bh + 1, hw, -bh * 0.7, hw, 0];
         const draw = (p: Painter, shine: number | null) => {
-          p.poly(block, (lx, ly, fx, fy) => {
+          p.poly(block, (lx, ly) => {
             const edgeL = lx < -hw + 1.5,
               edgeT = ly < -bh + 2.5;
             if (edgeT || (edgeL && ly < -bh * 0.4)) return IDX.R5;
@@ -169,9 +169,12 @@ export const status: Template<'status'> = {
             if (shine !== null && Math.abs(lx + ly * 0.6 - shine) < 1.5) return IDX.R5;
             // Facet line from the top-left corner down the middle.
             if (Math.abs(lx - (ly + bh) * 0.25 + hw * 0.2) < 0.5) return IDX.R4;
-            return p.pass(fx, fy, 0.25) ? IDX.R3 : 0;
+            return IDX.R3;
           });
+          // Keyline the block's silhouette only, then thin the ice to a 25 % dither: outlining after the dither put a
+          // dark ring round every dot and turned the crystal into an opaque dark checkerboard over the body.
           p.outline();
+          p.map((v, fx, fy) => (v === IDX.R3 && !p.pass(fx, fy, 0.25) ? 0 : v));
         };
         for (let f = 0; f < 5; f++) add(200, (p) => draw(p, null));
         for (let f = 0; f < 4; f++) add(50, (p) => draw(p, -hw - bh * 0.6 + (f + 0.5) * ((bw + bh * 0.6) / 4)));

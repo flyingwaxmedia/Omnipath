@@ -82,6 +82,18 @@ export class TellCanvases {
     }
   }
 
+  private scratch = new Uint32Array(4096);
+
+  /** Uploads rectangle `q` of a region (row stride `stride`) placed at (x0, y0); returns the bytes sent. */
+  uploadRect(slot: Slot, x0: number, y0: number, stride: number, data: Uint32Array, q: { x: number; y: number; w: number; h: number }): number {
+    const n = q.w * q.h;
+    if (this.scratch.length < n) this.scratch = new Uint32Array(n);
+    const buf = this.scratch.subarray(0, n);
+    for (let j = 0; j < q.h; j++) buf.set(data.subarray((q.y + j) * stride + q.x, (q.y + j) * stride + q.x + q.w), j * q.w);
+    this.upload(slot, x0 + q.x, y0 + q.y, q.w, q.h, buf);
+    return n * 4;
+  }
+
   /** Writes a region (RGBA words) at (x, y): texSubImage2D on WebGL, putImageData on the Canvas renderer. */
   upload(slot: Slot, x: number, y: number, w: number, h: number, data: Uint32Array): void {
     this.bytes += w * h * 4;
@@ -169,17 +181,14 @@ class TellInst {
     const slot = this.slot!;
     const t = ph ? Math.max(0, Math.min(1, (now - ph.start) / Math.max(1, ph.at - ph.start))) : 1;
     const leftMs = ph ? ph.at - now : 0;
-    const need = r.w * r.h * 4 * (r.fill ? 2 : 1);
+    const need = r.w * r.h * 4 * (r.fill ? 1 : 0) + r.rimRects.reduce((a, q) => a + q.w * q.h * 4, 0);
     if (!this.drawn || this.dissolve || this.fx.uploadLeft >= need) {
       this.drawn = true;
       const ch = r.render({ t, ms: now - this.born, dissolve: this.dissolve as 0 | 1 | 2 });
-      if (ch.fill && r.fill) {
-        this.fx.canvases.upload(slot, 0, 0, r.w, r.h, r.fill);
-        this.fx.uploadLeft -= r.w * r.h * 4;
-      }
+      if (ch.fill && r.fill) for (const q of r.fillDirty) this.fx.uploadLeft -= this.fx.canvases.uploadRect(slot, 0, 0, r.w, r.fill, q);
       if (ch.rim) {
-        this.fx.canvases.upload(slot, 0, this.rimY(), r.w, r.h, r.rim);
-        this.fx.uploadLeft -= r.w * r.h * 4;
+        // Only the stripes that hold rim pixels (the rest of the box never changes).
+        for (const q of r.rimRects) this.fx.uploadLeft -= this.fx.canvases.uploadRect(slot, 0, this.rimY(), r.w, r.rim, q);
       }
     }
     const x = Math.round(anchor.x) - r.ox;

@@ -101,18 +101,19 @@ function orbBody(r: VfxRecipe, s: SkillDef, form: Extract<VfxPiece, { component:
 
 // ------------------------------------------------------------------ shared compositions
 
-/** Vortex funnel: 3 stacked sweeping rings (dy 0 / -12 / -24, r x1 / 0.7 / 0.45), gapped. */
+/** Vortex funnel: 3 stacked sweep smears (dy 0 / -12 / -24, r x1 / 0.7 / 0.45), the lower ones wider. */
 function funnel(r: VfxRecipe, lift = 1): VfxPiece[] {
   const R = radiusOf(r);
   const ink = inkOf(r);
   return [1, 0.7, 0.45].map((k, i) =>
-    piece('ring', { r: round(R * k), aspect: aspectOf(r), thick: i === 0 ? 3 : 2, style: 'gapped', ink: i === 0 ? 'hot' : 'lit', anim: 'sweep', heads: 2, ms: 117 }, ink, {
+    piece('ring', { r: round(R * k), aspect: aspectOf(r), thick: i === 0 ? 3 : 2, style: 'solid', ink: i === 0 ? 'hot' : 'lit', anim: 'sweep', heads: 2, ms: [117, 133, 150][i], smear: i === 0 ? 6 : 4 }, ink, {
       anchor: at('caster', i === 0 ? 0 : -round(12 * i * lift)),
       tags: geoTags(r),
     }),
   );
 }
-const vortex = (r: VfxRecipe, lift = 1): VfxRecipe => swap(r, 'cast', (p) => p.component === 'ring' && p.params.ink !== 'dim', funnel(r, lift));
+/** The funnel replaces the vortex's swirl; its collapsing pull rings stay. */
+const vortex = (r: VfxRecipe, lift = 1): VfxRecipe => swap(r, 'cast', (p) => p.component === 'ring' && p.params.anim === 'sweep', funnel(r, lift));
 
 /** Shadow-cloud nova: cloud core + drifting smoke sheets instead of the implode. */
 function shroud(r: VfxRecipe, f: FamilyId): VfxRecipe {

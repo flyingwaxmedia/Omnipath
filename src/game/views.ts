@@ -5,6 +5,7 @@ import { CLASS_SLOTS, barEligible, canBuyNode, classMaxRank, classXpToNext } fro
 import type { QuestView } from '../core/skillbook';
 import type { ElementId, QuestDef, QuestReward, Requirement } from '../core/types';
 import { NPCS } from '../data/npcs';
+import { QUEST_LORE } from '../data/quests';
 import { WEAPONS } from '../data/weapons';
 import { MAPS, mapById } from '../data/world';
 import type {
@@ -30,11 +31,11 @@ import type {
   ZoneView,
 } from '../ui/controller';
 import { bandText, shapeText } from '../ui/util';
-import { article, seen } from '../ui/words';
+import { article, objectiveWords, seen } from '../ui/words';
 import { classColor } from './art/icons';
 import { gameBus } from './events';
-import { classSlotsFor, noteWorn, refillClassSlots, wornFlag } from './loadout';
-import { classGoal, elementStep, firstStep, learnStep, transformStep } from './steps';
+import { becomeRefill, classSlotsFor, noteWorn, refillClassSlots, wornFlag } from './loadout';
+import { classGoal, elementStep, firstStep, learnStep, tagWords, transformStep } from './steps';
 import type { MapScene } from './scenes/MapScene';
 import { cellExplored, compiled, fogBits, fogDims, FOG_CELL } from './world/runtime';
 import { COLL } from '../core/world/types';
@@ -246,13 +247,36 @@ function classCard(s: MapScene, id: string): ClassCardView | null {
     color: classColor(id),
     skills: book.classSkills(id, CLASS_SLOTS),
   };
-  if (!prog) card.hint = classHint(s, id);
+  if (!prog) {
+    card.hint = classHint(s, id);
+    // Until it is close its name stays a mystery ('???'): only the one step shows, the riddle lives in the Codex.
+    card.mystery = book.classProgress(cls).codex !== 'near';
+  }
   return card;
 }
 
-/** ONE hint line for a locked class: the riddle until close, then the first unmet goal (src/game/steps.ts). */
+/**
+ * ONE short hint line for a locked class (docs/UX-SIMPLE.md rules 1 / 4): its first unmet goal ("Learn 2 more
+ * spinning skills.") — close or not. The riddle itself only lives in Codex > Whispers.
+ */
 function classHint(s: MapScene, id: string): string {
-  return classGoal(s.reg, s.book, id);
+  const cls = s.reg.classDef(id);
+  const goal = classGoal(s.reg, s.book, id);
+  if (!cls || goal !== cls.hint) return goal;
+  // classGoal answers with the riddle until the class is close: take the same first step it gives once close.
+  const v = s.book.classProgress(cls);
+  const clause = v.clauses.find((c) => c.have < c.clause.count);
+  if (clause) {
+    const more = clause.clause.count - clause.have;
+    return `Learn ${more} more ${tagWords(clause.clause.tags)} skill${more === 1 ? '' : 's'}.`;
+  }
+  const parent = v.parents?.find((p) => p.have < p.need);
+  if (parent) return `Reach Class Level ${parent.need} as ${article(s.reg.classDef(parent.id)?.name ?? 'its parent')}.`;
+  if (v.elements && v.elements.have < v.elements.need) {
+    const more = v.elements.need - v.elements.have;
+    return `Learn skills of ${more} more element${more === 1 ? '' : 's'}.`;
+  }
+  return firstStep(s.reg, s.book, cls.requires ?? []) || goal;
 }
 
 export function classCards(s: MapScene): ClassScreenView {
@@ -263,8 +287,9 @@ export function classCards(s: MapScene): ClassScreenView {
     .filter(Boolean);
   const current = cards.find((c) => c.state === 'current') ?? null;
   const unlocked = cards.filter((c) => c.state === 'unlocked');
+  // Still to find: only classes whose parent classes you already have (a Tier III riddle means nothing at level 1).
   const locked = s.reg.classes
-    .filter((c) => !book.state.classes[c.id] && !c.hidden)
+    .filter((c) => !book.state.classes[c.id] && !c.hidden && (c.parents ?? []).every((p) => !!book.state.classes[p.id]))
     .map((c) => ({ c, v: book.classProgress(c) }))
     .filter(({ v }) => v.codex !== 'unknown')
     .sort((a, b) => b.v.progress - a.v.progress)
@@ -285,7 +310,8 @@ export function classChangeBlock(s: MapScene): string | null {
 /**
  * Becomes a class (or "No class" with null) — the ONE path for becomeClass and wearClass. Becoming a class refills
  * the 5 class slots with its most relevant known skills (a class pick sitting in one of your slots moves in and frees
- * that slot; your other picks stay) and emits classChanged (the "You are now a Pyroblade" headline, the outfit
+ * that slot; your other picks stay; the skills it pushes out move into your empty slots, and a slot of yours still
+ * empty takes your most recently used skill that is not on the bar) and emits classChanged (the "You are now a Pyroblade" headline, the outfit
  * change). "No class" turns the class slots into your own slots, keeping their skills.
  */
 export function becomeClass(s: MapScene, id: string | null): Outcome {
@@ -309,8 +335,9 @@ export function becomeClass(s: MapScene, id: string | null): Outcome {
   if (prev === id) return { ok: true, message: `You are already ${article(cls.name)}.` };
   const r = book.wear(id);
   if (!r.ok) return r;
-  // From "no class" the front slots held your own picks: any the class pushes out move to your empty slots.
-  refillClassSlots(s.session, 'class', { rehome: prev === null });
+  // Skills the class pushes out of the class slots move to your empty slots, and any slot of yours still empty takes
+  // your most recently used skills that are not on the bar (auto-equip on every change of class).
+  becomeRefill(s.session);
   noteWorn(book);
   gameBus.emit('classChanged', { classId: id, prev, reason: 'wear' });
   s.afterClassChange();
@@ -374,7 +401,7 @@ export function questCard(s: MapScene, v: QuestView): QuestCardView {
     turnInName: npcName(v.turnIn),
     ...(where ? { where: mapById(where)?.name ?? where } : {}),
     ...(q.chain ? { chain: q.chain } : {}),
-    objectives: s.book.questProgress(q.id).map((o) => ({ text: o.text, have: o.have, need: o.need, done: o.done })),
+    objectives: s.book.questProgress(q.id).map((o) => ({ text: objectiveWords(o.text), have: o.have, need: o.need, done: o.done })),
     rewards: rewardView(s, q.rewards),
     tracked: (s.book.state.quests?.tracked ?? []).includes(q.id),
     repeatable: !!q.repeatable,
@@ -396,7 +423,8 @@ export function npcQuests(s: MapScene, npcId: string): NpcQuestsView {
     .map((v) => {
       const d = v.quest.dialog;
       const dialog = v.status === 'available' ? d.offer : v.status === 'active' ? d.progress : v.status === 'ready' ? d.complete : '';
-      return { ...questCard(s, v), dialog };
+      const more = v.status === 'available' || v.status === 'ready' ? QUEST_LORE[v.quest.id] : undefined;
+      return { ...questCard(s, v), dialog, ...(more ? { more } : {}) };
     });
   return { npcId, name: npc?.name ?? npcId, title: npc?.title ?? '', portrait: npc?.portrait ?? '', quests };
 }
@@ -452,7 +480,7 @@ export function pursuits(s: MapScene): PursuitView[] {
       key: `quest:${t.quest.id}`,
       kind: 'quest',
       title: t.quest.name,
-      line: ready ? `Return to ${npcName(t.turnIn)}` : (open?.text ?? t.quest.summary),
+      line: ready ? `Return to ${npcName(t.turnIn)}` : open ? objectiveWords(open.text) : t.quest.summary,
       ...(open && !ready && open.need > 0 ? { progress: Math.min(1, open.have / open.need) } : {}),
       ready,
       open: { panel: 'codex', arg: `quests:${t.quest.id}` },

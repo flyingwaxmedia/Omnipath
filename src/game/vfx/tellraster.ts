@@ -2,10 +2,10 @@
 // geometry MonsterSkills hit-tests (zone ellipses ry = 0.65 rx, cones, capsule lanes, aim lines, chain range
 // circles), pixel by pixel, into two RGBA regions the runtime uploads to a pooled canvas texture:
 //
-//   fill  (DEPTH.TELEGRAPH, under bodies)  a sparse 12.5 % danger dither over the whole area, and a denser
-//         fill-up front growing from the caster / centre toward the rim as the wind-up runs out (the gap between the
-//         front and the rim is the time left), a 1 px front line, a faint family hint, lane chevrons marching
-//         toward the far end
+//   fill  (DEPTH.TELEGRAPH, under bodies)  a sparse 12.5 % danger dither over the whole area (25 % in the last
+//         third), and a denser fill-up front (37.5 % danger + a 12.5 % family hint) growing from the caster / centre
+//         toward the rim as the wind-up runs out (the gap between the front and the rim is the time left), a 1 px
+//         front line, lane chevrons marching toward the far end
 //   rim   (DEPTH.TELL_TOP, above canopies, glow and darkness)  a 2 px dashed rim whose OUTER edge is the hit-test
 //         boundary, marching, a dark #24180f keyline outside each dash and a 1 px dark connector in the gaps (the
 //         outline never breaks), lane arrow heads, aim lines. The rim is drawn white + keyline only: the runtime
@@ -119,6 +119,12 @@ const DASH_ON = 6;
 const MARCH_MS = 67;
 
 const bayerAt = (i: number, j: number): number => BAYER4[(j & 3) * 4 + (i & 3)];
+/** The dissolve's threshold: Bayer from another origin, so it thins the fill's own ordered pattern too. */
+const dissolveAt = (k: number, w: number): number => {
+  const i = k % w;
+  const j = (k - i) / w;
+  return BAYER4[((j + 1) & 3) * 4 + ((i + 2) & 3)];
+};
 
 export class TellRaster {
   /** Region size (fill and rim regions are the same size; aim / range tells have no fill). */
@@ -142,6 +148,13 @@ export class TellRaster {
   private readonly rimS: Float32Array;
   /** 1 outer body px, 2 inner body px, 3 keyline, 4 solid (arrow body, aim line), 5 solid keyline. */
   private readonly rimRole: Uint8Array;
+  /**
+   * Upload rectangles that cover every rim pixel (8-row stripes split at the anchor column): a marching rim re-uploads
+   * only these, a few KB, instead of its whole (mostly empty) bounding box.
+   */
+  readonly rimRects: readonly { x: number; y: number; w: number; h: number }[];
+  /** Upload rectangles covering the fill pixels the last render changed (pixels outside the area never change). */
+  fillDirty: readonly { x: number; y: number; w: number; h: number }[] = [];
   private fillKey = '';
   private rimKey = '';
   private tick = -1;
@@ -282,6 +295,7 @@ export class TellRaster {
     this.rimPix = Int32Array.from(rp);
     this.rimS = Float32Array.from(rs);
     this.rimRole = Uint8Array.from(rr);
+    this.rimRects = shape.kind === 'aim' ? [{ x: 0, y: 0, w: this.w, h: this.h }] : stripeRects(rp, this.w, this.h, this.ox);
   }
 
   /** Front parameter u (0..1), px per unit of u, and the lane chevron coordinate. */
@@ -445,7 +459,7 @@ export class TellRaster {
 
   private drawFill(t: number, late: number, dissolve: 0 | 1 | 2, chevShift: number): void {
     const buf = this.fill!;
-    buf.fill(0);
+    const changed: number[] = [];
     const c = this.c;
     const cut = dissolve === 1 ? 8 : dissolve === 2 ? 4 : 16;
     const outN = late ? 4 : 2;
@@ -454,25 +468,34 @@ export class TellRaster {
       G = this.fillG,
       B = this.fillB,
       C = this.fillC;
+    const W = this.w;
     for (let n = 0; n < pix.length; n++) {
       const b = B[n];
-      if (b >= cut) continue;
+      const gone = cut < 16 && dissolveAt(pix[n], W) >= cut;
       const fd = (U[n] - t) * G[n];
       let v = 0;
-      if (fd <= 0) {
-        // Inside the front: 37.5 % danger + 12.5 % family hint; the front line itself is solid.
+      if (gone) v = 0;
+      else if (fd <= 0) {
+        // Inside the front: 31.25 % danger (12.5 % hot R2 + 18.75 % deep R1: a wine-red tint that keeps the ground
+        // and the actors readable instead of a neon sheet) + 6.25 % family hint; the front line itself is solid R4.
         if (fd > -1.25 && t > 0.02) v = c.R4;
-        else if (b < 6) v = c.R2;
-        else if (b < 8) v = c.famR3;
+        else if (b < 2) v = c.R2;
+        else if (b < 5) v = c.R1;
+        else if (b < 6) v = c.famR3;
       } else if (b < outN) v = c.R1;
-      else if (b === 15) v = c.famR2;
-      if (C) {
+      if (C && !gone) {
         const cv = C[n];
         const m = (((cv - chevShift) % 16) + 16) % 16;
         if (m < 2 && U[n] > 0.04 && U[n] < 0.97) v = fd <= 0 ? c.R4 : c.R3;
       }
-      if (v) buf[pix[n]] = v;
+      const k = pix[n];
+      if (buf[k] !== v) {
+        buf[k] = v;
+        changed.push(k);
+      }
     }
+    // Only what changed goes up: the ring the front crossed (or everything at a density step / dissolve).
+    this.fillDirty = changed.length ? stripeRects(changed, this.w, this.h, this.ox) : [];
   }
 
   private drawRim(march: number, dissolve: 0 | 1 | 2): void {
@@ -491,7 +514,7 @@ export class TellRaster {
     const statik = this.shape.kind === 'range';
     for (let n = 0; n < pix.length; n++) {
       const k = pix[n];
-      if (bayerAt(k % W, Math.floor(k / W)) >= cut) continue;
+      if (cut < 16 && dissolveAt(k, W) >= cut) continue;
       const role = Ro[n];
       if (role === 4) {
         buf[k] = c.white;
@@ -557,13 +580,55 @@ export class TellRaster {
         if (!buf[n]) buf[n] = c.outline;
       }
     }
-    if (cut < 16) for (let k = 0; k < buf.length; k++) if (buf[k] && bayerAt(k % W, Math.floor(k / W)) >= cut) buf[k] = 0;
+    if (cut < 16) for (let k = 0; k < buf.length; k++) if (buf[k] && dissolveAt(k, W) >= cut) buf[k] = 0;
   }
 
   /** Fill pixel count (tests, stats). */
   get fillCount(): number {
     return this.fillPix.length;
   }
+
+  /** 1 on every pixel of the fill AREA, dither aside (the hitbox check, tests/vfx-tell.test.ts). */
+  fillMask(): Uint8Array {
+    const m = new Uint8Array(this.w * this.h);
+    for (const k of this.fillPix) m[k] = 1;
+    return m;
+  }
+
+  /** 1 on every rim body pixel, dashes aside (roles 1 and 2: the 2 px inside the boundary). */
+  rimMask(): Uint8Array {
+    const m = new Uint8Array(this.w * this.h);
+    for (let n = 0; n < this.rimPix.length; n++) if (this.rimRole[n] === 1 || this.rimRole[n] === 2) m[this.rimPix[n]] = 1;
+    return m;
+  }
+}
+
+/** Rectangles covering pixel indices `pix` in 8-row stripes, split at column `split` (left / right arcs). */
+function stripeRects(pix: readonly number[], w: number, h: number, split: number): { x: number; y: number; w: number; h: number }[] {
+  const S = 8;
+  const n = Math.ceil(h / S);
+  const lo = [new Array(n).fill(Infinity), new Array(n).fill(Infinity)];
+  const hi = [new Array(n).fill(-1), new Array(n).fill(-1)];
+  for (const k of pix) {
+    const x = k % w;
+    const st = Math.floor((k - x) / w / S);
+    const side = x < split ? 0 : 1;
+    if (x < lo[side][st]) lo[side][st] = x;
+    if (x > hi[side][st]) hi[side][st] = x;
+  }
+  const out: { x: number; y: number; w: number; h: number }[] = [];
+  for (let st = 0; st < n; st++) {
+    const y = st * S;
+    const hh = Math.min(S, h - y);
+    const l = hi[0][st] >= 0 ? [lo[0][st], hi[0][st]] : null;
+    const r = hi[1][st] >= 0 ? [lo[1][st], hi[1][st]] : null;
+    if (l && r && r[0] - l[1] <= 8) out.push({ x: l[0], y, w: r[1] - l[0] + 1, h: hh });
+    else {
+      if (l) out.push({ x: l[0], y, w: l[1] - l[0] + 1, h: hh });
+      if (r) out.push({ x: r[0], y, w: r[1] - r[0] + 1, h: hh });
+    }
+  }
+  return out;
 }
 
 /** Ramanujan's ellipse perimeter. */

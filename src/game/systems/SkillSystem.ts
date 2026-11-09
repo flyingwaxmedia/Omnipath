@@ -19,6 +19,7 @@ import type { Monster } from '../entities/Monster';
 import type { Player } from '../entities/Player';
 import { gameBus, type Pt, type SkillRef } from '../events';
 import { Y_BIAS, ySort } from '../render/depths';
+import { distToSegment } from './tellhit';
 
 export interface Cast {
   id: number;
@@ -50,7 +51,7 @@ export function castRef(cast: Cast): SkillRef {
 }
 
 /** The player's body radius (px) for separation and every monster hit test (Combat and MonsterSkills share it). */
-export const PLAYER_R = 12;
+export { PLAYER_R, distToSegment } from './tellhit';
 
 /** Unique projectile ids for projectileSpawn / projectileEnd (player and monster projectiles share the counter). */
 let projectileSeq = 1;
@@ -114,13 +115,6 @@ function angleDiff(a: number, b: number): number {
   return Math.abs(d);
 }
 
-export function distToSegment(px: number, py: number, ax: number, ay: number, bx: number, by: number): number {
-  const dx = bx - ax;
-  const dy = by - ay;
-  const len2 = dx * dx + dy * dy;
-  const t = len2 ? Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / len2)) : 0;
-  return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
-}
 
 /**
  * Thin line of sight (sampled every 8 px): shots and chasing. pathfinding.lineClear checks a body-sized box, which

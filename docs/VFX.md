@@ -6,9 +6,10 @@ item is fixed below; §2.1 says where.
 
 - Shared contract: `src/game/vfx/types.ts`. It is frozen for both work packages; change it only through this document.
 - Work package **P** (pixels) and work package **R** (recipes) are built in parallel and share no other file (§10).
-- Runtime wiring into SkillSystem / MonsterSkills / Combat is a later step (§8). It is not part of P or R. The PLAYER
-  half is built (§8.8: `src/game/vfx/runtime/**`, `src/game/vfx/bridge.ts`); monster techniques, auto-attacks,
-  telegraphs, player statuses and death pops are still the legacy helpers (§8.7, open items in §13).
+- Runtime wiring into SkillSystem / MonsterSkills / Combat is a later step (§8). It is not part of P or R. It is
+  built: the player half (§8.8: `src/game/vfx/runtime/**`, `src/game/vfx/bridge.ts`), the world lane (§8.9: monster
+  techniques, auto-attacks, telegraphs, statuses, deaths, hit feel, camera) and an in-game QA pass over every skill
+  and technique (§8.10); open items in §13.
 - 15-minute path: §2, §5, §6.1–6.3, §7 and §10. The rest is reference for the package that needs it.
 
 Counts in this document come from the data at the time of writing: 160 authored `SkillDef`s in `SKILLS` (10
@@ -325,7 +326,7 @@ placement (counts, patterns, speeds) lives in `VfxPiece.place` and is never part
 | **burst** | hit sparks by class, muzzle flash, split star, glint, fizzle, spark-moment star | 50 · 50 · 67 · 67 · 67 · empty (tick: 33 · 50 · 50 · empty) | cls, size (s 16 / m 24 / l 32; star 64), glyph | 8 for slash/pierce, else 1 | body (target.y + 2); glow core |
 | **motes** | the mote kit: spark, ember, mote, streak, flake, droplet, chip, bubble, leaf, glint, glyph, wisp, line, bead, disc, star | 1–4 frames per kind; colour steps through the ramp by age | kind, size (1–3) | 16 for spark/line/streak, else 1 | emitters: body / glow / ground |
 | **puff** | smoke, dust, vapour, veil, gas, cloud, steam | 8 × 83: grow, lit cap while age < 0.5, one ramp step darker every 2 frames, crescent erosion in the last 3 | kind, r (3/5/7/10) | 1 | ground or body |
-| **ring** | shockwaves, spin bands, rims, fill fronts, cone edges, accretion arcs | expand/contract 6 × 50–67. sweep/march are stepped by the runtime at 33 ms ticks: ink by age since the head passed (hot 1 tick → lit 2 → mid 4 → dim → gone) | r, r0, aspect, thick, style, ink, anim, arc, heads, ms | 1 whole (r and an expand / contract r0 ≤ 64) · **pieces** (otherwise: 16 outward-normal buckets × thick × style × ink) | ground / preview / tell / rim; back/front halves |
+| **ring** | shockwaves, spin bands, rims, fill fronts, cone edges, accretion arcs | expand/contract 6 × 50–67. sweep/march are stepped by the runtime at 33 ms ticks: ink by age since the head passed (hot 1 tick → lit 2 → mid 4 → dim → gone). **Smear** sweeps (`smear` 4/6/8, spin bands): each head is a white-hot edge `smear` px wide (2 px R5 + R4), the tail thins (×0.7 → ×0.45 → 2 px) and cools (lit → mid → dim) and is gone after `SMEAR_TAIL` (0.32) of a turn (`smearStage` / `smearWidth` in types.ts, shared by the whole bake and the chunk runtime) | r, r0, aspect, thick, style, ink, anim, arc, heads, smear, ms | 1 whole (r and an expand / contract r0 ≤ 64) · **pieces** (otherwise: 16 outward-normal buckets × thick × style × ink) | ground / preview / tell / rim; back/front halves |
 | **decal** | telegraph fills, scorch, frost, wet, ink, rune glow, cracks, cooling pool, rift slit, falling shadow | static at density 12.5/25/50%; dissolve 50 → 25 → 12.5 → 0 every 100 ms; life ≤ 1000 ms (pool 1600) | kind, r (DECAL 16–176/8, floor), aspect, density, shape (disc/line) | 1 (line: 16) | ground / tell / glow; MULTIPLY for scorch and ink |
 | **sigil** | rune circle: 2 rings + star polygon + glyphs drawn in sequence | draw 8 × 50 then hold; flash 2 × 33 | r (16/24/32/48), points, glyphs, anim | 1 | preview / ground / glow |
 | **nova** | release core: blast, ripple, implode, radiant, sky, rune, cloud, goo; death pops; dash landings | (33 contrast if heavy) · 50 hero · 100 hold · 67 × 6 · empty | core, c (24/40/56), heavy | 1 | body (cy + 1) + glow |
@@ -429,12 +430,12 @@ slash: `r = nearestBucket(range, REACH)`, `arc = nearestBucket(arc, ARC)`, and `
 
 | style | condition | ring | examples |
 |---|---|---|---|
-| vortex | status `pull` | 3 rings stepping inward 1 px per tick + spiral debris motes | tornado, firestorm, eye_of_the_storm |
+| vortex | status `pull` | one solid (earth / magma: jagged) ring collapsing R → 0.3R over 250 ms per pulse (the pull reads inward), a 2-head `smear: 4` swirl at 0.7R + spiral debris motes at the zone aspect | tornado, firestorm, eye_of_the_storm |
 | halo | family holy | `double` expand + sparkle motes | radiant_burst, moonwarden_sig |
 | wail | owner monster && family shadow | `inverted` expand + wisps | mon_wail |
 | ripple | `spirit` && !`blade` | `double` 3 px apart, expand | rippling_palm |
 | ring | !`blade` && !`pierce` | 2 concentric expand 0.3R → R | inferno_ring, static_field, tidal_ripple, thunder_peal, resonant_pulse, prism_burst, spore_burst, vortex_dancer_sig, stormreaver_sig, echo_sovereign_sig |
-| blades | else | `sweep`, heads 3 (pierce) or 2 (blade), one turn in 117 ms, thick 3 (heavy 4) | whirlwind, flame_spin, rotspore_whirl, thousand_cuts, blight_whirl, arcane_cyclone |
+| blades | else | `sweep` blade smear (`smear` 6, heavy 8), heads 3 (pierce) or 2 (blade), one turn in 117 ms, + 6 rim sparks staggered round the band | whirlwind, flame_spin, rotspore_whirl, thousand_cuts, blight_whirl, arcane_cyclone |
 
 **projectile** (body; cell = CELL by `size`, one bucket up for monsters)
 
@@ -505,7 +506,7 @@ slash: `r = nearestBucket(range, REACH)`, `arc = nearestBucket(arc, ARC)`, and `
 | shape | telegraph | charge (castMs > 0) | cast (`pulse` per swing / pulse; `castFire` once) | body | trail | impact | area |
 |---|---|---|---|---|---|---|---|
 | strike | monster: cone | orb charge at the hand + 2–3 motes `orbit`; preview cone (§8.4) | §6.2 strike pieces | — | — | burst by class | heavy: ring shock r 8→24 + decal cracks + chip motes |
-| spin | monster: zone | " + preview ring | §6.2 spin ring + family motes | — | — | burst (tick after the first hit) | floor band: ring on ground, 0 → R outCubic over 300 ms, ink mid → dim (flares R5 on the first and last pulse only) |
+| spin | monster: zone | " + preview ring | §6.2 spin ring + family motes | — | — | burst (tick after the first hit) | floor band: 2 px ring on ground (R3 rim over an R1 line), 0 → R outCubic over 300 ms, ink mid → dim (flares R5 on the first and last pulse only) |
 | projectile | monster: aim | " | burst muzzle s; count ≥ 5 or radial → one ring r12→28 instead; split essence → burst split | orb / missile | family motes by distance (every 5 px, 3 for fast blades); orbs also leave 5 ghost discs; knives leave afterimages | burst | — |
 | dash | monster: lane | " + preview lane | afterimage (ghost / blink) + 3 dust puffs | roll: missile rock 32 | afterimage every 10 px (≤ 6) + 4–6 line motes + family trail motes | burst (hit at 60% of the dash) | end: charge → nova blast c24 + ring + cracks · dive → family core c24 + ring · spin → ring sweep re-anchored every 67 ms |
 | nova | player: ring solid 2 px at R + decal fill 12.5% (rim ink hot in the last 117 ms); arcane → + a centre sigil r ≤ 32. Monster: zone | " | — | — | — | burst | nova core + erupt units (wave) + ring shocks (outer 0.45R → R in 333 ms, thick 3 → 1; inner 0.3R → 0.6R in 217 ms; heavy adds a 3rd at 0.35R; inner rings ending under the core are skipped) + family decal (core only, ≤ 96 px) + light pool (decal fill in the glow layer, 2 frames) |
@@ -605,7 +606,7 @@ Each patch uses only §5 components. A test fails on an unknown id or a non-root
 | id | patch |
 |---|---|
 | worldbreaker | slash `chop` r128 falls onto the nova centre over the 250 ms delay (`move` from dy −120); nova blast c56 heavy; 12 rock-spike units; cracks; trauma 0.3 |
-| tornado | vortex funnel: 3 stacked rings (dy 0 / −12 / −24; r ×1 / 0.7 / 0.45; `sweep`, `gapped`) + leaf motes on a log spiral |
+| tornado | vortex funnel: 3 stacked sweep smears (dy 0 / −12 / −24; r ×1 / 0.7 / 0.45; smear 6 / 4 / 4; 117 / 133 / 150 ms; solid) replacing the swirl (the collapsing pull rings stay) + leaf motes on a log spiral |
 | firestorm | the tornado funnel in fire + ember spiral |
 | eye_of_the_storm | the tornado funnel ×1.2 + cloud puffs stacked at dy −36 + rain line motes (storm ramp) |
 | spirit_crescent | orb `wave` cell 48 (spirit) + a dotted bead wake |
@@ -836,7 +837,7 @@ Extras:
   - dash: lane edges
   - spin: ring
   - strike: cone arc
-  - They use the family ramp, 2 px solid rims, 12.5% fills and never danger.
+  - They use the family ramp, 2 px solid rims, 12.5% fills in the family's darkest stop (a tint, not bright specks) and never danger.
   - A nova wider than the view shows the visible arc of its rim plus a centre marker. When the touch point covers the
     target, the marker gets an offset callout.
 - Runtime randomness: one stream per cast, `mulberry32(hashSeed(recipe.variety, castId))`. Particle emitters get every
@@ -879,18 +880,19 @@ Extras:
 1. ~~`DEPTH.TELL_TOP` in depths.ts~~ (done: 150010).
 2. ~~events.ts gains the §8.2 bus additions (`skillPulse` first).~~ (done; `chainLaunch` added by the runtime step).
 3. Monster:
-   - local hit-stop / slow / freeze implemented on its bob, squash, charge and position integrator (sprites are Images
-     without anims, so `anims.timeScale` does nothing)
-   - a TintArbiter in `restoreTint` (hit flash > freeze > shock tick > DoT tick > elite tint)
+   - ~~local hit-stop on its sprite~~ (done, §8.9: `hold()` freezes the sprite and its frame, visual only; a post-hold
+     catch-up avoids a snap after knockback). Slow / freeze still read from the status tints.
+   - a TintArbiter in `restoreTint` (hit flash > freeze > shock tick > DoT tick > elite tint) (partly done: impact flash
+     frames > frozen > stunned > slowed > elite tint; no shock / DoT tick tints yet)
    - overlay anchors mapped through the sprite transform
 4. art/monsters.ts exports each texture's hide colour (elite tint applied) and top-edge anchor points, so nothing is
    read back from the GPU.
 5. Settings: "Reduce shake & flashes" (trauma ×0.3, no screen flash, `reduceFlash` bakes, shock tint → R4). (runtime side
    done: `runtime/settings.ts`; the settings-panel toggle is the UI lane's)
-6. The juice rig replaces direct `cameras.main.shake` / `flash` calls (trauma `offset = round(6·τ²·noise(t·25))`, τ
-   decays 2/s; flash alpha ≤ 0.35, ≥ 333 ms apart). (done for player casts: `Stage.addTrauma`; the monster / hurt /
-   warden shakes and flashes in Combat and MonsterSkills are the World lane's)
-7. Shade_cloak sets the actor's alpha to 0.55; the player's class aura Graphics move to the aura loop.
+6. ~~The juice rig replaces direct `cameras.main.shake` / `flash` calls~~ (done, §8.9: render/camera.ts `CameraRig`;
+   every remaining legacy call is routed into it by `install()`).
+7. Shade_cloak sets the actor's alpha to 0.55 (open); ~~the player's class aura Graphics move to the aura loop~~ (done,
+   §8.9).
 
 ### 8.7 Migration
 
@@ -942,8 +944,9 @@ Files: `src/game/vfx/play.ts` (the play contract, Phaser-free), `src/game/vfx/br
 - **Placement.** Strips are pooled Images (origin 0,0; trimmed frames placed at anchor − (ox, oy); flips mirror
   around the anchor pixel); body pieces sort with `ySort(anchor y, bias)`; whole body-layer rings and auras round an
   actor bake `half: back / front` and sort at y − 1 / y + 1 (glow on the front half only). Rings over 64 px and
-  aim-relative arcs are 10 px band chunks on Blitter bobs (sweep / expand ink from per-ink chunk sets; dim / thin
-  bands and a crowded pool place every 2nd or 3rd chunk; cue rings never thin). Motes are runtime particles on
+  aim-relative arcs are 10 px band chunks on Blitter bobs (sweep / expand ink from per-ink chunk sets, smear sweeps
+  from per-stage sets; a crowded pool — over 60 %, thin / dim bands over 50 % — places every 2nd or 3rd chunk; cue
+  rings never thin). Motes are runtime particles on
   shared Blitters (closed-form drag + gravity, age-stepped frames, directional kinds by velocity); mote blitters
   sit at `VFX_DEPTH.FX_MOTES` (89000, over the y-sorted band). Glow twins: one ADD Layer at `FX_GLOW`
   (`LIGHT` on dark maps), tinted family R4 at the biome gain. Afterimages snapshot the actor's frame
@@ -968,6 +971,145 @@ Files: `src/game/vfx/play.ts` (the play contract, Phaser-free), `src/game/vfx/br
 - **QA.** `window.omnipath.scene.vfx` exposes `stats()`, `resetPeaks()`, `setReduceFlash()`, `setQuality()`.
   Effects were checked mid-frame by stepping `game.step()` with the loop asleep, with the hit-test geometry drawn
   over them (rims sit on the hit circles; strike smears ride 12 px up at swing height, as SkillSystem draws them).
+
+### 8.9 World lane as built (monsters, statuses, hit feel, camera)
+
+Files: `src/game/vfx/world.ts` (WorldBridge: the bus events bridge.ts leaves alone, Phaser-free), `juice.ts` (JuiceRig,
+`holdFor`), `tellraster.ts` (TellRaster: telegraph pixels), `runtime/telegraph.ts` (TelegraphFx: pooled tell canvases),
+`src/game/render/camera.ts` (CameraRig) + its hook in `render/stage.ts`, `src/game/systems/tellhit.ts` (the monster hit
+tests and `PLAYER_R`, Phaser-free). Tests: `tests/vfx-tell.test.ts`, `tests/vfx-world.test.ts`. Bus additions
+(append-only): `monsterTelegraph.live` (the tell's live geometry function) and `.phases` (`TellPhase` records: the
+wind-up, then each follow-up swing / pulse), `monsterSpawn`, and `chainLaunch` with `target: null` for a monster chain
+that found nothing in reach.
+
+- **One geometry, two readers.** MonsterSkills builds ONE `geom()` per tell (zone, cone, lane, aim, range, aura; live:
+  a pushed caster moves it, an aim follows the player). TelegraphFx draws it every frame and the tellhit.ts predicates
+  hit-test the very same shape when it lands, so a rim cannot drift from its hit area. MonsterSkills draws nothing.
+- **Telegraphs are rasterised, not baked** (exact radii never fit buckets). Per tell a pooled canvas texture holds three
+  regions: the **fill** (`DEPTH.TELEGRAPH`, under bodies): danger R1 at 12.5 % over the whole area (25 % in the last
+  third) and the **fill-up front** — 31.25 % danger (12.5 % R2 + 18.75 % R1: a wine-red tint, not a neon sheet; in-game QA
+  pass) + a 6.25 % family hint inside a front growing from the centre /
+  caster / lane start to the rim as the wind-up runs out, edged by a 1 px R4 line (the gap to the rim is the time left);
+  lanes add `>` chevrons marching toward the far end. The **rim** (`DEPTH.TELL_TOP`, above canopies, glow and
+  darkness): 2 px dashes whose OUTER edge is the hit boundary, a #24180f keyline outside each dash and a 1 px dark
+  connector in the gaps; lanes add an arrow head past the far cap; aims are 2 px dashed lines marching outward; chain
+  ranges a static dashed circle (aspect 1, as hit-tested) plus a bead tether to the player while in reach. The rim is
+  white + keyline, **tinted** per state (danger R3 → R4 in the last 15 % → #fff8f0 lock in the last 50 ms), so a state
+  change uploads nothing. The **edge marker** (13 px danger disc with a "!") sits at the view edge toward an off-view
+  tell. Cancels dissolve in two dithered frames (+ a fizzle at the caster).
+- **Cadence and uploads.** Everything moves on 67 ms ticks (marching 2 px per tick, doubled in the last 25 %); the fill
+  re-rasterises only when the front moved a pixel or the density stepped, the rim re-uploads only the 8-row stripes
+  that hold rim pixels (a few KB instead of its box). Tells share a 512 KB / frame upload budget; over it a re-raster
+  waits a frame (the last one keeps showing); the fill likewise uploads only the stripes the front crossed (all of it
+  only at the 66 % density step). Never governed, culled or dropped.
+- **Follow-up phases** (strike `hits`, spin `pulses`) keep the rim and restart the front half full; the progress of each
+  phase is read from its live record every frame (`shiftTime`, hit-stops and pauses keep the lock on the hit).
+- **Caster cue** (the recipe's `charge` phase) re-timed to the real wind-up: converge motes + the danger ring under the
+  feet scaled to the body (`rScale`); shots add the mouth charge orb at `m.y − min(30, h/2)`; buffs the aura activation
+  at the monster's body bucket; **elites and wardens** gather a family glow pool (fill decal on the glow layer).
+- **Monster bodies and impacts** (`deriveVfx(skill, 'monster')`, quota 0.5, monster LUT): skillPulse swings / pulses /
+  volley releases (geometryFromEvent rings and smears scaled by `PlayCtx.rScale` = true reach / nominal: spins and
+  strikes reach + the caster's radius), shots (invisible bus Image; body + trail follow the mover), chain zaps (cast-time
+  bolt to the player; a fizzle when nothing was in reach), novas (0.65 pieces), dashes (ghosts of the monster's own
+  sprite), buffs (activation + aura loop until it ends). **Auto-attacks** (`playerHurt` with an attacker and no
+  technique): `deriveAttackVfx` claws / lash / sting / slam / spark from the attacker toward the player + its impact;
+  Combat's sprite-y tween became a 3 px whole-pixel lunge (`recoil`).
+- **The player**: technique impacts (danger burst), statuses (≤ 2 loops by priority, never low priority, pips for the
+  rest, a grey immune glint when crowd-control immunity blocks a stun / freeze), the hex ward flaring on a blow, the Tier
+  III class aura (aura loop: ascendant `glint` / holy, eclipse_walker `veil` / twilight). Player.sync no longer draws
+  buff rings, stun stars, frost / poison tints or Tier III motes; Combat's player status motes are gone.
+- **Deaths and spawns.** A monster death: two white frames on the real sprite, hidden 34 ms later, then `deathPieces`
+  (nova blast in the killer's family, chips, puff) 33 ms delayed; Combat's alpha / fractional scaleY tween is gone. A
+  respawn emits `monsterSpawn`: white frames + dust puff + ring + rising glints (no 400 ms alpha fade). Player death: a
+  danger burst and smoke; status loops end.
+- **Extras**: enrage (two danger rings + burst, trauma 0.5 near the player), gather sparkles by node kind, a discovery
+  glint over the head, and named world moments (`VfxHandle.extra`: chest, waystone, campfire, meditate, rest, reveal,
+  blink). SkillSystem keeps only `fxBurst` / `fxRing` as adapters (MapScene's portal reveal and blink); every other
+  legacy fx helper and the `cfx_*` textures are deleted.
+- **Hit feel (juice.ts).** Victim-local, visual hit-stop: `hold()` freezes the victim's sprite and frame (gameplay keeps
+  running; the sprite catches up over ~3 frames after); requests coalesce (only the part past the current hold costs
+  budget), each ≤ 100 ms and ≤ 150 ms per victim per rolling second. The hold = the recipe weight's (light 0, normal 33,
+  heavy 67, ultimate 100; crit +17) × 0.5..1.2 by the share of the victim's HP the blow took; later hits of a cast hold
+  0; hits on the player hold half. The impact spark holds its hero frame exactly as long. Impact frames: white for one
+  rendered frame, then the element's R4 (reduce-flash: the colour only), a 1-frame 2 px squash and a whole-pixel recoil
+  along the blow (1 / 1 / 2 / 3 px by weight; 2-3 px on the player). Kicks: the player's heavy / ultimate casts 2 / 3 px
+  along the blow, a hit on the player 2 px (heavy 4) along it. Trauma: heavy blows on the player 0.35, warden slams 0.5
+  (×0.6 when not heavy), elites' heavy blasts 0.15 — all faded by distance (full within r + 40, none past r + 200).
+- **Camera rig (render/camera.ts).** Trauma² shake in whole art px (max 6, τ decays 2 / s, value noise, never
+  rotation), a critically damped kick spring (≤ 6 px), a governed screen flash (a full-view rectangle stepped down over
+  3 frames, alpha ≤ 0.35, ≥ 333 ms apart, ≤ 3 / s), the **warden intro pan** (once per warden per map entry when it is
+  within 300 px and not yet fighting: ease 450 ms toward 55 % of the way, hold 650, ease back; never more than 32 % of the
+  view away from the player) and a **lead** (18 %, ≤ 24 px) toward a warden / elite target in manual play. The stage adds
+  the look before its map clamp and the jolt after. `install()` routes any remaining `cameras.main.shake / flash` into
+  the rig. **Reduce shake & flashes**: trauma and kicks ×0.3, no flashes, no pans, impact frames without the white.
+- **Fixes found in the browser pass**: the freeze crystal was keylined after its 25 % dither (a dark ring round every
+  dot made an opaque checkerboard over the body): it now keylines the silhouette, then dithers; status units never take
+  the biome keyline; the death puff uses the dust ramp (the smoke ramp's crescent erosion read as a black hole on grass).
+- **QA.** A Playwright pass (scratch scripts, not shipped) forced every telegraphed technique family
+  (`monsterSkills.start`) with the loop asleep and stepped frames: jelly_slam (nova), mon_gust (cone), mon_zap (range),
+  gale_feather (3 aims), mon_ember_spit (aim), ember_pounce / boulder_roll (lanes), Hollow Regent's umbral_rend (140°
+  two-swing cone) and wail on its dark map, Thunderhoof's thunder_stomp, Ironroot's tremor_stomp (dark), the matriarch's
+  3-pulse spore_burst — screenshots at 50 % / 90 % / the hit, with and without a 1 px hit-test overlay (rims coincide).
+  Then the hit feel (heavy cleave: white → element frames, 2 px recoil held through the hold, kicks), the death and
+  spawn pops, burn / shock / freeze / soak / slow on the player, rimefang's claws, Conduct and Fan the Flames, the warden
+  pan (look 0 → 143 px → 0 over 1.5 s) and the enrage roar; no console errors. Busy dark map (Hollow Barrow II, 14
+  monsters kept round the player, SwiftShader): without AUTO (techniques firing) VFX update EMA 0.5 ms, peak 2.3 ms,
+  tell uploads ~100 KB/s, frames p50 / p95 16.7 / 20.6 ms; with AUTO and 8 AoE skills the player-side pools hit their
+  caps as in §8.8 (the governor at 0.5). `vfx.stats()` adds `tells`, `juice` and `camera` counters.
+
+### 8.10 In-game QA pass (phone portrait, every skill and technique)
+
+Harness (scratch, not shipped): a Playwright script at 390 × 844, DPR 1 (k = 1: one art px per device px) learns every
+authored player skill (150) through the debug hooks and casts it at a staged monster trio on open grass (Greenmeadow)
+and on a dark crypt floor (Hollow Barrow I), and spawns the owner of each of the 27 monster techniques next to the
+player on both maps and forces the technique. The game loop sleeps for good after setup and every frame is a manual
+16.7 ms step on one monotonic clock (waking the rAF loop moves scene time back to wall time and `Combat.syncClock`
+then shifts timers over the jumps); only capture frames render the world camera. Three frames per effect: cast
+(70 % of the wind-up, or the first frame), peak (fire + 3-7 frames) and impact (first `hit` / `playerHurt` + 2),
+stitched into review sheets with a page canvas. Discovery cards are suppressed during capture (they pause the scene).
+
+Fixed in this pass:
+- **Crash (all builds since the runtime landed).** An atlas eviction removed every named frame of a page while
+  Phaser's `Texture.firstFrame` still named one, so a new Blitter (and any Image) on that page resolved its default
+  frame to `undefined` and threw `TypeError: cutWidth` inside the frame loop — the rAF loop then stops for good. It
+  showed after ~30 different skills in one session. Eviction now resets `firstFrame` to `__BASE`, blitters are made
+  on `__BASE`, the image / bob pools refuse frames a page no longer has, and a live entry pins the pages of its shared
+  glow twins too (they can sit on another page).
+- **Leak.** The pull status (tornado, firestorm, hooks) played three `static` arcs with no life; one-shot statuses are
+  played without a status timer, so they lived as long as the monster (36 instances and a full ground pool after
+  one tornado). They now carry the pull's life; `tests/vfx-qa.test.ts` checks every looping piece of the one-shot
+  statuses.
+- **Spin bands** were a hairline sweep plus a hairline floor band. Blade spins now sweep a **smear** (`smear` 6, heavy
+  8: a white-hot head that thins and cools over 32 % of a turn) with 6 rim sparks; the floor band is a 2 px dim ripple
+  (no flare). Vortex spins (pull) collapse one ring R → 0.3R under a 2-head swirl smear; the tornado / firestorm
+  funnel is 3 stacked smears (it was 3 gapped rings = dashes, the monsters' rim language). Spin-dash bands smear too.
+- **Legacy wind-up preview** (Combat `drawPreview`: anti-aliased alpha ellipses with the monster aspect for player
+  circles, a soft rectangle lane, a grey cone) is gone; the charge phase's rims are the preview (§8.4).
+- **No dashed player rings.** Thinning a chunk ring to every 2nd 10 px chunk read as a dashed rim (the monsters'
+  language) and as a fan of loose dashes on shrinking rings. Thin / dim bands now thin only over 50 % of the bob share;
+  a crowded shock ring (expand / contract) hides instead of dashing; a crowded smear keeps every chunk of its head and
+  drops its mid / dim tail. Orbit and spiral motes follow the placement aspect (spin overlays orbited on a 0.5
+  ellipse inside the player's circle).
+- **Stranded one-shots.** A one-shot whose strip went missing mid-play (a direction re-baking, a fallback page gone)
+  hid and waited forever; it now ends on time (its longest strip + 250 ms). Over 150 casts in one session the live
+  instance count returns to 0 (it climbed to 70+ before).
+- **Ground pool.** Ground dressing (dust puffs, decals, floor bands) may fill only 2/3 of the ground sprite pool; the
+  rest stays free for the gameplay cues on the same pool (wind-up previews, nova markers). Death puffs in a busy fight
+  filled all 40 before.
+
+Busy fight (390 × 844, SwiftShader on a shared 4-core container, 8 monsters kept round the player, AUTO, the bar
+worldbreaker / firestorm / meteor / thunderstorm / starfall_lattice / arcane_deluge / thousand_cuts / thunder_peal,
+25 s, Greenmeadow and Hollow Barrow I): 23-42 fps (the no-VFX baseline measured 40 fps in the same conditions: the
+software rasteriser is fill-rate bound and the machine load swung between runs), body sprites ≤ 65 / 96, glow ≤ 25 / 64
+(the governor sat at 0.25), ground ≤ 29 / 40 (2/3 cap + cues; 40 / 40 before), bobs 280 / 280 player share (refusals
+expected), particles ≤ 111 / 250, atlas ≤ 4 / 4 pages (2.0 pages of pixels), blend switches p50 2 / p95 2-4 per
+frame, VFX update EMA 0.9-2.3 ms (mean 0.2-0.3 ms; insts ≤ 0.8, particles ≤ 0.2, bakes ≤ 1.0), single-frame peaks
+4-20 ms (in-frame bakes, bolt canvases; before: 7-19 ms). No errors; the before build crashed (`cutWidth`) within 15
+signature casts in one session.
+- **Readability.** The monster fill-up front is a wine-red tint (12.5 % R2 + 18.75 % R1 + 6.25 % family) instead of a
+  50 % neon sheet; the player nova marker fill uses the family's darkest stop (white specks before); the wet aftermath
+  starts at 25 % (an r96 50 % disc read as a grey hole); at most two buff aura loops show on the player (the oldest
+  gives way; the buff itself stays).
 
 ## 9. Budgets, governors
 
@@ -1231,12 +1373,18 @@ Decided (implemented with the runtime step):
 Open:
 6. Deferred for simplicity: a Web Worker for bakes and an IndexedDB page cache. Revisit only if a measured bake
    exceeds the §8.5 budgets.
-7. World lane (not wired yet): monster techniques / auto-attacks / telegraphs (`monsterTelegraph(+End)`, the tell
-   pieces, `deriveAttackVfx`), player statuses and hurt sparks (`playerHurt`), death pops (Combat.kill still runs
-   the alpha / fractional scaleY tween), enrage, the player's buff-ring Graphics in Player.sync (they now double the
-   aura loop), MapScene / Interactions legacy `fxRing` / `fxBurst`, local hit-stop on the monster integrator, the
-   TintArbiter and art/monsters.ts hide colours (§8.6 items 3, 4, 7). The legacy fx helpers they use stay in
-   SkillSystem until then.
+7. ~~World lane~~ (done, §8.9): monster techniques, auto-attacks and telegraphs (rasterised at the hit-test geometry),
+   player statuses and hurt impacts, death and spawn pops, enrage, the Tier III and buff auras (Player.sync's rings are
+   gone), Interactions' world moments, victim-local hit-stop, impact frames, squash, recoil, kicks and the camera rig.
+   Still open: art/monsters.ts hide colours for death chips (they use the dust ramp), shock / DoT tick tints, Monster's
+   fractional breath squash and the player's stunned wobble (actors lane), MapScene's portal-reveal shake (it goes
+   through the rig's `install()` shim; the scene keeps its one seam), shade_cloak's alpha.
 8. Settings UI: "Reduce shake & flashes" exists on the runtime (`setReduceFlash`, persisted in localStorage,
    defaulting to `prefers-reduced-motion`); the toggle in the settings panel is the UI lane's.
-9. Device gate (§11.3) still pending: SwiftShader numbers in §8.8 are a regression check only.
+9. Device gate (§11.3) still pending: SwiftShader numbers in §8.8 / §8.10 are a regression check only.
+10. From the in-game QA pass (§8.10): single-frame VFX peaks of 4-20 ms (in-frame bakes and per-hop bolt canvases)
+    exceed the 3 ms frame budget although the EMA stays inside it; big rings (r > 128, ~90 chunks each) eat the bob
+    share — 20 px chunks for them would halve it; trying many different skills in one session churns the 4-page atlas
+    (the first cast of a newly learnt big skill plays the fallback while it bakes; the bar's warm set is fine);
+    shadowstep's blink shows nothing for its first ~80 ms (no departure tell); in QA a puddlewisp water spit flown at
+    a player on the same ground row never hit (gameplay, MonsterSkills shot height vs PLAYER_R: not changed here).

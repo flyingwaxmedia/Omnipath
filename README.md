@@ -1,84 +1,167 @@
 # Omnipath
 
-A mobile-first 2D open-world action RPG in the spirit of early-2000s MMOs. Your skills are never picked from a menu. You discover them.
+An original 2D pixel-art action RPG made for the iPad and phones (it also plays in any desktop browser). You never
+pick skills from a menu: you **discover** them by fighting, exploring and helping the people of the vale.
 
-- **Master**: every attack you make trains the skill it came from.
-- **Morph**: at max rank, a skill can morph into a new form, and you keep the original. Slash can become Whirlwind or Sword Throw.
-- **Discover elements** by doing things in the world: forging, fishing, mining, meditating, hunting a boss.
-- **Fuse**: combine elements and skills at the altar. Fire + Whirlwind makes **Flame Spin**, and Flame Spin + Tornado makes **Firestorm**.
-- **Become a class**: classes are revealed automatically when your skill collection matches a hidden pattern (Blademaster, Pyroblade, Spellblade, Elementalist, … 16 in total).
+- **Master** a skill by using it: its stars fill up as you fight.
+- **Transform** a skill at full rank into a new one, and keep the old one too. Slash becomes Whirlwind or Sword Throw.
+- **Find elements** by doing things: forging, fishing, mining, meditating, hunting a warden.
+- **Fuse** skills and elements at the altar. Fire + Whirlwind makes **Flame Spin**; Flame Spin + Tornado makes
+  **Firestorm**.
+- **Become a class.** Classes unlock by themselves when the skills you know fit a pattern. A class puts its own
+  skills on your bar and changes your outfit. There are 30 classes in three tiers.
+- **Help everyone.** Every NPC has quests, and trainers teach their skills only as quest rewards.
 
-The full game design, including the road to multiplayer, is in [`docs/DESIGN.md`](docs/DESIGN.md).
+Everything you see and hear (tiles, characters, monsters, icons, effects, sounds) is generated in code when the game
+starts. The game ships no image or audio files.
 
-## Play
+| | iPad (1180×820) | Phone (390×844) |
+|---|---|---|
+| **Hearthvale**, the starting town | <img src="docs/screenshots/hearthvale-ipad.png" width="440" alt="Hearthvale on iPad"> | <img src="docs/screenshots/hearthvale-phone.png" width="150" alt="Hearthvale on a phone"> |
+| **Mirror Lake** | <img src="docs/screenshots/mirror-lake-ipad.png" width="440" alt="Mirror Lake on iPad"> | <img src="docs/screenshots/mirror-lake-phone.png" width="150" alt="Mirror Lake on a phone"> |
+| **Gloomwood** | <img src="docs/screenshots/gloomwood-ipad.png" width="440" alt="Gloomwood on iPad"> | <img src="docs/screenshots/gloomwood-phone.png" width="150" alt="Gloomwood on a phone"> |
+| **Hollow Barrow**, a dungeon | <img src="docs/screenshots/hollow-barrow-ipad.png" width="440" alt="Hollow Barrow on iPad"> | <img src="docs/screenshots/hollow-barrow-phone.png" width="150" alt="Hollow Barrow on a phone"> |
+| **Stormbreak**, Thunderhoof's arena | <img src="docs/screenshots/stormbreak-ipad.png" width="440" alt="Stormbreak on iPad"> | <img src="docs/screenshots/stormbreak-phone.png" width="150" alt="Stormbreak on a phone"> |
+| **Riftmarch**, beyond the Rift | <img src="docs/screenshots/riftmarch-ipad.png" width="440" alt="Riftmarch on iPad"> | <img src="docs/screenshots/riftmarch-phone.png" width="150" alt="Riftmarch on a phone"> |
+
+## Play it on an iPad or phone
+
+**Same Wi-Fi as your computer**
 
 ```bash
 npm install
-npm run dev          # http://localhost:5173 (also exposed on your LAN, so you can open it on a phone)
+npm run dev          # prints a Network: URL such as http://192.168.1.20:5173
 ```
 
-### On an iPad or phone
+Open the `Network:` URL in Safari on the iPad. For fullscreen, use Share → **Add to Home Screen** and start the
+game from its icon.
 
-- **Same Wi-Fi as your computer:** run `npm run dev`. Vite prints a `Network:` URL like `http://192.168.1.20:5173`; open that in Safari on the iPad. For fullscreen, use Share → **Add to Home Screen**.
-- **One-file build:** `npm run build:single` writes `dist-single/omnipath.html`. The game is inlined and Phaser loads from a CDN, so you can put the file on any static host (Netlify Drop, GitHub Pages, …) and open the URL on the device.
-
-- Add `?fast` to the URL (e.g. `http://localhost:5173/?fast`) to speed up mastery for testing.
-- Saves go to `localStorage`. To start over, use **Journal → Start a new character**.
-
-### Controls (touch or mouse)
-
-| Action | How |
-|---|---|
-| Move | Tap the ground |
-| Attack | Tap a monster (auto-attacks), or press the big round button |
-| Use a skill | Tap a hotbar slot |
-| Talk / gather | Tap an NPC, ore vein, shrine, or fishing spot |
-| Skills, morphs, hotbar | 📖 Skills |
-| Fuse | ⚗️ Fuse |
-| Classes | 🏛️ Class |
-
-### Things to discover in the prototype
-
-| Where | What |
-|---|---|
-| Brann the Smith (Hearthvale) | Forge with ore → 🔥 Fire. Also sells other weapons. |
-| Mirror Lake pier | Fish → 💧 Water |
-| Greystone Quarry | Mine ore → ⛰️ Earth (and a hidden Slash morph) |
-| Shrine of Winds (Windcrest Hill) | Meditate → 🍃 Wind (and a hidden Bolt morph) |
-| Gloomwood | Defeat Gloomcaps, then visit the obelisk → 🌑 Shadow |
-| Sister Alba (Hearthvale) | Heals you. Grants ✨ Holy once you carry 3 elements. |
-| Old Hermit Oru (west) | Teaches Meditation after you master a skill |
-| Thunderhoof (Stormbreak Plateau) | Boss. Drops ⚡ Lightning and a skill tome. |
-| Gustlings | Sometimes drop the Tome of Quickstep |
-
-## Develop
+**One file you can host anywhere**
 
 ```bash
-npm test             # Vitest: rules, content integrity, world reachability
-npm run typecheck
-npm run build        # outputs dist/
-npm run build:single # one self-contained HTML file in dist-single/
+npm run build:single # writes dist-single/omnipath.html (about 1.4 MB)
 ```
 
-```
-src/core   rules engine: mastery, morphs, fusion, classes, combat (no Phaser/DOM, so it can run on a server)
-src/data   all content: skills, morphs, recipes, elements, classes, monsters, weapons
-src/game   Phaser client: procedural world, entities, skill effects
-src/ui     DOM overlay: HUD, hotbar, Grimoire, Fusion Altar, dialogs, minigames
-tests      unit tests
+The game, its CSS and its two pixel fonts are inside that one HTML file; only Phaser loads from the jsDelivr CDN.
+Put the file on any static host (Netlify Drop, GitHub Pages, …) and open the URL on the device.
+
+The game saves by itself (in the browser's `localStorage`). To start over: **☰ Menu → New game**.
+
+## How to play
+
+| Do this | How |
+|---|---|
+| **Move** | Tap the ground. There is no joystick: you walk to wherever you tap. |
+| **Talk, gather, travel** | Tap an NPC, an ore vein, a fishing spot, a shrine or a portal. You walk there and use it. |
+| **Attack** | Tap the big **⚔** button for one swing. Hold it to keep swinging. Tapping a monster picks it as your target and walks you to it. **Target** picks the next closest monster. |
+| **Use a skill** | Tap its slot in the bar at the bottom. With two thumbs you can tap two slots at once. |
+| **AUTO** | One on/off switch next to ⚔. When it is on, you fight by yourself: the basic attack and every skill on your bar. When it is off, nothing happens unless you tap. Your own taps always win. |
+| **Heal, Recall, Rest** | The round buttons on the left. Rest makes you recover much faster until you move. |
+
+### The skill bar: class slots and your slots
+
+The bar has **8 slots**. The **5 on the left are class slots**: they carry your class's emblem and the class fills
+them by itself with related skills. The **3 on the right are your slots**: hold one (or tap an empty one) to pick any
+skill you like from a grid of icons. Hold a class slot to see that skill's card. With no class, all 8 slots are yours.
+
+Skills you learn work with **any weapon**. Only the basic attack (Slash, Quick Stab, Arcane Bolt) comes from the weapon you hold.
+
+### Classes equip themselves
+
+- A class unlocks when the skills you know fit its pattern; you get one card: "New class: Pyroblade".
+- Your first class is put on for you. Later, open **Class** and tap **Become** on any unlocked class (not in the
+  middle of a fight).
+- Becoming a class fills the 5 class slots with its best related skills, changes your outfit, and shows one line:
+  "All class slots filled", "3 class skills equipped", or what to learn when it has nothing to use yet.
+- New related skills you learn drop into the class slots by themselves, or replace a weaker one, with a short toast.
+
+### The Star Chart (Skills button)
+
+Every skill is a star in a night sky: the sword, dagger and staff constellations, the elements at the centre, and the
+techniques, wild echoes and class signatures around them. Drag to look around, pinch to zoom, tap a star to see its
+card. A card always has **one** button: **Equip**, **Transform** when the skill is ready, or the next step ("Reach rank
+10 to transform."). Unknown stars show a **?** only when they are one step away from something you know.
+
+### Quests
+
+Every NPC has quests. The marks above their heads mean: gold **!** a new quest, gold **?** ready to turn in, grey
+**…** in progress. Talk to them to accept, check and complete. Your quests and the next discoveries show in the
+**Pursuits** list on the right (tap one to open it); the **Codex → Quests** tab has all of them. Trainers teach their
+techniques only as quest rewards.
+
+### Growing stronger
+
+- **Mastery:** using a skill ranks it up (★). At full rank it can **Transform** (✨) into a new skill.
+- **Elements:** forge with Brann in Hearthvale (Fire), fish at Mirror Lake (Water), mine at Greystone Quarry (Earth),
+  meditate at the Shrine of Winds (Wind), clear the guardians of the obelisk in Gloomwood (Shadow), beat Thunderhoof at Stormbreak
+  (Lightning), and visit Sister Alba once you carry three (Holy). Fusing elements makes Ice, Magma, Storm and Twilight.
+- **Fuse:** the **Fuse** button appears after your first element. Combine skills and elements at the altar; failed
+  tries whisper hints.
+
+### Menu (☰)
+
+Sound on/off and volume, **Reduce shake & flashes** (calmer screen shake, no screen flashes), and New game.
+
+### Keyboard and mouse (desktop)
+
+| Key | Does |
+|---|---|
+| Click | Move / talk / pick a target |
+| `1`–`8` | Use the skill in that slot |
+| `Space` | Attack (hold to keep swinging) |
+| `A` | AUTO on/off |
+| `M` | Show or hide the minimap |
+
+## Build, test and check
+
+```bash
+npm install
+npm run dev            # dev server with hot reload, open on your LAN
+npm test               # Vitest: rules, content integrity, world, quests, HUD layout, star chart, VFX, audio
+npm run typecheck      # tsc --noEmit
+npm run build          # typecheck + production build into dist/
+npm run preview        # serve dist/ (add --port 4173)
+npm run build:single   # one self-contained HTML file in dist-single/
 ```
 
-All art is generated in code when the game boots (`src/game/textures.ts`), so the repo has no binary assets. To use real sprites, replace the texture keys.
+Browser playtest (Playwright; it starts a new game, opens every panel, becomes a class, plays a quest, fights, walks
+through portals and warps through all 28 maps):
+
+```bash
+npm run build && npx vite preview --port 4173 --strictPort &
+node scripts/playtest.mjs http://localhost:4173/ --device ipad              # 1180x820 @2
+node scripts/playtest.mjs http://localhost:4173/ --device phone             # 390x844 @3
+node scripts/playtest.mjs http://localhost:4173/ --device phone-landscape   # 844x390 @3
+```
+
+Add `--quick` for a shorter run and `--shots <dir>` to save screenshots. `node scripts/vfx-sheets.mjs` writes contact
+sheets of every spell effect.
+
+URL options: `?fast` speeds up mastery for testing; `?k=3` forces the pixel scale.
+
+## Code map
+
+```
+src/core     the rules: mastery, transforms, fusion, classes, quests, combat, saves (no Phaser or DOM, so a server can run it)
+src/data     all content: 160 skills, 30 classes, 55 quests, 41 monsters, 11 elements, 28 maps
+src/game     the Phaser client: procedural pixel art (art/), pixel-perfect rendering (render/), actors (entities/),
+             combat and interactions (systems/), spell effects (vfx/), procedural sound (audio/), scenes
+src/ui       the DOM overlay: HUD, skill bar and picker, Star Chart, panels (Class, Codex, Bag, Fuse, Map), dialogs
+tests        Vitest suites
+scripts      playtest, single-file build, VFX contact sheets
+docs         design and build specs (start with docs/DESIGN.md)
+```
 
 ### Adding a skill
 
-1. Add a `SkillDef` to `src/data/skills.ts`.
-2. Connect it with a morph (`src/data/morphs.ts`), a fusion recipe (`src/data/recipes.ts`), a class grant, or an item.
-3. Run `npm test`. It fails on broken references, duplicate recipes, or skills that can't be reached.
+1. Add a `SkillDef` to the right file in `src/data/skills/`.
+2. Connect it: a transform (`src/data/morphs/`), a fusion recipe (`src/data/recipes/`), a class signature, a quest
+   reward or an item.
+3. Run `npm test`. It fails on broken references, duplicate recipes, and skills that can't be reached.
 
-## Ship to phones
+## Ship to phones as an app
 
-The game is a PWA. You can open it in a mobile browser and "Add to Home Screen". To build native apps, wrap it with [Capacitor](https://capacitorjs.com/):
+The game is a PWA. To build native apps, wrap `dist/` with [Capacitor](https://capacitorjs.com/):
 
 ```bash
 npm i @capacitor/core @capacitor/cli @capacitor/android @capacitor/ios
@@ -86,3 +169,9 @@ npx cap init Omnipath com.example.omnipath --web-dir dist
 npm run build && npx cap add android && npx cap add ios
 npx cap sync && npx cap open android   # or: npx cap open ios
 ```
+
+## Credits
+
+All art and sound are original and generated in code. Fonts: Pixelify Sans and Tiny5 (SIL Open Font License, see
+`public/licenses/`). Sound synthesis: ZzFX by Frank Force (MIT). Details in
+[`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md).

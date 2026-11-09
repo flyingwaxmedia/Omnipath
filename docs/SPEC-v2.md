@@ -312,13 +312,20 @@ Simple and automatic: **pick a class and it equips its own skills.**
      else fits);
   4. only when nothing related is known does a class slot stay empty.
   "Best" = higher tier, then higher rank, then the class's own signature skills, then most recently learned, then id.
-  A class pick already sitting in one of **your** slots moves into the class slot and frees your slot (no duplicates,
-  nothing lost); your other picks stay where they are. Coming from "No class", the player's old picks in slots 1–5
-  move into your empty slots while there is room. Refreshes that are not a change of class (equipping or clearing one
-  of your slots, loading a save) never touch your slots.
+  A class pick already sitting in one of **your** slots moves into the class slot and frees your slot (no duplicates);
+  your other picks stay where they are. On EVERY change of class the skills the new class pushes out of slots 1–5 move
+  into your empty slots while there is room, and any slot of yours still empty takes your most recently used skill
+  that is not on the bar (auto-equip: no empty slot of yours while unused skills are known). A skill an active quest
+  asks you to use ("Use Rising Kick 0/8") is picked ahead of the class's other picks.
+  Refreshes that are not a change of class (equipping or clearing one of your slots, loading a save) never touch your
+  slots and only fill EMPTY class slots: a filled class slot keeps its skill while the class relates to it, wherever it
+  ranks, so editing your slot never swaps a class skill. When a refresh fills a class slot the player emptied, one toast
+  names it ("Blademaster equipped Blindside").
 - **Learning a new related skill** while in a class drops it into an empty class slot, or replaces the weakest class
-  skill (the class's last pick) only when it is clearly better — a closer fit (pattern match over related) or, at the
-  same fit, a higher tier ("Pyroblade equipped Flame Spin"). Otherwise it drops into an empty slot of yours.
+  skill (the class's last pick; never one an active quest asks for) only when it is clearly better — a closer fit
+  (pattern match over related) or, at the same fit, a higher tier ("Pyroblade equipped Flame Spin"); the replaced skill
+  moves into an empty slot of yours when there is one. Otherwise it drops into an empty slot of yours. The result is
+  stable: the refresh after the next edit or reload keeps it.
 - The headline after becoming a class says what happened in one line: "All class slots filled", "3 class skills
   equipped", or, with nothing related known, "Learn fire skills to fill your class slots" (the class tree's main tag,
   in plain words).

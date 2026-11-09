@@ -53,17 +53,18 @@
   --medal: calc(64 * var(--px));
   --btn: calc(44 * var(--px));
   --plate-w: calc(164 * var(--px));
-  --pz-w: calc(200 * var(--px));
+  --pz-w: calc(176 * var(--px));
   --mm: calc(92 * var(--px));
   --ico: calc(32 * var(--px));
   --glyph: calc(24 * var(--px));
-  /* Pixel fonts (render lane): Pixelify Sans is crisp at 11 / 22 px and fine from 14 px; Tiny5 at 8 / 16 px. */
+  /* Pixel fonts (render lane): Pixelify Sans is crisp at 11 / 22 px and fine from 14 px; Tiny5 only at 8 / 16 px
+     (--fs-num, --fs-tiny: HP / SP numbers, the level badge, counts). */
   --fs: calc(11 * var(--px));
   --fs-s: calc(11 * var(--px));
   --fs-zone: calc(14 * var(--px));
   --fs-big: calc(22 * var(--px));
   --fs-tiny: calc(8 * var(--px));
-  --fs-num: calc(10 * var(--px));
+  --fs-num: calc(8 * var(--px));
   --vb-h: calc(15 * var(--px));
   --h-ink: #f2e6c9;
   --h-mute: #b9a98a;
@@ -82,6 +83,9 @@
   font-size: var(--fs);
   color: var(--h-ink);
   line-height: 1.2;
+  /* Inherited: every 9-slice border-image frame and background frame samples nearest-neighbour (crisp bevels, no
+     seam in a stretched centre), like the icons and the world. */
+  image-rendering: pixelated;
 }
 
 /* Portrait phones: two rows of buttons, two rows of skill slots, a smaller medallion. */
@@ -99,7 +103,7 @@
   --mm: calc(88 * var(--px));
   --fs: calc(11 * var(--px));
   --fs-zone: calc(14 * var(--px));
-  --fs-num: calc(10 * var(--px));
+  --fs-num: calc(8 * var(--px));
   --vb-h: calc(14 * var(--px));
 }
 
@@ -126,7 +130,7 @@
   --mm: calc(84 * var(--px));
   --fs: calc(11 * var(--px));
   --fs-zone: calc(14 * var(--px));
-  --fs-num: calc(10 * var(--px));
+  --fs-num: calc(8 * var(--px));
   --vb-h: calc(14 * var(--px));
 }
 
@@ -144,7 +148,7 @@
   --mm: calc(112 * var(--px));
   --fs: calc(14 * var(--px));
   --fs-zone: calc(22 * var(--px));
-  --fs-num: calc(12 * var(--px));
+  --fs-num: calc(16 * var(--px));
   --vb-h: calc(18 * var(--px));
 }
 
@@ -509,6 +513,10 @@
   margin-left: calc(var(--medal) * -0.28);
   margin-top: calc(var(--medal) * 0.06);
   padding: calc(1 * var(--px)) calc(6 * var(--px)) calc(3 * var(--px)) calc(var(--medal) * 0.28 + calc(2 * var(--px)));
+  /* Whole art px everywhere (the medallion fractions land between pixels): the frame's pixels stay even. */
+  margin-left: round(nearest, calc(var(--medal) * -0.28), var(--px));
+  margin-top: round(nearest, calc(var(--medal) * 0.06), var(--px));
+  padding-left: round(nearest, calc(var(--medal) * 0.28 + calc(2 * var(--px))), var(--px));
 }
 
 .me-plate .me-name {
@@ -517,6 +525,7 @@
   align-items: baseline;
   font-weight: 700;
   font-size: var(--fs);
+  line-height: calc(var(--fs) + 3 * var(--px));
   white-space: nowrap;
   overflow: hidden;
   text-shadow: var(--h-line);
@@ -681,10 +690,10 @@
 /* ------------------------------------------------------------------ top-centre: zone plate, target, toasts */
 
 .hud-centre {
+  /* left / top / width: the layout pass (whole device px, whole art px wide; no translate, so no half pixels) */
   position: absolute;
   left: 50%;
   top: calc(var(--m) + var(--safe-t));
-  transform: translateX(-50%);
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -696,20 +705,57 @@
 .hud-layer .zone-banner {
   display: flex;
   flex-direction: column;
-  align-items: center;
+  align-items: stretch;
+  flex: none;
   min-width: calc(44 * var(--px));
   min-height: calc(44 * var(--px));
+  transition:
+    opacity 0.6s,
+    visibility 0s;
+}
+
+/* No room for the full plate: its level band and pill step aside (the map shows them). */
+.zone-banner.compact .zb,
+.zone-banner.compact .zt {
+  display: none;
+}
+
+/* Portrait: the plate names the place on arrival, then fades (the minimap stays); the strip stays on the map. */
+:where(.hud-port) .hud-layer .zone-banner.faded {
+  opacity: 0;
+  visibility: hidden;
+  transition:
+    opacity 0.6s,
+    visibility 0s 0.6s;
+}
+
+/* …then it leaves the column (Hud.armZoneFade): the target plate takes its place in the top band. */
+:where(.hud-port) .hud-layer .zone-banner.faded.gone {
+  display: none;
+}
+
+:where(.hud-port) .hud-layer .zone-banner .zone-strip {
+  display: none;
 }
 
 .zone-banner .zone-plate {
   display: flex;
   align-items: center;
+  justify-content: center;
+  min-width: 0;
+  /* whole art px line boxes: the framed plate is a whole number of art px tall */
+  line-height: calc(14 * var(--px));
   gap: calc(6 * var(--px));
   padding: calc(1 * var(--px)) calc(6 * var(--px)) calc(2 * var(--px)) calc(8 * var(--px));
   white-space: nowrap;
 }
 
 .zone-banner .zn {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding: calc(1 * var(--px));
+  line-height: calc(18 * var(--px));
   font-size: var(--fs-zone);
   font-weight: 700;
   text-shadow: var(--h-line);
@@ -731,6 +777,8 @@
 .zone-banner .zone-strip {
   display: flex;
   align-items: center;
+  justify-content: center;
+  line-height: calc(14 * var(--px));
   gap: calc(5 * var(--px));
   margin-top: calc(-1 * var(--px));
   padding: calc(1 * var(--px)) calc(10 * var(--px)) calc(2 * var(--px));
@@ -806,11 +854,17 @@
   }
 }
 
-/* target plate */
+/* target plate (hidden while nothing is fought: a full-HP target left alone for a few seconds goes .idle) */
 .hud-layer .target {
+  flex: none;
+  line-height: calc(14 * var(--px));
   min-width: calc(190 * var(--px));
   padding: 0 calc(6 * var(--px)) calc(2 * var(--px));
   pointer-events: none;
+}
+
+.hud-layer .target.idle {
+  display: none;
 }
 
 .target .tg-top {
@@ -962,12 +1016,19 @@
 
 /* toasts */
 .hud-layer .toasts {
+  /* Placed by the layout pass: under the zone plate (landscape) or rising from above the skill bar (portrait, .rise) */
+  position: absolute;
+  left: var(--toast-x, 50%);
+  top: var(--toast-top, 30%);
+  bottom: var(--toast-bottom, auto);
+  transform: translateX(-50%);
+  width: max-content;
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: calc(4 * var(--px));
   max-width: var(--centre-w, 92vw);
-  transform: translateX(var(--toast-dx, 0px));
+  pointer-events: none;
 }
 
 /* Short landscape screens: two single-line toasts at most, so they never bury the hero. */
@@ -1095,27 +1156,40 @@
   transform: translateY(calc(1 * var(--px)));
 }
 
+/* "Something new here": a red pixel pip with a '!' and a 1 art px dark outline. It bobs one whole art pixel (steps,
+   never a scale: a scaled pip resamples into blur). */
 .hud-right .menu .badge {
   display: none;
   position: absolute;
   top: calc(-6 * var(--px));
   right: calc(-6 * var(--px));
-  width: calc(10 * var(--px));
-  height: calc(10 * var(--px));
-  background: var(--h-gold);
+  width: calc(9 * var(--px));
+  height: calc(11 * var(--px));
+  place-items: center;
+  font-family: var(--font-small);
+  font-size: calc(8 * var(--px));
+  font-style: normal;
+  line-height: 1;
+  color: #fff4d8;
+  background: #d8433f;
   box-shadow:
-    0 0 0 calc(1 * var(--px)) var(--h-out),
-    0 0 calc(6 * var(--px)) rgba(233, 196, 106, 0.9);
-  animation: badgepulse 1.4s ease-in-out infinite;
+    inset calc(-1 * var(--px)) calc(-1 * var(--px)) 0 #8e2228,
+    inset calc(1 * var(--px)) calc(1 * var(--px)) 0 #f49a84,
+    0 0 0 calc(1 * var(--px)) var(--h-out);
+  animation: badgebob 1.2s steps(1, end) infinite;
+}
+
+.hud-right .menu .badge::before {
+  content: '!';
 }
 
 .hud-right .menu .has-badge .badge {
-  display: block;
+  display: grid;
 }
 
-@keyframes badgepulse {
+@keyframes badgebob {
   50% {
-    transform: scale(1.3);
+    transform: translateY(calc(-1 * var(--px)));
   }
 }
 
@@ -1221,6 +1295,45 @@
 
 .pursuits:not(.open) .pz-list {
   display: none;
+}
+
+/* The tab, and under it (open list only) "+N": the rows that did not fit; tap → the quest log. */
+.pursuits .pz-side {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: calc(4 * var(--px));
+  flex: none;
+}
+
+.hud-layer .pz-more {
+  width: calc(44 * var(--px));
+  height: calc(44 * var(--px));
+  display: grid;
+  place-items: center;
+  font-family: var(--font-ui);
+  font-size: var(--fs-zone);
+  font-weight: 700;
+  line-height: 1;
+  color: var(--h-gold);
+  text-shadow: var(--h-line);
+  background: rgba(20, 14, 10, 0.6);
+  border: calc(1 * var(--px)) solid rgba(176, 128, 58, 0.7);
+}
+
+.pursuits:not(.open) .pz-more,
+.hud-layer .pz-more.hidden {
+  display: none;
+}
+
+/* Rows: the card frame without its opaque centre, over a see-through fill (the field stays visible behind). */
+.hud-layer.ui-art .pursuits .pz-row {
+  border-image: var(--ui-frame-card) 5 / calc(5 * var(--px)) stretch;
+  background-color: rgba(20, 14, 10, 0.6);
+}
+
+.hud-layer:not(.ui-art) .pursuits .pz-row {
+  background: rgba(20, 14, 10, 0.6);
 }
 
 .hud-layer .pz-tab {
@@ -1385,15 +1498,24 @@
   color: #fff3c0;
 }
 
-.pz-row.ready .pz-ico::after {
-  content: '?';
-  position: absolute;
-  right: calc(-5 * var(--px));
-  top: calc(-7 * var(--px));
-  font-weight: 700;
-  font-size: calc(11 * var(--px));
-  color: var(--h-gold);
+/* Quest rows wear the NPC's own marker (the same art as over their heads): grey '…' while in progress, gold '?' when
+   ready to turn in ('!' only ever means "a new quest here"). One art px per HUD art px, like the world. */
+.pz-row .pz-ico img.qm {
+  width: calc(var(--w) * var(--px));
+  height: calc(var(--h) * var(--px));
+}
+
+.pz-row .pz-ico .qm-t {
+  font-family: var(--font-small);
+  font-size: calc(16 * var(--px));
+  font-weight: 400;
+  line-height: 1;
+  color: #d6d1c8;
   text-shadow: var(--h-line);
+}
+
+.pz-row.ready .pz-ico .qm-t {
+  color: var(--h-gold);
 }
 
 .pz-row:active {
@@ -1643,6 +1765,16 @@
   gap: var(--sgap);
 }
 
+/* Two-row bars split by group (layout(): barPlan): the class slots fill row 1, your slots sit centred under them;
+   the rows leave room for the class bracket between them. */
+.hotbar.split .slots {
+  row-gap: calc(var(--sgap) + 6 * var(--px));
+}
+
+.hotbar.split .slot.by-class + .slot.own {
+  grid-column-start: var(--own-col, auto);
+}
+
 .hud-layer .slot {
   position: relative;
   width: var(--slot);
@@ -1684,13 +1816,39 @@
   filter: brightness(1.6);
 }
 
-/* class slots: framed in the class colour, emblem in the corner */
-.hud-layer .slot.by-class {
+/* class slots: the same bronze frame as every slot, the class emblem in the corner and one bracket under the whole
+   group (2 art px, the class colour on bronze; each slot draws its part plus the gap before it, so the parts join).
+   --sb: the slot frame's border width. */
+.hud-layer .slot {
+  --sb: calc(7 * var(--px));
+}
+
+.hud-layer:not(.ui-art) .slot {
+  --sb: calc(2 * var(--px));
+}
+
+.hud-layer .slot.by-class::before {
+  content: '';
+  position: absolute;
+  left: calc(-1 * var(--sb) - var(--sgap));
+  right: calc(-1 * var(--sb));
+  top: calc(100% + var(--sb) + 2 * var(--px));
+  height: calc(2 * var(--px));
+  background: color-mix(in srgb, var(--cc) 70%, #b0803a);
   box-shadow:
-    0 0 0 calc(1 * var(--px)) var(--h-out),
-    0 0 0 calc(3 * var(--px)) color-mix(in srgb, var(--cc) 85%, #24180f),
-    0 0 0 calc(4 * var(--px)) var(--h-out),
-    inset 0 0 0 calc(1 * var(--px)) color-mix(in srgb, var(--cc) 70%, transparent);
+    0 calc(1 * var(--px)) 0 var(--h-out),
+    0 calc(-1 * var(--px)) 0 var(--h-out);
+  pointer-events: none;
+}
+
+.hud-layer .slot.by-class:first-child::before {
+  left: calc(-1 * var(--sb));
+}
+
+/* Two even rows (very narrow phones: the class row does not fit): no bracket (it would bend into an L); each class
+   slot keeps its emblem. */
+.hotbar.two:not(.split) .slot.by-class::before {
+  display: none;
 }
 
 .slot .emb {
@@ -1783,23 +1941,29 @@
   }
 }
 
+/* Cooldown: a light wedge over the icon (the icon stays readable, also with AUTO on) and, from 1 s left, the seconds
+   small in the lower-left corner (Tiny5 at its native 8 px). */
 .slot .cd {
   display: none;
   position: absolute;
   inset: 0;
-  background: conic-gradient(rgba(12, 8, 6, 0.78) calc(var(--cd, 0) * 360deg), rgba(12, 8, 6, 0.18) 0);
+  background: conic-gradient(rgba(12, 8, 6, 0.5) calc(var(--cd, 0) * 360deg), rgba(12, 8, 6, 0.1) 0);
   pointer-events: none;
 }
 
 .slot.cooling .cd {
-  display: grid;
-  place-items: center;
+  display: block;
 }
 
 .slot .cd b {
+  position: absolute;
+  left: calc(1 * var(--px));
+  bottom: calc(2 * var(--px));
   font-family: var(--font-small);
-  font-size: calc(16 * var(--px));
+  font-size: calc(8 * var(--px));
   font-weight: 400;
+  line-height: 1;
+  color: #fff;
   text-shadow: var(--h-line);
 }
 
@@ -1976,6 +2140,9 @@
   bottom: calc(var(--exp-h) + var(--m) + var(--safe-b));
   width: calc(var(--r) * 0.985 + var(--rnd) / 2 + var(--atk) / 2);
   height: calc(var(--r) * 0.985 + var(--rnd) / 2 + var(--atk) / 2);
+  /* whole art px (where round() exists), so the buttons placed from its edges land on whole art px too */
+  width: round(up, calc(var(--r) * 0.985 + var(--rnd) / 2 + var(--atk) / 2), var(--px));
+  height: round(up, calc(var(--r) * 0.985 + var(--rnd) / 2 + var(--atk) / 2), var(--px));
   pointer-events: none;
 }
 
@@ -2078,6 +2245,9 @@
   height: var(--rnd);
   left: calc(100% - var(--atk) / 2 + cos(var(--a)) * var(--r) - var(--rnd) / 2);
   top: calc(100% - var(--atk) / 2 + sin(var(--a)) * var(--r) - var(--rnd) / 2);
+  /* On the arc, snapped to whole art px (cos / sin land between pixels): even frame pixels at any DPR. */
+  left: round(nearest, calc(100% - var(--atk) / 2 + cos(var(--a)) * var(--r) - var(--rnd) / 2), var(--px));
+  top: round(nearest, calc(100% - var(--atk) / 2 + sin(var(--a)) * var(--r) - var(--rnd) / 2), var(--px));
   border-radius: 50%;
   display: grid;
   place-items: center;
@@ -2105,6 +2275,11 @@
 
 .cluster .rb.pot {
   --a: 280deg;
+}
+
+/* The SP potion: blue flask, "SP" caption; shown only while you carry one (like Fuse, it appears when it matters). */
+.cluster .rb.pot.none {
+  display: none;
 }
 
 .cluster .rb .g {
@@ -2406,6 +2581,30 @@
   top: 36%;
 }
 
+/* "See it": the banner's one button (only while it shows), opens the new skill's card. */
+.spark-banner .sb-see {
+  display: inline-block;
+  margin-top: calc(4 * var(--px));
+  min-width: calc(88 * var(--px));
+  min-height: calc(44 * var(--px));
+  padding: 0 calc(12 * var(--px));
+  font-size: var(--fs);
+  font-weight: 700;
+  color: #2a1c12;
+  background: var(--h-gold);
+  box-shadow:
+    inset calc(-2 * var(--px)) calc(-2 * var(--px)) 0 #a07830,
+    0 0 0 calc(1 * var(--px)) var(--h-out);
+}
+
+.hud-layer .spark-banner:not(.show) .sb-see {
+  pointer-events: none;
+}
+
+.spark-banner:not(.has-see) .sb-see {
+  display: none;
+}
+
 @keyframes sparkin {
   0% {
     opacity: 0;
@@ -2497,8 +2696,43 @@
   color: #e9c46a;
 }
 
-.sheet.hud-sheet .pk-tile.inclass {
-  opacity: 0.55;
+/* Skills your class already holds: not choices, just a small dimmed row under the grid. */
+.sheet.hud-sheet .pk-class {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  margin-top: 12px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(176, 128, 58, 0.35);
+}
+
+.sheet.hud-sheet .pk-class small {
+  color: #b9a98a;
+  font-size: 11px;
+}
+
+.sheet.hud-sheet .pk-mini {
+  display: flex;
+  gap: 4px;
+}
+
+.sheet.hud-sheet .pk-mini .inclass {
+  opacity: 0.5;
+  filter: grayscale(0.4);
+}
+
+.sheet.hud-sheet .pk-mini img {
+  display: block;
+  width: 32px;
+  height: 32px;
+  image-rendering: pixelated;
+}
+
+.sheet.hud-sheet .pk-acts {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 6px;
 }
 
 .sheet.hud-sheet .pk-tile .new {
@@ -2574,6 +2808,103 @@
   background: #7a1f26;
   border-color: #c0363a;
   color: #fff;
+}
+
+/* Settings rows (hud/settings.ts): a word on the left, a switch or a slider on the right. */
+.sheet.hud-sheet.menu-sheet .mn-set {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 12px 0 4px;
+  padding: 6px 0;
+  border-top: 1px solid rgba(233, 196, 106, 0.18);
+  border-bottom: 1px solid rgba(233, 196, 106, 0.18);
+}
+
+.sheet.hud-sheet.menu-sheet .mn-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 48px;
+  font-size: 16px;
+  color: #f2e6c8;
+}
+
+.sheet.hud-sheet.menu-sheet .mn-sw {
+  flex: none;
+  min-width: 72px;
+  height: 44px;
+  padding: 0 12px;
+  border: 2px solid #5b4a32;
+  border-radius: 4px;
+  background: #241a10;
+  color: #b9a98a;
+  font-weight: 700;
+}
+
+.sheet.hud-sheet.menu-sheet .mn-sw.on {
+  border-color: #e9c46a;
+  background: #3a2c14;
+  color: #ffe6a0;
+}
+
+.sheet.hud-sheet.menu-sheet .mn-vol input {
+  flex: 1 1 auto;
+  max-width: 220px;
+  height: 44px;
+  margin: 0;
+  background: transparent;
+  accent-color: #e9c46a;
+  -webkit-appearance: none;
+  appearance: none;
+  touch-action: pan-y;
+}
+
+.sheet.hud-sheet.menu-sheet .mn-vol input::-webkit-slider-runnable-track {
+  height: 8px;
+  border-radius: 2px;
+  background: linear-gradient(90deg, #e9c46a var(--v, 0%), #5b4a32 var(--v, 0%));
+}
+
+.sheet.hud-sheet.menu-sheet .mn-vol input::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 24px;
+  height: 28px;
+  margin-top: -10px;
+  border: 2px solid #24180f;
+  border-radius: 3px;
+  background: #e9c46a;
+}
+
+.sheet.hud-sheet.menu-sheet .mn-vol input::-moz-range-track {
+  height: 8px;
+  border-radius: 2px;
+  background: linear-gradient(90deg, #e9c46a var(--v, 0%), #5b4a32 var(--v, 0%));
+}
+
+.sheet.hud-sheet.menu-sheet .mn-vol input::-moz-range-thumb {
+  width: 24px;
+  height: 28px;
+  border: 2px solid #24180f;
+  border-radius: 3px;
+  background: #e9c46a;
+}
+
+.sheet.hud-sheet.menu-sheet .mn-vol.off {
+  opacity: 0.5;
+}
+
+/* "Reduce shake & flashes": the HUD's flashing pulses stop (the world's shake and flashes are the VFX runtime's). */
+#hud-root.reduce-flash .hud-layer .vb.hp.low i,
+#hud-root.reduce-flash .zone-banner.arrive .zone-plate,
+#hud-root.reduce-flash .target.boss.enraged,
+#hud-root.reduce-flash .pz-tab.nudge,
+#hud-root.reduce-flash .slot.tapped .ico,
+#hud-root.reduce-flash .slot.autofire .ico,
+#hud-root.reduce-flash .atk.autofire .g,
+#hud-root.reduce-flash .ccards3.flash {
+  animation: none;
 }
 
 /* ------------------------------------------------------------------ motion */

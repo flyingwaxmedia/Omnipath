@@ -113,6 +113,8 @@ export class Monster {
   private recoilQ: { x: number; y: number }[] = [];
   private holdUntil = 0;
   private held: { x: number; y: number } | null = null;
+  /** After a hold the sprite catches up with the body over a few frames (no one-frame snap after a knockback). */
+  private lag = { x: 0, y: 0 };
   private _label: WorldLabel | null = null;
   private lastX: number;
   private lastY: number;
@@ -276,16 +278,23 @@ export class Monster {
       this.stillFor = 0;
     } else if ((this.stillFor += dt) > 0.12) this.moving = false;
     const held = now < this.holdUntil && this.held !== null;
-    if (!held) this.held = null;
+    if (!held && this.held) {
+      this.lag = { x: this.held.x - this.x, y: this.held.y - this.y };
+      this.held = null;
+    }
     if (!held) this.bob += dt * (this.stunned ? 0 : this.enraged ? 9 : 6);
+    if (!held && (this.lag.x || this.lag.y)) {
+      this.lag.x = Math.abs(this.lag.x) < 1 ? 0 : this.lag.x * 0.45;
+      this.lag.y = Math.abs(this.lag.y) < 1 ? 0 : this.lag.y * 0.45;
+    }
     // The frames carry the motion now: only a faint breath on walkers, none on flyers.
     const breath = this.hover || this.moving ? 1 : 1 + Math.sin(this.bob) * 0.02;
     const scale = this.baseScale;
     // Recoil: whole pixels along the blow, held through the hit-stop, then home one step per frame.
     const rc = this.recoilQ[0];
     if (rc && !held) this.recoilQ.shift();
-    const bx = held ? this.held!.x : this.x;
-    const by = held ? this.held!.y : this.y;
+    const bx = held ? this.held!.x : this.x + this.lag.x;
+    const by = held ? this.held!.y : this.y + this.lag.y;
     this.sprite.setPosition(Math.round(bx) + (rc?.x ?? 0), Math.round(by) + (rc?.y ?? 0));
     this.sprite.setFlipX(this.facing < 0);
     if (this.squashF > 0) {

@@ -152,6 +152,8 @@ export interface Launch {
   /** Parametric path data (orbit radius / phase, path bow). */
   a: number;
   r: number;
+  /** Orbit / spiral ground aspect (the placement's; the hand orbit defaults to 0.5). */
+  asp?: number;
 }
 
 /** Launch parameters for mote k of n. `to` is the stream target (path pattern: back to the caster). */
@@ -182,9 +184,9 @@ export function launch(p: VfxPiece, k: number, n: number, ang: number, rng: Rng,
     case 'fall':
       return { ...base, x: (rng() - 0.5) * (R || 10) * 2, y: -10 - rng() * 6, vx: (rng() - 0.5) * 8, vy: 20, g: 160 };
     case 'orbit':
-      return { ...base, mode: 'orbit', a: (k / n) * TAU, r: R || 10 };
+      return { ...base, mode: 'orbit', a: (k / n) * TAU, r: R || 10, asp: pl?.aspect ?? 0.5 };
     case 'spiral':
-      return { ...base, mode: 'spiral', a: (k / n) * TAU + rng(), r: R || 24 };
+      return { ...base, mode: 'spiral', a: (k / n) * TAU + rng(), r: R || 24, asp: pl?.aspect ?? 0.65 };
     case 'converge':
       return { ...base, mode: 'converge', a: (k / n) * TAU, r: R || 24 };
     case 'rim': {

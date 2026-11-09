@@ -6,7 +6,21 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { SkillBook } from '../src/core/skillbook';
 import { createRegistry } from '../src/data';
 import { gameBus, type BarChangedEvent } from '../src/game/events';
-import { classBeats, classSlotsFor, fillClassSlots, firstEmpty, padBar, placeLearned, refillClassSlots, slotLearned } from '../src/game/loadout';
+import { barEligible } from '../src/core/classes';
+import {
+  backfillOwn,
+  becomeRefill,
+  classBeats,
+  classSlotsFor,
+  fillClassSlots,
+  firstEmpty,
+  padBar,
+  placeLearned,
+  preferFirst,
+  refillClassSlots,
+  slotLearned,
+  spareSkills,
+} from '../src/game/loadout';
 import { HOTBAR_SIZE, Session } from '../src/game/session';
 
 const reg = createRegistry();
@@ -73,6 +87,32 @@ describe('fillClassSlots (pure)', () => {
     expect(r.dropped).toEqual(['d', 'e']);
   });
 
+  it('stable: a filled class slot keeps its skill wherever it ranks (an edit of your slot never swaps one)', () => {
+    // p5 just left your slot 8 (you put "mine" there): the class keeps p6 instead of swapping it for p5.
+    const bar = ['p1', 'p2', 'p3', 'p6', 'p4', E, E, 'mine'];
+    const r = fillClassSlots(bar, ['p1', 'p2', 'p3', 'p4', 'p5', 'p6', 'p7'], { classSlots: 5, stable: true });
+    expect(r.changed).toEqual([]);
+    expect(r.bar).toEqual(bar);
+    // Only an EMPTY class slot takes a pick: the best one that is not on the bar.
+    const gap = fillClassSlots(['p1', E, 'p3', 'p6', 'p4', 'p2', E, E], ['p1', 'p2', 'p3', 'p4', 'p5', 'p6'], { classSlots: 5, stable: true });
+    expect(gap.bar).toEqual(['p1', 'p5', 'p3', 'p6', 'p4', 'p2', E, E]);
+    expect(gap.changed).toEqual([1]);
+  });
+
+  it('quest skills: picked ahead of the class\'s other picks (become and refresh)', () => {
+    expect(preferFirst(['a', 'b', 'c', 'd'], 2, new Set(['d']))).toEqual(['a', 'd', 'b', 'c']);
+    expect(preferFirst(['a', 'b'], 2, new Set())).toEqual(['a', 'b']);
+    const become = fillClassSlots(Array(8).fill(E), ['p1', 'p2', 'p3', 'p4', 'p5', 'p6', 'quest'], { classSlots: 5, prefer: new Set(['quest']) });
+    expect(become.bar.slice(0, 5)).toEqual(['p1', 'p2', 'p3', 'p4', 'quest']);
+    const refresh = fillClassSlots(['p1', E, E, E, E, E, E, E], ['p1', 'p2', 'p3', 'quest'], { classSlots: 2, stable: true, prefer: new Set(['quest']) });
+    expect(refresh.bar.slice(0, 2)).toEqual(['p1', 'quest']);
+  });
+
+  it('backfillOwn: your empty slots take spare skills in order, never a class slot, never a duplicate', () => {
+    expect(backfillOwn(['a', E, E, 'b', E], 2, ['b', 'c', 'c', 'd', 'e'])).toEqual(['a', E, 'c', 'b', 'd']);
+    expect(backfillOwn(['a', E, 'x'], 2, [])).toEqual(['a', E, 'x']);
+  });
+
   it('fewer matches than class slots leave the rest empty; nothing to do changes nothing', () => {
     expect(fillClassSlots([E, E, E, E, E, E, E, E], [], { classSlots: 5 }).changed).toEqual([]);
     const same = fillClassSlots(['p1', E, E, E, E, E, E, E], ['p1'], { classSlots: 5, stable: true });
@@ -93,7 +133,7 @@ describe('placeLearned (pure)', () => {
   it('class full: it replaces the weakest class skill it beats (the one the class no longer picks)', () => {
     const r = placeLearned(['a', 'b', 'c', 'd', 'weak', E, E, E], 'n', picks(['n', 'a', 'b', 'c', 'd', 'weak']), 5)!;
     expect(r).toMatchObject({ reason: 'classLearned', slot: 4 });
-    expect(r.bar).toEqual(['a', 'b', 'c', 'd', 'n', E, E, E]);
+    expect(r.bar).toEqual(['a', 'b', 'c', 'd', 'n', 'weak', E, E]); // the replaced skill moves into your empty slot
   });
   it('class full: with a "clearly better" test, only a clearly better skill replaces the weakest', () => {
     const bar = ['a', 'b', 'c', 'd', 'weak', E, E, E];
@@ -103,7 +143,7 @@ describe('placeLearned (pure)', () => {
     expect(no.bar.slice(0, 5)).toEqual(['a', 'b', 'c', 'd', 'weak']);
     const seen: string[] = [];
     const yes = placeLearned(bar, 'n', order, 5, (x, y) => (seen.push(`${x}>${y}`), true))!;
-    expect(yes).toMatchObject({ reason: 'classLearned', slot: 4, changed: [4] });
+    expect(yes).toMatchObject({ reason: 'classLearned', slot: 4, changed: [4, 5] });
     expect(seen).toEqual(['n>weak']); // compared with the weakest class skill only
   });
   it('an empty class slot takes any skill the class picks, better or not', () => {
@@ -277,6 +317,116 @@ describe('Session bar: learning while in a class', () => {
     expect(beats('sword_throw', 'rising_kick')).toBe(true); // related over unrelated
     s.book.unwear();
     expect(classBeats(s)).toBeNull();
+  });
+});
+
+describe('Session bar: changing class and editing your slots (UX audit)', () => {
+  const BLADE_ARCANE = ['heavy_cleave', 'sword_throw', 'whirlwind', 'blade_aura', 'runic_blade', 'arcane_orb', 'firebolt', 'rising_kick'];
+
+  function unlocked(ids: string[], classes: string[]): Session {
+    const s = fresh('dagger');
+    for (const id of ids) s.book.learn(id, 'test');
+    for (const c of classes) s.book.state.classes[c] ??= { rank: 1, xp: 0, spent: {} };
+    bars.length = 0;
+    return s;
+  }
+
+  function become(s: Session, id: string): void {
+    expect(s.book.wear(id).ok).toBe(true);
+    becomeRefill(s); // views.becomeClass
+  }
+
+  it('become A, become B, become A: no slot of yours stays empty while unused known skills exist', () => {
+    const s = unlocked(BLADE_ARCANE, ['blademaster', 'spellblade']);
+    for (const c of ['blademaster', 'spellblade', 'blademaster', 'spellblade']) {
+      become(s, c);
+      const bar = s.player.hotbar;
+      const on = bar.filter(Boolean);
+      expect(new Set(on).size).toBe(on.length); // no duplicates
+      expect(bar.slice(0, 5).every(Boolean)).toBe(true); // the class filled its slots
+      if (spareSkills(s).length) expect(bar.slice(5).every(Boolean)).toBe(true); // …and none of yours is empty
+      const known = s.book.known().filter((k) => barEligible(k)).length;
+      expect(on.length).toBe(Math.min(known, bar.length)); // nothing lost while there is room
+    }
+  });
+
+  it('skills pushed out by the new class move into your empty slots (Sword Throw and Whirlwind stay on the bar)', () => {
+    const s = unlocked(BLADE_ARCANE, ['blademaster', 'spellblade']);
+    become(s, 'blademaster');
+    s.player.hotbar.splice(5, 3, E, E, E); // all three of your slots empty, as in the audit
+    const before = s.player.hotbar.slice(0, 5).filter((x): x is string => !!x);
+    become(s, 'spellblade');
+    const bar = s.player.hotbar;
+    for (const id of before) expect(bar).toContain(id);
+    expect(bar.slice(5).every(Boolean)).toBe(true);
+  });
+
+  it('putting a skill in your slot never swaps a class slot (Rising Kick stays while Blindside leaves)', () => {
+    const s = unlocked([...BLADE_ARCANE, 'backstab', 'flame_spin', 'rockslide_charge'], ['blademaster']);
+    become(s, 'blademaster');
+    const picks = s.book.classSkills('blademaster', 99);
+    expect(picks.length).toBeGreaterThan(5);
+    const bar = s.player.hotbar;
+    bar.splice(5, 3, E, E, E);
+    // You move the class's 2nd pick into your slot 8: the class takes its 6th pick for the gap (the audit's
+    // Rising Kick in class slot 4, Blindside in your slot 8).
+    bar[bar.indexOf(picks[1])] = null;
+    bar[7] = picks[1];
+    refillClassSlots(s, 'assign', { stable: true });
+    expect(bar.slice(0, 5)).toContain(picks[5]);
+    const cls = bar.slice(0, 5);
+    // Then you equip another skill into slot 8: the 2nd pick leaves the bar, and NO class slot changes.
+    bar[7] = 'arcane_orb' === picks[1] ? 'rising_kick' : 'arcane_orb';
+    bars.length = 0;
+    expect(refillClassSlots(s, 'assign', { stable: true })).toEqual([]); // views.equipSkill
+    expect(bar.slice(0, 5)).toEqual(cls);
+    expect(bars).toEqual([]);
+  });
+
+  it('a class skill moved into your slot leaves a gap the class fills, with one toast naming the new skill', () => {
+    const s = unlocked([...BLADE_ARCANE, 'flame_spin', 'rockslide_charge'], ['blademaster']);
+    become(s, 'blademaster');
+    s.player.hotbar.splice(5, 3, E, E, E);
+    const moved = s.player.hotbar[2]!;
+    s.player.hotbar[2] = null; // MapScene.assignSlot(5, moved): a move
+    s.player.hotbar[5] = moved;
+    bars.length = 0;
+    const changed = refillClassSlots(s, 'assign', { stable: true });
+    expect(changed).toEqual([2]);
+    expect(s.player.hotbar[2]).not.toBeNull();
+    expect(bars).toEqual([{ slots: [2], reason: 'assign', classId: 'blademaster', skillId: s.player.hotbar[2] }]);
+  });
+
+  it('a skill an active quest asks you to use is picked first and never swapped out by a new skill', () => {
+    const s = unlocked(BLADE_ARCANE, ['blademaster']);
+    const quest = [...s.reg.quests.values()].find((q) => q.objectives.some((o) => o.kind === 'use' && o.skill === 'rising_kick'));
+    expect(quest).toBeDefined();
+    s.book.state.quests!.active[quest!.id] = { progress: quest!.objectives.map(() => 0), acceptedAt: 0 };
+    become(s, 'blademaster');
+    expect(s.player.hotbar.slice(0, 5)).toContain('rising_kick');
+    s.player.hotbar.splice(5, 3, 'x1', 'x2', 'x3'); // your slots full
+    for (const id of ['flame_spin', 'rockslide_charge', 'spinning_assault']) s.book.learn(id, 'test');
+    expect(s.player.hotbar.slice(0, 5)).toContain('rising_kick');
+  });
+
+  it('learning uses the refresh rule: a stable refill right after any learn changes nothing', () => {
+    const pool = reg.authoredSkills().filter((k) => barEligible(k) && k.tier > 0).map((k) => k.id);
+    const classes = reg.classes.filter((c) => !c.hidden).map((c) => c.id);
+    let seed = 12345;
+    const rnd = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648;
+    for (let trial = 0; trial < 36; trial++) {
+      const cls = classes[trial % classes.length];
+      const s = unlocked([], [cls]);
+      become(s, cls);
+      for (let k = 0; k < 16; k++) {
+        const id = pool[Math.floor(rnd() * pool.length)];
+        if (s.book.has(id)) continue;
+        s.book.learn(id, 'test');
+        const before = [...s.player.hotbar];
+        expect(refillClassSlots(s, 'load', { stable: true }), `${cls} after ${id}`).toEqual([]);
+        expect(s.player.hotbar).toEqual(before);
+      }
+    }
   });
 });
 

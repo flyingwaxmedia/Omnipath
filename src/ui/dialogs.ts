@@ -1,7 +1,8 @@
 // Dialogs, discovery cards and minigames (panels lane; docs/CLIENT-v2.md §1/§7, docs/UX-SIMPLE.md). Pure renderers
 // into the shared modal element; the UI facade owns modal state (which panel is open, the discovery queue, pausing).
-// wireDiscoveryCards() adds the cards for moments the HUD only toasts (sudden insight, a move seen, a Mastery bonus,
-// a first essence, Class Level milestones, Bestiary stars). Sudden-insight cards wait until the fight is over.
+// wireDiscoveryCards() adds the cards for moments the HUD only toasts (a move seen, a Mastery bonus, a first essence,
+// Class Level milestones, Bestiary stars). A sudden insight has no card: its banner (with "See it") is the moment's one
+// announcement (announce.ts; docs/UX-SIMPLE.md rule 9).
 // Words: a kicker, a name, ONE short line, and at most one primary button (docs/UX-SIMPLE.md rules 1, 5, 9).
 import { CLASS, classMaxRank } from '../core/classes';
 import type { GameController } from './controller';
@@ -166,12 +167,6 @@ export interface DiscoveryHost {
 
 /** Client-only book flags remembering which first-time cards were shown (never read by content). */
 const SEEN = { essence: 'card:ess:', classRank: 'card:cr' } as const;
-/** A sudden-insight card waits for the fight to end: no monster this close (px) for CALM_TICKS checks in a row… */
-const CALM_RADIUS = 230;
-const CALM_TICK_MS = 700;
-const CALM_TICKS = 3;
-/** …or shows anyway once it has waited this long. */
-const SPARK_CARD_MAX_WAIT_MS = 30000;
 
 function pipRow(n: number, max: number): string {
   return `<span class="pips violet">${Array.from({ length: max }, (_, i) => `<i class="${i < n ? 'on' : ''}"></i>`).join('')}</span>`;
@@ -195,30 +190,11 @@ export function wireDiscoveryCards(ui: DiscoveryHost, ctrl: GameController): () 
   const ev = book.events;
   const offs: (() => void)[] = [];
   const blockedShown = new Set<string>();
-  const deferred: { card: DiscoveryCard; at: number }[] = [];
-  let calm = 0;
 
   const openTab = (panel: string, tabName: string, arg?: string) => () => {
     ui.state[`${panel}.tab`] = tabName;
     ui.open(panel, arg);
   };
-
-  offs.push(
-    ev.on('spark', ({ from, to }) => {
-      deferred.push({
-        at: Date.now(),
-        card: {
-          kind: 'spark',
-          icon: to.icon,
-          image: art(ctrl, 'skill', to.id),
-          kicker: '✦ SUDDEN INSIGHT',
-          title: to.name,
-          body: `<b>${esc(from.name)}</b> changed mid-fight! ${esc(oneLine(to.desc))}`,
-          cta: { label: 'See it', run: () => ui.open('skill', to.id) },
-        },
-      });
-    }),
-  );
 
   offs.push(
     ev.on('witness', ({ skill, status, marks, need, anchorShape }) => {
@@ -335,27 +311,6 @@ export function wireDiscoveryCards(ui: DiscoveryHost, ctrl: GameController): () 
       });
     }),
   );
-
-  // Sudden-insight cards: shown once nothing hostile is near for a few checks (or after a long fight anyway).
-  const timer = window.setInterval(() => {
-    if (!deferred.length || ui.isOpen) {
-      calm = 0;
-      return;
-    }
-    let near = false;
-    try {
-      const v = ctrl.minimap();
-      near = v.monsters.some((m) => Math.hypot(m.x - v.px, m.y - v.py) < CALM_RADIUS);
-    } catch {
-      near = false;
-    }
-    calm = near ? 0 : calm + 1;
-    if (calm >= CALM_TICKS || Date.now() - deferred[0].at > SPARK_CARD_MAX_WAIT_MS) {
-      calm = 0;
-      for (const d of deferred.splice(0)) ui.discovery(d.card);
-    }
-  }, CALM_TICK_MS);
-  offs.push(() => window.clearInterval(timer));
 
   return () => offs.forEach((off) => off());
 }

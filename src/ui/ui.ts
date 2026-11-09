@@ -8,6 +8,7 @@
 // — so lanes add panels without editing this file. Player-facing messages for game events: ./announce.ts (panels
 // lane). Opening / closing the modal emits uiOpen / uiClose on the game bus; showing a card emits discovery.
 import { gameBus } from '../game/events';
+import { vfxSettings } from '../game/vfx/runtime/settings';
 import { wireAnnouncements } from './announce';
 import type { ChangeKind, GameController, NpcDialogView } from './controller';
 import {
@@ -24,6 +25,7 @@ import { Minimap } from './minimap';
 import { OPENED_FROM, type OpenedFrom, type PanelHost, type PanelRender, RESUMING } from './panels/common';
 import { PANELS as LANE_PANELS, PANELS_FULLSCREEN } from './panels/index';
 import { openNpcDialog } from './panels/npc';
+import { applyCalm } from './hud/settings';
 import { HUD_PANELS } from './picker';
 import { STARCHART_FULLSCREEN, STARCHART_PANELS } from './starchart/index';
 import { $ } from './util';
@@ -66,7 +68,10 @@ export class UI implements PanelHost {
   private holdSince: number | null = null;
   private holdTimer: number | null = null;
   private showingDiscovery = false;
-  private pendingDialog: (() => void) | null = null;
+  /** Dialogs and minigames that asked to open while a discovery card was up: they start once the cards are done. */
+  private afterCards: (() => void)[] = [];
+  /** The press that ends in a backdrop click started on the backdrop (not a long-press that opened the panel). */
+  private backdropPress = false;
 
   constructor(
     parent: HTMLElement,
@@ -74,6 +79,8 @@ export class UI implements PanelHost {
   ) {
     this.root = document.createElement('div');
     this.root.id = 'hud-root';
+    // "Reduce shake & flashes" (☰ menu) also calms the HUD's own flash pulses.
+    applyCalm(vfxSettings.reduceFlash, this.root);
     parent.appendChild(this.root);
     this.hud = new Hud(this.root, ctrl, {
       open: (p, a) => this.open(p, a),
@@ -84,8 +91,15 @@ export class UI implements PanelHost {
     this.modal = document.createElement('div');
     this.modal.className = 'modal hidden';
     this.root.appendChild(this.modal);
+    // A tap on the backdrop closes the panel — only a tap that STARTED there: a long-press on a skill slot opens the
+    // picker / card mid-press, and the click the browser makes when that finger lifts lands on the new backdrop.
+    this.modal.addEventListener('pointerdown', (e) => {
+      this.backdropPress = e.target === this.modal;
+    });
     this.modal.addEventListener('click', (e) => {
-      if (e.target === this.modal && !this.showingDiscovery && this.panel !== 'minigame') this.close();
+      const tapped = this.backdropPress;
+      this.backdropPress = false;
+      if (e.target === this.modal && tapped && !this.showingDiscovery && this.panel !== 'minigame') this.close();
     });
     this.root.addEventListener('contextmenu', (e) => e.preventDefault());
     // v2 discovery cards (spark, echo, passive, essence, class rank…): the book outlives map restarts, so once.
@@ -140,6 +154,7 @@ export class UI implements PanelHost {
     this.hud.updateVitals();
     this.hud.updateCooldowns();
     this.hud.updateNav();
+    this.hud.updateTarget();
     this.minimap.update();
   }
 
@@ -164,8 +179,9 @@ export class UI implements PanelHost {
     this.hud.banner(title, sub);
   }
 
-  sparkBanner(title: string, sub = ''): void {
-    this.hud.sparkBanner(title, sub);
+  /** Mid-fight banner (a sudden insight); with `skillId` its "See it" button opens that skill's card. */
+  sparkBanner(title: string, sub = '', skillId = ''): void {
+    this.hud.sparkBanner(title, sub, skillId);
   }
 
   /** Big centre banner ("You are now a Pyroblade"): parchment card with the new look and the class emblem. */
@@ -258,6 +274,7 @@ export class UI implements PanelHost {
     else if (this.panel !== name) delete this.state[OPENED_FROM];
     this.panel = name;
     this.panelArg = arg;
+    this.backdropPress = false;
     this.modal.classList.remove('hidden');
     this.ctrl.setPaused(true);
     gameBus.emit('uiOpen', { panel: name, ...(arg !== undefined ? { arg } : {}), fullscreen: FULLSCREEN.has(name) });
@@ -334,6 +351,7 @@ export class UI implements PanelHost {
     const show = () => {
       this.panel = 'dialog';
       this.panelArg = undefined;
+      this.backdropPress = false;
       this.modal.dataset.panel = 'dialog';
       this.modal.classList.remove('hidden');
       this.ctrl.setPaused(true);
@@ -341,14 +359,26 @@ export class UI implements PanelHost {
       renderDialog(this.modal, speaker, portrait, text, options.length ? options : [{ label: 'OK' }], () => this.close());
     };
     // A discovery card is up: show the dialog right after the cards.
-    if (this.showingDiscovery) this.pendingDialog = show;
+    if (this.showingDiscovery) this.afterCards.push(show);
     else show();
+  }
+
+  /**
+   * The player is on the way to talk to someone (an NPC / object tap still walking): a card now would pause the walk
+   * and swallow the tap — cards wait until that dialog has opened and closed again.
+   */
+  private talkPending(): boolean {
+    try {
+      return !!(this.ctrl as GameController & { interactions?: { pending?: unknown } }).interactions?.pending;
+    } catch {
+      return false;
+    }
   }
 
   discovery(card: DiscoveryCard): void {
     // Mid-fight cards (mastered, class rank, passive, essence, echo…) wait until the fight is over: the playtest saw
-    // a Class Rank card pause the game in the middle of the Thunderhoof fight.
-    if (this.ctrl.inCombat?.()) {
+    // a Class Rank card pause the game in the middle of the Thunderhoof fight. Same while walking up to an NPC.
+    if (this.ctrl.inCombat?.() || this.talkPending()) {
       this.held.push(card);
       this.holdSince ??= Date.now();
       this.holdTimer ??= window.setInterval(() => this.releaseHeld(), 500);
@@ -361,7 +391,7 @@ export class UI implements PanelHost {
   /** Shows held cards once the fight is over (or after 30 s anyway). */
   private releaseHeld(): void {
     const long = this.holdSince !== null && Date.now() - this.holdSince > 30000;
-    if (this.held.length && this.ctrl.inCombat?.() && !long) return;
+    if (this.held.length && (this.ctrl.inCombat?.() || this.talkPending()) && !long) return;
     window.clearInterval(this.holdTimer ?? undefined);
     this.holdTimer = null;
     this.holdSince = null;
@@ -375,6 +405,7 @@ export class UI implements PanelHost {
     const card = this.discoveries.shift();
     if (!card) return;
     this.showingDiscovery = true;
+    this.backdropPress = false;
     this.modal.classList.remove('hidden');
     this.modal.dataset.panel = 'discovery';
     this.ctrl.setPaused(true);
@@ -382,11 +413,8 @@ export class UI implements PanelHost {
     renderDiscovery(this.modal, card, this.discoveries.length > 0, () => {
       this.showingDiscovery = false;
       if (this.discoveries.length) this.nextDiscovery();
-      else if (this.pendingDialog) {
-        const d = this.pendingDialog;
-        this.pendingDialog = null;
-        d();
-      } else if (this.panel && PANELS[this.panel]) {
+      else if (this.afterCards.length) this.afterCards.shift()!();
+      else if (this.panel && PANELS[this.panel]) {
         // Back to the panel under the card. A full-screen one hides the world again: re-emit its uiOpen so the game
         // loop goes back to sleep (the card woke it) — flagged as a resume, so the panel keeps its selection.
         if (FULLSCREEN.has(this.panel)) {
@@ -406,17 +434,27 @@ export class UI implements PanelHost {
     });
   }
 
+  /**
+   * A minigame takes the modal. If a discovery card is up (an NPC option such as Forge closes the dialog, which lets
+   * the cards that waited behind it show), the minigame starts once the cards are done — never over a card (that left
+   * the modal stuck with the card lost).
+   */
   private minigame<T>(run: (modal: HTMLElement, done: (v: T) => void) => void): Promise<T> {
     return new Promise((resolve) => {
-      this.panel = 'minigame';
-      this.modal.dataset.panel = 'minigame';
-      this.modal.classList.remove('hidden');
-      this.ctrl.setPaused(true);
-      gameBus.emit('uiOpen', { panel: 'minigame', fullscreen: false });
-      run(this.modal, (v) => {
-        this.close();
-        resolve(v);
-      });
+      const start = () => {
+        this.panel = 'minigame';
+        this.backdropPress = false;
+        this.modal.dataset.panel = 'minigame';
+        this.modal.classList.remove('hidden');
+        this.ctrl.setPaused(true);
+        gameBus.emit('uiOpen', { panel: 'minigame', fullscreen: false });
+        run(this.modal, (v) => {
+          this.close();
+          resolve(v);
+        });
+      };
+      if (this.showingDiscovery) this.afterCards.push(start);
+      else start();
     });
   }
 

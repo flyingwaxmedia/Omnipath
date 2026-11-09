@@ -11,10 +11,10 @@
 // ring; chain = 300 ms charge then a zap (the range ring shows where it reaches). A technique's own `castMs` adds
 // wind-up on top. Zone, ring and cone tells last at least the fair minimum for their size (vfx/recipe fairTellMs:
 // max(tell, min(900, 350 + 2.5 r)) ms, docs/VFX.md §13), so a wide zone can still be walked out of. Hit tests use the
-// one player body radius (SkillSystem.PLAYER_R).
+// one player body radius (tellhit.ts PLAYER_R, re-exported by SkillSystem).
 // Each tell has ONE live geometry function (`geom`): the VFX telegraph draws it every frame (monsterTelegraph.live,
-// docs/VFX.md §6.5) and the hit test reads the very same shape when the tell lands, so the drawn rim is the hit area
-// by construction. This file draws nothing itself: tells, bodies, impacts and trails are the VFX runtime's (bus
+// docs/VFX.md §6.5) and the hit tests (tellhit.ts, Phaser-free and shared with the VFX hitbox test) read the very
+// same shape when the tell lands, so the drawn rim is the hit area by construction. This file draws nothing itself: tells, bodies, impacts and trails are the VFX runtime's (bus
 // events). Multi-hit techniques (strike `hits`, spin `pulses`, projectile `count`) land each hit separately, with a gap
 // between swings / pulses so the player can still step out; the follow-ups are the tell's later `phases`.
 // Damage = monster ATK × skill.power (element neutral vs the player), plus the technique's statuses on the player.
@@ -32,7 +32,8 @@ import { gameBus, type TellShape } from '../events';
 import { Y_BIAS, ySort } from '../render/depths';
 import { TILE } from '../world/runtime';
 import { fairTellMs } from '../vfx/recipe';
-import { PLAYER_R, clearShot, distToSegment, nextProjectileId } from './SkillSystem';
+import { clearShot, nextProjectileId } from './SkillSystem';
+import { PLAYER_R, distToSegment, inCone, inRange, inZone } from './tellhit';
 
 const WITNESS_RANGE = 6 * TILE;
 /**
@@ -520,32 +521,3 @@ export class MonsterSkills {
     this.sweeps = [];
   }
 }
-
-// ---------------------------------------------------------------- hit tests on the tell geometry
-
-type Shape<K extends TellShape['kind']> = Extract<TellShape, { kind: K }>;
-
-/** Zone (nova, spin): the player's feet inside the 0.65 ellipse. */
-function inZone(g: TellShape, p: { x: number; y: number }): boolean {
-  const z = g as Shape<'zone'>;
-  return Math.hypot((p.x - z.x) / z.rx, (p.y - z.y) / z.ry) <= 1;
-}
-
-/** Cone (strike): the player's body overlaps the sector, or touches the caster. */
-function inCone(g: TellShape, p: { x: number; y: number }, casterR: number): boolean {
-  const c = g as Shape<'cone'>;
-  const d = Math.hypot(p.x - c.x, p.y - c.y);
-  let diff = Math.atan2(p.y - c.y, p.x - c.x) - c.ang;
-  while (diff > Math.PI) diff -= Math.PI * 2;
-  while (diff < -Math.PI) diff += Math.PI * 2;
-  return d <= c.r + PLAYER_R && (Math.abs(diff) <= c.arc / 2 + Math.atan2(PLAYER_R, Math.max(1, d)) || d < casterR + PLAYER_R);
-}
-
-/** Range (chain): the player's body within reach. */
-function inRange(g: TellShape, p: { x: number; y: number }): boolean {
-  const r = g as Shape<'range'>;
-  return Math.hypot(p.x - r.x, p.y - r.y) <= r.r + PLAYER_R;
-}
-
-/** The hit tests above, for tests and the VFX hitbox check (docs/VFX.md §11.2). */
-export const TELL_HIT = { inZone, inCone, inRange } as const;

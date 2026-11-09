@@ -332,6 +332,30 @@ function rockPx(b: Ctx, ox: number, oy: number, s: number, ramp: Ramp, mossy: bo
   }
 }
 
+/**
+ * Low flat stone (slab): lit top face, mid front face, shaded right end, dark foot, a crack and pits. Same top-left
+ * light as rockPx. Coordinates in a 30x14 box, scaled by `s`.
+ */
+function slabPx(b: Ctx, ox: number, oy: number, s: number, ramp: Ramp, mossy: boolean, rnd: () => number): void {
+  const P = (pts: number[]) => pts.map((v, i) => Math.round(i % 2 ? oy + v * s : ox + v * s));
+  fpoly(b, P([0, 8, 3, 3, 12, 0, 24, 1, 30, 5, 30, 11, 26, 14, 3, 14, 0, 11]), ramp[2]);
+  fpoly(b, P([3, 3, 12, 0, 24, 1, 30, 5, 22, 7, 6, 7]), ramp[4]);
+  fpoly(b, P([22, 7, 30, 5, 30, 11, 26, 14, 21, 14]), ramp[1]);
+  fpoly(b, P([0, 11, 3, 14, 26, 14, 30, 11, 30, 13, 26, 15, 3, 15, 0, 13]), ramp[0]);
+  seg(b, ...(P([4, 3, 12, 1]) as [number, number, number, number]), ramp[5] ?? ramp[4]);
+  seg(b, ...(P([6, 7, 22, 7]) as [number, number, number, number]), ramp[3]);
+  seg(b, ...(P([14, 7, 15, 10]) as [number, number, number, number]), ramp[1]);
+  seg(b, ...(P([15, 10, 13, 13]) as [number, number, number, number]), ramp[1]);
+  for (let i = 0; i < 4; i++) {
+    const [x, y] = P([5 + rnd() * 20, 8 + rnd() * 4]);
+    px(b, x, y, ramp[1]);
+  }
+  if (mossy) {
+    const [mx, my] = P([5, 1]);
+    mossCap(b, mx, my, Math.round(13 * s));
+  }
+}
+
 /** Irregular moss cap: lit top edge, darker underside and a couple of drips. */
 function mossCap(b: Ctx, x: number, y: number, w: number): void {
   box(b, x + 1, y, w - 3, 1, R.moss[3]);
@@ -454,6 +478,44 @@ function drawProps(scene: Phaser.Scene): void {
     });
   });
 
+  canvasTex(scene, 'bush~1', 32, 28, (c) => {
+    // two round lobes, cream blossoms instead of berries
+    const rnd = artRng(keySeed('bush~1'));
+    shadow(c, 16, 25, 13, 3);
+    sprite(c, 32, 28, (b) => {
+      leafMass(b, 11, 17, 9, 8, R.leaf, rnd, false, 3.4);
+      leafMass(b, 21, 15, 9, 9, R.leaf, rnd, true, 3.4);
+      for (const [x, y] of [
+        [7, 15],
+        [20, 10],
+        [24, 18],
+        [13, 21],
+      ]) {
+        px(b, x, y, R.cream[4]);
+        px(b, x + 1, y, R.cream[3]);
+        px(b, x, y + 1, R.cream[2]);
+        px(b, x + 1, y + 1, R.gold[3]);
+      }
+    });
+  });
+  canvasTex(scene, 'bush~2', 32, 28, (c) => {
+    // a low, wide shrub with grass at its foot
+    const rnd = artRng(keySeed('bush~2'));
+    shadow(c, 16, 25, 14, 2.6);
+    sprite(c, 32, 28, (b) => {
+      leafMass(b, 16, 19, 14, 7, R.leaf, rnd, false, 3.2);
+      for (const [x, y] of [
+        [10, 16],
+        [22, 18],
+      ]) {
+        box(b, x, y, 2, 2, R.gold[2]);
+        px(b, x, y, R.gold[4]);
+      }
+      tuft(b, 1, 27);
+      tuft(b, 25, 27);
+    });
+  });
+
   canvasTex(scene, 'rock', 34, 30, (c) => {
     const rnd = artRng(keySeed('rock'));
     shadow(c, 17, 26, 15, 3.5);
@@ -472,6 +534,56 @@ function drawProps(scene: Phaser.Scene): void {
       rockPx(b, 29, 21, 0.58, R.stone, false, rnd);
       tuft(b, 3, 38);
       tuft(b, 22, 39);
+    });
+  });
+
+  // Look variants (PROP_VARIANTS; render/stage.ts picks one per tile): same size and foot anchor as the base key, a
+  // different composition each, light always from the top-left (never a mirrored sprite).
+  canvasTex(scene, 'rock~1', 34, 30, (c) => {
+    // two stones, the small one in front on the right
+    const rnd = artRng(keySeed('rock~1'));
+    shadow(c, 16, 26, 15, 3.5);
+    sprite(c, 34, 30, (b) => {
+      rockPx(b, 1, 8, 0.72, R.stone, true, rnd);
+      rockPx(b, 19, 17, 0.45, R.stone, false, rnd);
+      tuft(b, 14, 29);
+    });
+  });
+  canvasTex(scene, 'rock~2', 34, 30, (c) => {
+    // a low flat slab half sunk in the grass
+    const rnd = artRng(keySeed('rock~2'));
+    shadow(c, 17, 26, 16, 3);
+    sprite(c, 34, 30, (b) => {
+      slabPx(b, 2, 12, 1, R.stone, false, rnd);
+      tuft(b, 0, 29);
+      tuft(b, 27, 29);
+      tuft(b, 15, 29);
+    });
+  });
+  canvasTex(scene, 'boulder~1', 48, 40, (c) => {
+    // a split boulder: two halves leaning together, a dark crevice between them
+    const rnd = artRng(keySeed('boulder~1'));
+    shadow(c, 24, 35, 22, 4.5);
+    sprite(c, 48, 40, (b) => {
+      rockPx(b, 20, 11, 0.92, R.stone, false, rnd);
+      rockPx(b, 0, 13, 0.88, R.stone, true, rnd);
+      box(b, 25, 19, 1, 16, R.stone[0]);
+      box(b, 26, 21, 1, 13, R.stone[1]);
+      tuft(b, 2, 38);
+      tuft(b, 30, 39);
+      tuft(b, 40, 38);
+    });
+  });
+  canvasTex(scene, 'boulder~2', 48, 40, (c) => {
+    // a low mossy slab with a small stone in front on the left
+    const rnd = artRng(keySeed('boulder~2'));
+    shadow(c, 24, 35, 22, 4);
+    sprite(c, 48, 40, (b) => {
+      slabPx(b, 2, 14, 1.45, R.stone, true, rnd);
+      rockPx(b, 3, 25, 0.42, R.stone, false, rnd);
+      mossCap(b, 30, 16, 9);
+      tuft(b, 18, 39);
+      tuft(b, 40, 38);
     });
   });
 
@@ -539,6 +651,58 @@ function drawProps(scene: Phaser.Scene): void {
       box(b, 6, 31, 4, 1, R.moss[2]);
       tuft(b, 3, 34);
       tuft(b, 18, 34);
+    });
+  });
+
+  const TOMB = ['#2e2c38', '#46434f', '#625e6c', '#7f7a8a', '#9d98a8', '#bdb8c6'];
+  canvasTex(scene, 'tombstone~1', 28, 36, (c) => {
+    // a stone grave cross, a chip off one arm, moss at its foot
+    shadow(c, 14, 33, 11, 3);
+    sprite(c, 28, 36, (b) => {
+      const S = TOMB;
+      box(b, 16, 9, 2, 24, S[1]); // side thickness
+      box(b, 11, 6, 5, 27, S[3]);
+      box(b, 11, 6, 1, 27, S[4]);
+      box(b, 15, 6, 1, 27, S[2]);
+      box(b, 5, 12, 17, 5, S[3]);
+      box(b, 5, 12, 17, 1, S[5]);
+      box(b, 5, 16, 17, 1, S[2]);
+      box(b, 22, 13, 1, 4, S[1]);
+      box(b, 11, 6, 5, 1, S[5]);
+      px(b, 5, 16, S[1]); // the chipped arm end
+      px(b, 6, 16, S[2]);
+      seg(b, 13, 19, 12, 24, S[1]);
+      box(b, 9, 31, 10, 2, S[2]); // plinth
+      box(b, 9, 31, 10, 1, S[4]);
+      disc(b, 18, 32, 3.5, 1.5, R.moss[1]);
+      box(b, 16, 31, 4, 1, R.moss[2]);
+      tuft(b, 3, 34);
+      tuft(b, 20, 35);
+    });
+  });
+  canvasTex(scene, 'tombstone~2', 28, 36, (c) => {
+    // an old square-topped stone, leaning, its top corner broken off; rubble at its foot
+    const rnd = artRng(keySeed('tombstone~2'));
+    shadow(c, 14, 33, 11, 3);
+    sprite(c, 28, 36, (b) => {
+      const S = TOMB;
+      fpoly(b, [19, 12, 22, 14, 21, 33, 18, 33], S[1]);
+      fpoly(b, [7, 12, 14, 10, 17, 13, 19, 12, 18, 33, 8, 33], S[3]);
+      fpoly(b, [7, 12, 14, 10, 15, 11, 8, 13], S[5]);
+      box(b, 7, 13, 1, 20, S[4]);
+      box(b, 17, 14, 1, 19, S[2]);
+      box(b, 9, 18, 7, 1, S[1]);
+      box(b, 9, 19, 7, 1, S[4]);
+      box(b, 10, 22, 5, 1, S[1]);
+      seg(b, 15, 12, 12, 17, S[1]);
+      for (let i = 0; i < 3; i++) {
+        const x = 4 + Math.round(rnd() * 3) + i * 7;
+        box(b, x, 32, 2, 1, S[2]);
+        px(b, x, 31, S[4]);
+      }
+      disc(b, 9, 33, 3, 1.3, R.moss[1]);
+      tuft(b, 2, 35);
+      tuft(b, 19, 35);
     });
   });
 
@@ -2271,6 +2435,10 @@ export const PROP_VARIANTS: Readonly<Record<string, readonly string[]>> = {
   darktree: ['darktree~1', 'darktree~2'],
   pine: ['pine~1'],
   frostpine: ['frostpine~1'],
+  rock: ['rock~1', 'rock~2'],
+  boulder: ['boulder~1', 'boulder~2'],
+  bush: ['bush~1', 'bush~2'],
+  tombstone: ['tombstone~1', 'tombstone~2'],
 };
 
 /**

@@ -126,6 +126,20 @@ const icon = (host: PanelHost, kind: 'skill' | 'passive' | 'mod', id: string): s
   }
 };
 
+/**
+ * A tile's rank: at most 5 stars, big enough to read on an iPad (12 px), filling in half steps — rank 3 of 10 is
+ * one and a half stars (docs/UX-SIMPLE.md rule 3: progress you can see at a glance).
+ */
+export function rankStars(rank: number, max: number): string {
+  if (max <= 0) return '';
+  const n = Math.min(5, max);
+  const halves = Math.max(0, Math.min(2 * n, Math.round((rank / max) * 2 * n)));
+  return Array.from({ length: n }, (_, i) => {
+    const h = halves - 2 * i;
+    return `<i class="${h >= 2 ? 'f' : h === 1 ? 'h' : 'e'}">★</i>`;
+  }).join('');
+}
+
 function tile(host: PanelHost, s: SkillDef, opts: { sel: boolean; note?: string; equipped?: boolean }): string {
   const { book } = host.ctrl;
   const p = book.progress(s.id);
@@ -137,7 +151,7 @@ function tile(host: PanelHost, s: SkillDef, opts: { sel: boolean; note?: string;
   return `<button class="skill-card sc-tile ${ready ? 'ready' : ''} ${opts.sel ? 'sel' : ''} ${rank >= s.maxRank ? 'mastered' : ''}" data-skill="${esc(s.id)}" aria-label="${esc(s.name)}">
     <span class="sc-tico">${src ? `<img class="px" src="${src}" width="64" height="64" alt="" draggable="false">` : `<b>${s.icon}</b>`}${ready ? '<i class="sc-spark" aria-hidden="true">✨</i>' : fresh ? '<i class="sc-new" aria-hidden="true">New</i>' : ''}</span>
     <span class="sc-tname">${esc(s.name)}</span>
-    <span class="sc-tstars ${rank >= s.maxRank ? 'gold' : ''}" aria-hidden="true">${stars(rank, s.maxRank)}</span>
+    <span class="sc-tstars ${rank >= s.maxRank ? 'gold' : ''}" aria-hidden="true">${rankStars(rank, s.maxRank)}</span>
     ${opts.note ? `<span class="sc-tnote">${esc(opts.note)}</span>` : ''}
   </button>`;
 }

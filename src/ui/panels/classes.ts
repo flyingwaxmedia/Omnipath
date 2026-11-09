@@ -97,11 +97,13 @@ function lockedHtml(host: PanelHost, v: ClassScreenView, focus?: string): string
   const hidden = Math.max(0, total - shown);
   if (!v.locked.length && !hidden) return '';
   const card = (c: ClassCardView) => {
-    // Until a class is close, its hint is its riddle: keep the name a mystery too.
-    const riddle = c.hint !== undefined && c.hint === ctrl.reg.classDef(c.id)?.hint;
-    return `<div class="lcard ${riddle ? 'riddle' : 'near'} ${c.id === focus ? 'focus' : ''}" data-class="${esc(c.id)}" style="--cc:${c.color}">
+    // Until a class is close its name stays a mystery; the line is always its one next step (the riddle itself is in
+    // Codex > Whispers). An older view without `mystery`: a hint equal to the riddle reads as one.
+    const isRiddle = c.hint !== undefined && c.hint === ctrl.reg.classDef(c.id)?.hint;
+    const mystery = c.mystery ?? isRiddle;
+    return `<div class="lcard ${mystery ? 'riddle' : 'near'} ${c.id === focus ? 'focus' : ''}" data-class="${esc(c.id)}" style="--cc:${c.color}">
       <div class="lc-art">${outfitImg(ctrl, c.id, 2, 'sil')}<span class="q" aria-hidden="true">?</span></div>
-      <div class="lc-info"><b>${riddle ? '???' : esc(c.name)}</b><small class="${riddle ? 'riddle' : ''}">${esc(c.hint ?? '')}</small></div>
+      <div class="lc-info"><b>${mystery ? '???' : esc(c.name)}</b><small class="${isRiddle ? 'riddle' : ''}">${esc(c.hint ?? '')}</small></div>
     </div>`;
   };
   return `<h3>Still to find</h3>
@@ -230,6 +232,15 @@ export function renderClasses(host: PanelHost, arg?: string): void {
     const keep = ctrl.unlocks().keepsakes ? keepsakesHtml(host) : '';
     sheet(host, '🏛️ Class', `<div class="cls3">${currentHtml(host, v)}${unlockedHtml(host, v, focus)}${lockedHtml(host, v, focus)}${keep}</div>`, 'classes3');
     if (focus) host.modal.querySelector(`[data-class="${CSS.escape(focus)}"]`)?.scrollIntoView({ block: 'center' });
+    // "Finish the fight first." ends by itself: while this screen stays open, look again every second and unlock
+    // Become as soon as the fight is over (a re-render or closing replaces .cls3 and stops the loop).
+    const root = host.modal.querySelector('.cls3');
+    const recheck = () => {
+      if (!root?.isConnected) return;
+      if (ctrl.classCards().canChange) host.render();
+      else setTimeout(recheck, 1000);
+    };
+    if (!v.canChange && root) setTimeout(recheck, 1000);
   }
   wireToggles(host.modal);
   const after = (r: { ok: boolean; message?: string }) => {
