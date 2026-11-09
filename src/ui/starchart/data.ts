@@ -281,7 +281,7 @@ export function buildStarChartData(reg: Registry, book: SkillBook): StarChartDat
     if (s.kind === 'element') {
       const el = reg.element(s.id.slice(3) as ElementId);
       const has = !!el && book.hasElement(el.id);
-      stars.set(s.id, { id: s.id, kind: 'element', name: has ? el!.name : '?', constellation: 'heart', state: has ? 'known' : 'fog', mastered: false, size: s.size, element: s.element, rank: 0, maxRank: 0, ...(s.parents ? { ingredients: s.parents } : {}) });
+      stars.set(s.id, { id: s.id, kind: 'element', name: has ? el!.name : '?', constellation: 'heart', state: has ? 'known' : 'fog', mastered: false, size: s.size, ...(has ? { element: s.element } : {}), rank: 0, maxRank: 0, ...(s.parents ? { ingredients: s.parents } : {}) });
       return;
     }
     const sk = reg.skill(s.id);

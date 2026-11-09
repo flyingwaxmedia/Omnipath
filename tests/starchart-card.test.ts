@@ -19,9 +19,20 @@ describe('chart data', () => {
     const els = d.stars.filter((s) => s.kind === 'element');
     expect(els.length).toBe(reg.elements.size);
     for (const e of els) expect([e.state, e.name]).toEqual(['fog', '?']);
-    const roots = d.stars.filter((s) => s.kind === 'skill');
-    expect(roots.map((s) => s.id).sort()).toEqual(['bolt', 'slash', 'stab']);
-    expect(roots.every((s) => s.state === 'revealed')).toBe(true);
+    const skills = d.stars.filter((s) => s.kind === 'skill');
+    expect(skills.every((s) => s.state === 'revealed')).toBe(true);
+    for (const id of ['bolt', 'slash', 'stab']) expect(skills.map((s) => s.id)).toContain(id);
+    // Anything else already in the sky is taught by a quest the player can take right now.
+    const b = new SkillBook(reg);
+    const taught = new Set(
+      [...reg.quests.values()]
+        .filter((q) => b.questStatus(q.id) === 'available')
+        .flatMap((q) => {
+          const g = q.rewards.lesson ? reg.lesson(q.rewards.lesson)?.lesson.grants : undefined;
+          return [q.rewards.skill, g && 'skill' in g ? g.skill : undefined].filter(Boolean) as string[];
+        }),
+    );
+    for (const s of skills) if (!['bolt', 'slash', 'stab'].includes(s.id)) expect(taught.has(s.id), s.id).toBe(true);
     expect(d.links).toEqual([]);
   });
 

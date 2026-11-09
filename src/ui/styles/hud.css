@@ -1321,7 +1321,7 @@
 }
 
 /* One step, never cut mid-word: a long line wraps onto a second line instead of ending in "…". */
-.pz-row .pz-line span {
+.pz-row .pz-line > span {
   display: -webkit-box;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
