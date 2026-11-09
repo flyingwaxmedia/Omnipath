@@ -2,7 +2,7 @@
 
 The owner supplied a reference screenshot of a mobile pixel-art RPG (kept outside the repo: it is another game's art). It is a
 **direction**, not a template: we match its *qualities* (dense, outlined pixel art; earthy palette; ornate framed HUD;
-joystick + horizontal skill bar; quest tracker) with **entirely original** assets, ornaments, layout details and names.
+horizontal skill bar; quest tracker) with **entirely original** assets, ornaments, layout details and names.
 Never trace its sprites, icons or frames, never reuse its names, and never place UI elements pixel-for-pixel like it.
 
 ## 1. What the reference does well (the qualities we want)
@@ -49,7 +49,8 @@ Biome palettes (frost, basalt, storm, dusk, crypt, cave) keep the same *value st
 - **Props** (trees, rocks, ruins…): bigger, layered, outlined; trees have trunk + 2–3 canopy clusters with highlight.
 
 ## 4. Characters & monsters
-- Player: 32×40 canvas, chibi (~2.5 heads), 1 px outline, weapon silhouette readable; frames:
+- Player: 32×40 canvas, chibi (~2.5 heads), 1 px outline, weapon silhouette readable. The outfit CHANGES with the worn
+  class (docs/CLIENT-v3.md §Class looks): palette, headgear, armour type, cape (Tier II+), aura (Tier III). Frames:
   `player_<w>` (= idle 0, kept for compatibility), `player_<w>_idle_1`, `player_<w>_walk_0..3`, `player_<w>_atk_0..1`.
   Facing left/right by flipX.
 - NPCs: 32×40, frames `npc_<look>` (= idle 0) and `npc_<look>_1`.
@@ -64,12 +65,12 @@ Biome palettes (frost, basalt, storm, dusk, crypt, cave) keep the same *value st
 - **Top-centre**: zone plate — map name, safety tag (Safe / Hunting / Dungeon / Warden), level band; under it a slim
   strip with exploration %, local element source icon(s) and warden status.
 - **Top-right**: a row of framed square buttons with tiny labels: Skills, Fuse, Class, Codex, Bag, Map, ☰ (menu).
-- **Right edge**: *Pursuits* tracker (collapsible): 2–3 live goals derived from the SkillBook — next mastery/morph
-  ("Slash 7/10 → morph"), echo witness ("Boulder Roll 2/3"), nearest class ("Pyroblade 1/2 blade+fire"), element
-  source progress ("Fishing 2/3 → Water"). Tap → opens the relevant panel.
+- **Right edge**: *Pursuits* tracker (collapsible): tracked QUESTS first (objective progress, e.g. "Mine ore 3/10"),
+  then live discovery goals from the SkillBook — next mastery/morph ("Slash 7/10 → morph"), echo witness
+  ("Boulder Roll 2/3"), nearest class ("Pyroblade 1/2"). Tap → opens the quest log / relevant panel.
 - **Left edge**: round buttons — quick heal (count), recall shard (count), rest/sit.
-- **Bottom-left**: virtual joystick (appears under the thumb in the left 40% of the screen when the touch starts on
-  the world; fixed ghost base when idle). Tap-to-move keeps working everywhere else.
+- **Movement stays tap-to-move** (owner's choice — no virtual joystick). Bottom-left holds the compact combat/chat log
+  above the EXP bar.
 - **Bottom-centre**: horizontal skill bar — 6 framed square slots (painted pixel icons, cooldown sweep, rank badge,
   element pip, auto-cast ring), hotkeys 1–6.
 - **Bottom-right**: big round attack button in an ornate frame, with smaller round buttons on its arc: AUTO, Target

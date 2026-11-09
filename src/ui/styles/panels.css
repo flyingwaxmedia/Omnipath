@@ -3193,3 +3193,7 @@ em.up {
 .mown .btn.wide {
   margin-top: 2px;
 }
+
+.lg.open {
+  border-color: rgba(143, 224, 255, 0.75);
+}

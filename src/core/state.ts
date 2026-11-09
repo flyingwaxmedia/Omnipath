@@ -65,6 +65,19 @@ export interface SkillBookState {
   bestiary: Record<string, number>;
   /** Class ids whose riddle has been revealed (codex 'whispered' state). */
   whispered: string[];
+  /** Quest progress (docs/QUESTS.md §2). Optional for older saves; migrateBookState fills it. */
+  quests?: QuestState;
+}
+
+export interface QuestState {
+  active: Record<string, { progress: number[]; acceptedAt: number }>;
+  done: Record<string, number>;
+  cooldown: Record<string, number>;
+  tracked: string[];
+}
+
+export function emptyQuestState(): QuestState {
+  return { active: {}, done: {}, cooldown: {}, tracked: [] };
 }
 
 export function emptyState(seed = 1): SkillBookState {
@@ -86,5 +99,6 @@ export function emptyState(seed = 1): SkillBookState {
     spark: { pity: {}, lastAt: -1e12, seed, counter: 0 },
     bestiary: {},
     whispered: [],
+    quests: emptyQuestState(),
   };
 }

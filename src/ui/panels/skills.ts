@@ -186,7 +186,7 @@ const STATE_TEXT: Record<NodeState, string> = {
   owned: 'Known',
   ready: 'Ready to morph',
   open: 'Requirements met',
-  locked: 'Sealed by requirements',
+  locked: 'Locked by requirements',
   veiled: 'Hidden',
   sealed: 'Beyond reach',
 };
@@ -339,7 +339,7 @@ function renderPath(host: PanelHost, w: WeaponType): void {
           <svg class="mlines" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">${lines}</svg>
           ${nodes}
         </div>
-        <div class="mlegend"><span><i class="lg owned"></i>Known</span><span><i class="lg ready"></i>Ready</span><span><i class="lg locked"></i>Sealed</span><span><i class="lg veiled"></i>Hidden</span><span>${rune('lit sm')} Spark</span></div>
+        <div class="mlegend"><span><i class="lg owned"></i>Known</span><span><i class="lg ready"></i>Ready</span><span><i class="lg open"></i>Open</span><span><i class="lg locked"></i>Locked</span><span><i class="lg veiled"></i>Hidden</span><span>${rune('lit sm')} Spark</span></div>
       </div>
       <div class="mdetail">${detail}</div>
     </div>

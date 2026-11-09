@@ -284,7 +284,7 @@ function codexTab(host: PanelHost, views: ClassView[]): string {
     .filter(([, n]) => n > 0);
   return `<p class="sub">Undiscovered callings. Riddles appear as you near them — or when a trainer, a failed fusion, an echo or your bestiary whispers them.</p>
     ${near.length ? `<h3>✧ Near <small>${near.length}</small></h3><div class="classes">${near.map(card).join('')}</div>` : ''}
-    ${whispered.length ? `<h3>🌫️ Whispered <small>${whispered.length}</small></h3><div class="classes">${whispered.map(card).join('')}</div>` : ''}
+    ${whispered.length ? `<h3>💭 Whispered <small>${whispered.length}</small></h3><div class="classes">${whispered.map(card).join('')}</div>` : ''}
     <h3>❔ Unknown <small>${unknown.length}</small></h3>
     ${
       unknownByTier.length

@@ -335,6 +335,8 @@ export interface LessonDef {
   cost?: { coins?: number; items?: Record<string, number> };
   /** Can be bought again (essence purchases). */
   repeatable?: boolean;
+  /** Taught only as a quest reward (docs/QUESTS.md); takeLesson refuses it. */
+  questOnly?: boolean;
 }
 
 export interface TrainerDef {
@@ -435,4 +437,68 @@ export interface GameData {
   trainers: TrainerDef[];
   monsters: MonsterDef[];
   items: ItemDef[];
+  /** Optional so older fixtures keep compiling; src/data always provides it. */
+  quests?: QuestDef[];
+}
+
+// ------------------------------------------------------------------ quests (docs/QUESTS.md)
+
+/** Gathering node kinds (mirrors src/core/world/types.ts NodeKind; kept here so core rules stay world-agnostic). */
+export type QuestNodeKind =
+  | 'ore'
+  | 'fishing'
+  | 'herb'
+  | 'ember_vent'
+  | 'wind_chime'
+  | 'storm_tree'
+  | 'shadow_fungus'
+  | 'sun_spring'
+  | 'frost_crystal';
+
+export type QuestObjective =
+  | { kind: 'kill'; monster?: string; family?: Family; rank?: MonsterRank; count: number }
+  | { kind: 'gather'; node: QuestNodeKind; count: number }
+  | { kind: 'deliver'; item: string; count: number }
+  | { kind: 'visit'; map: string }
+  | { kind: 'talk'; npc: string }
+  | { kind: 'use'; tag?: string; skill?: string; count: number }
+  | { kind: 'cast'; element?: ElementId; shape?: ShapeKind; tag?: string; map: string; count: number }
+  | { kind: 'witness'; skill?: string; count: number }
+  | { kind: 'state'; requires: Requirement; label: string };
+
+export interface QuestReward {
+  /** Grants a trainer LessonDef's grant for free (skill / passive rank / essence / element). */
+  lesson?: string;
+  skill?: string;
+  passive?: string;
+  element?: ElementId;
+  essences?: Record<string, number>;
+  items?: Record<string, number>;
+  coins?: number;
+  exp?: number;
+  /** Class id whose riddle is revealed. */
+  whisper?: string;
+  /** Sets this flag to >= 1. */
+  flag?: string;
+}
+
+export interface QuestDef {
+  /** '<npc>_<slug>' */
+  id: string;
+  name: string;
+  /** NpcDef id. */
+  giver: string;
+  /** NpcDef id (default: giver). */
+  turnIn?: string;
+  chain?: string;
+  summary: string;
+  dialog: { offer: string; progress: string; complete: string };
+  /** Quests that must be completed first. */
+  after?: string[];
+  /** Conditions for the quest to be OFFERED. */
+  requires?: Requirement[];
+  objectives: QuestObjective[];
+  rewards: QuestReward;
+  /** Bounties: can be repeated after a cooldown on the game clock (book.now ms). */
+  repeatable?: { cooldownMs: number };
 }
