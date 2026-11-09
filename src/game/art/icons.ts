@@ -2,8 +2,8 @@ import type Phaser from 'phaser';
 import { parseVariantId } from '../../core/compose';
 import type { Registry } from '../../core/registry';
 import type { ClassDef, ElementId, EssenceCategory, EssenceDef, ItemDef, SkillDef, WeaponType } from '../../core/types';
-import { mix, scratch } from './common';
-import { PAL, artRng, keySeed, outline, pixelTex, px, rect, textureDataUrl, type Ctx } from './pixel';
+import { mix } from './common';
+import { PAL, artRng, keySeed, pixelTex, px, rect, textureDataUrl, type Ctx } from './pixel';
 
 // Procedural pixel icons (docs/ART-DIRECTION.md §6). Every icon is 32x32, painted on integer pixels with flat
 // colours, lit from the top-left and rimmed by a 1 px PAL.outline. Texture keys:
@@ -16,7 +16,7 @@ import { PAL, artRng, keySeed, outline, pixelTex, px, rect, textureDataUrl, type
 // Generated skill ids (`base@el~mod`, `fuse:a|b…`) are drawn lazily by iconKey()/iconUrl() from the composed
 // SkillDef (so an infused variant really takes its element's colours) plus small element / essence / merge badges.
 
-export type IconKind = 'skill' | 'el' | 'mod' | 'item' | 'cls';
+export type IconKind = 'skill' | 'el' | 'mod' | 'item' | 'cls' | 'passive';
 export const ICON_SIZE = 32;
 export const PIP_SIZE = 12;
 
@@ -60,6 +60,8 @@ const R = {
   cream: ['#5a4a32', '#8a7a5a', '#b8a684', '#d6c8a4', '#efe6c8', '#fffaf0'],
 } as const satisfies Record<string, Ramp>;
 
+const LEATHER: Ramp = ['#3a2414', '#5a3a1e', '#8a5e34', '#b8844a', '#d8a868', '#f0d098'];
+
 /** Backdrop ramps (4 tones edge → centre glow) for skill tiles whose colour is not an element's. */
 const BG = {
   steel: ['#11171c', '#1a262c', '#22363e', '#2c4850'],
@@ -87,26 +89,80 @@ const ESSENCE_RAMPS: Readonly<Record<EssenceCategory, Ramp>> = {
 
 // ------------------------------------------------------------------ painter kit
 
+type Scratch = { el: HTMLCanvasElement; c: Ctx };
+const POOL = new Map<string, Scratch[]>();
+
+/** Borrows a cleared, CPU-backed scratch canvas (layers are read back for outlines; avoid GPU readbacks). */
+function scratch(w: number, h: number): Scratch {
+  const free = POOL.get(`${w}x${h}`);
+  const hit = free?.pop();
+  if (hit) {
+    hit.c.clearRect(0, 0, w, h);
+    return hit;
+  }
+  const el = document.createElement('canvas');
+  el.width = w;
+  el.height = h;
+  const c = el.getContext('2d', { willReadFrequently: true })!;
+  c.imageSmoothingEnabled = false;
+  return { el, c };
+}
+
+/** Returns a scratch canvas to the pool. */
+function release(s: Scratch): void {
+  const k = `${s.el.width}x${s.el.height}`;
+  const list = POOL.get(k) ?? [];
+  if (list.length < 8) list.push(s);
+  POOL.set(k, list);
+}
+
+/** 1 px outline on transparent 4-neighbours of opaque pixels (fast ImageData version of pixel.ts outline). */
+function outlineFast(c: Ctx, w: number, h: number, color: string = OUT): void {
+  const img = c.getImageData(0, 0, w, h);
+  const d = img.data;
+  const n = parseInt(color.slice(1), 16);
+  const solid = new Uint8Array(w * h);
+  for (let i = 0; i < w * h; i++) solid[i] = d[i * 4 + 3] >= 128 ? 1 : 0;
+  for (let y = 0; y < h; y++)
+    for (let x = 0; x < w; x++) {
+      const i = y * w + x;
+      if (solid[i]) continue;
+      if ((x > 0 && solid[i - 1]) || (x < w - 1 && solid[i + 1]) || (y > 0 && solid[i - w]) || (y < h - 1 && solid[i + w])) {
+        d[i * 4] = (n >> 16) & 255;
+        d[i * 4 + 1] = (n >> 8) & 255;
+        d[i * 4 + 2] = n & 255;
+        d[i * 4 + 3] = 255;
+      }
+    }
+  c.putImageData(img, 0, 0);
+}
+
 type Painter = (x: number, y: number) => string | null | undefined | false;
 
-/** Calls `fn` with each pixel centre in the box; paints the returned colour. */
+/** Calls `fn` with each pixel centre in the box; paints the returned colour (same-colour runs batched). */
 function paint(c: Ctx, x0: number, y0: number, x1: number, y1: number, fn: Painter): void {
   const xa = Math.max(0, Math.floor(x0));
   const xb = Math.min(c.canvas.width, Math.ceil(x1));
   const ya = Math.max(0, Math.floor(y0));
   const yb = Math.min(c.canvas.height, Math.ceil(y1));
   let last = '';
-  for (let y = ya; y < yb; y++)
-    for (let x = xa; x < xb; x++) {
-      const col = fn(x + 0.5, y + 0.5);
-      if (col) {
-        if (col !== last) {
-          c.fillStyle = col;
-          last = col;
+  for (let y = ya; y < yb; y++) {
+    let runCol = '';
+    let runX = 0;
+    for (let x = xa; x <= xb; x++) {
+      const col = x < xb ? fn(x + 0.5, y + 0.5) || '' : '';
+      if (col === runCol) continue;
+      if (runCol) {
+        if (runCol !== last) {
+          c.fillStyle = runCol;
+          last = runCol;
         }
-        c.fillRect(x, y, 1, 1);
+        c.fillRect(runX, y, x - runX, 1);
       }
+      runCol = col;
+      runX = x;
     }
+  }
 }
 
 /** Checkerboard parity of a pixel centre (for dithered fades). */
@@ -297,7 +353,7 @@ function star4(c: Ctx, x: number, y: number, len: number, rp: Ramp): void {
 }
 
 /** Jagged energy bolt between two points (2 px body + 1 px core). */
-function zap(c: Ctx, x0: number, y0: number, x1: number, y1: number, rp: Ramp, rng: () => number, segs = 4, amp = 2.4): void {
+function zap(c: Ctx, x0: number, y0: number, x1: number, y1: number, rp: Ramp, rng: () => number, segs = 4, amp = 2.4, wide = false): void {
   const pts: number[] = [x0, y0];
   const dx = x1 - x0;
   const dy = y1 - y0;
@@ -310,10 +366,9 @@ function zap(c: Ctx, x0: number, y0: number, x1: number, y1: number, rp: Ramp, r
     pts.push(x0 + dx * f + nx * o, y0 + dy * f + ny * o);
   }
   pts.push(x1, y1);
-  for (let i = 0; i + 3 < pts.length; i += 2) {
-    seg(c, pts[i] + 1, pts[i + 1], pts[i + 2] + 1, pts[i + 3], rp[3]);
-    seg(c, pts[i], pts[i + 1] + 1, pts[i + 2], pts[i + 3] + 1, rp[3]);
-  }
+  const body: [number, number][] = wide ? [[-1, 0], [1, 0], [0, -1], [0, 1], [1, 1]] : [[1, 0], [0, 1]];
+  for (let i = 0; i + 3 < pts.length; i += 2) for (const [ox, oy] of body) seg(c, pts[i] + ox, pts[i + 1] + oy, pts[i + 2] + ox, pts[i + 3] + oy, wide ? rp[3] : rp[3]);
+  if (wide) for (let i = 0; i + 3 < pts.length; i += 2) seg(c, pts[i] + 1, pts[i + 1], pts[i + 2] + 1, pts[i + 3], rp[4]);
   for (let i = 0; i + 3 < pts.length; i += 2) seg(c, pts[i], pts[i + 1], pts[i + 2], pts[i + 3], rp[5]);
 }
 
@@ -412,8 +467,9 @@ function onLayer(dst: Ctx, draw: (c: Ctx) => void, outlineColor: string | false 
   const h = dst.canvas.height;
   const s = scratch(w, h);
   draw(s.c);
-  if (outlineColor) outline(s.c, w, h, outlineColor);
+  if (outlineColor) outlineFast(s.c, w, h, outlineColor);
   dst.drawImage(s.el, 0, 0);
+  release(s);
 }
 
 /** Flat afterimage of whatever `draw` paints, offset by (dx, dy), in one colour (parity < 0 = solid). */
@@ -427,15 +483,17 @@ function ghostOf(dst: Ctx, draw: (c: Ctx) => void, dx: number, dy: number, col: 
   for (let y = 0; y < h; y++)
     for (let x = 0; x < w; x++)
       if (d[(y * w + x) * 4 + 3] > 128 && (parity < 0 || ((x + y) & 1) === parity)) dst.fillRect(Math.round(x + dx), Math.round(y + dy), 1, 1);
+  release(s);
 }
 
-/** Paints a small bitmap ('#' = colour a, '+' = colour b, 'o' = outline). */
-function bitmap(c: Ctx, x: number, y: number, rows: readonly string[], a: string, b = a): void {
+/** Paints a small bitmap ('#' = colour a, '+' = colour b, '*' = colour d, 'o' = outline). */
+function bitmap(c: Ctx, x: number, y: number, rows: readonly string[], a: string, b = a, d = b): void {
   rows.forEach((row, j) => {
     for (let i = 0; i < row.length; i++) {
       const ch = row[i];
       if (ch === '#') px(c, x + i, y + j, a);
       else if (ch === '+') px(c, x + i, y + j, b);
+      else if (ch === '*') px(c, x + i, y + j, d);
       else if (ch === 'o') px(c, x + i, y + j, OUT);
     }
   });
@@ -562,7 +620,7 @@ function object(c: Ctx, kind: Obj, x: number, y: number, ang: number, len: numbe
       along(c, x, y, ang, -len / 2, len / 2, (s) => (len * 0.2) * (1 - Math.abs(s) / (len / 2)) + 0.2, (s, t, h) => (Math.abs(t) < h * 0.4 && s > -len * 0.3 ? fx[5] : shadeAcross(fx, ang, 4, 3, 2)(s, t, h, 0, 0)));
       break;
     case 'lance':
-      along(c, x, y, ang, -len / 2, len / 2, (s) => (s > len * 0.1 ? 1.9 * (1 - (s - len * 0.1) / (len * 0.4)) + 0.3 : 1.3), (s, t, h, px0, py0) => {
+      along(c, x, y, ang, -len / 2, len / 2, (s) => (s > len * 0.1 ? 2.4 * (1 - (s - len * 0.1) / (len * 0.4)) + 0.3 : 1.5), (s, t, h, px0, py0) => {
         if (s < -len * 0.3 && chk(px0, py0)) return null;
         return shadeAcross(fx, ang, 5, 4, 2)(s, t, h, px0, py0);
       });
@@ -575,7 +633,7 @@ function object(c: Ctx, kind: Obj, x: number, y: number, ang: number, len: numbe
       break;
     case 'crescent': {
       const r = len * 0.55;
-      swoosh(c, x - ca * r * 0.7, y - sa * r * 0.7, r, Math.max(2.2, len * 0.22), ang - 70 * DEG, 140 * DEG, fx, { fade: false, head: 0.5 });
+      swoosh(c, x - ca * r * 0.7, y - sa * r * 0.7, r, Math.max(2.6, len * 0.3), ang - 75 * DEG, 150 * DEG, fx, { fade: false, head: 0.5 });
       break;
     }
     case 'feather': {
@@ -641,8 +699,8 @@ function object(c: Ctx, kind: Obj, x: number, y: number, ang: number, len: numbe
       along(c, x, y, ang, -len / 2, len / 2, (s) => 1.5 * (1 - Math.abs(s) / (len / 2)) + 0.4, shadeAcross(R.leaf, ang, 5, 4, 2));
       break;
     case 'nail':
-      along(c, x, y, ang, -len * 0.35, len / 2, (s) => (s > len * 0.25 ? Math.max(0.4, 0.9 * (1 - (s - len * 0.25) / (len * 0.25))) : 0.9), shadeAcross(R.iron, ang, 5, 4, 2));
-      along(c, x - ca * len * 0.35, y - sa * len * 0.35, ang + PI / 2, -2.2, 2.2, () => 0.9, () => R.iron[4]);
+      along(c, x, y, ang, -len * 0.35, len / 2, (s) => (s > len * 0.25 ? Math.max(0.4, 1.2 * (1 - (s - len * 0.25) / (len * 0.25))) : 1.2), shadeAcross(R.steel, ang, 5, 4, 2));
+      along(c, x - ca * len * 0.35, y - sa * len * 0.35, ang + PI / 2, -2.8, 2.8, () => 1.1, () => R.steel[4]);
       break;
     case 'wisp': {
       const r = Math.max(2.8, len * 0.3);
@@ -659,7 +717,9 @@ function object(c: Ctx, kind: Obj, x: number, y: number, ang: number, len: numbe
       along(c, x, y, ang, -len * 0.5, len * 0.1, () => 0.8, () => R.steel[4]);
       const hx = x + ca * len * 0.1;
       const hy = y + sa * len * 0.1;
-      ring(c, hx + Math.cos(ang + PI / 2) * 2.8, hy + Math.sin(ang + PI / 2) * 2.8, 1.8, 3.4, R.steel[4], ang - PI / 2, PI * 1.25);
+      const hr = Math.max(3.4, len * 0.22);
+      ring(c, hx + Math.cos(ang + PI / 2) * (hr - 0.6), hy + Math.sin(ang + PI / 2) * (hr - 0.6), hr - 1.7, hr, (_a, d) => (d < 0.5 ? R.steel[5] : R.steel[3]), ang - PI / 2, PI * 1.2);
+      along(c, x, y, ang, -len * 0.5, len * 0.1, () => (len > 14 ? 1.1 : 0.8), shadeAcross(R.steel, ang, 5, 4, 3));
       break;
     }
     case 'net': {
@@ -743,18 +803,17 @@ function shield(c: Ctx, cx: number, cy: number, w: number, h: number, body: Ramp
   });
 }
 
-function boot(c: Ctx, x: number, y: number, rp: Ramp): void {
-  bitmap(
-    c,
-    x,
-    y,
-    ['.+###....', '.+###....', '.+###....', '.+###....', '.+###....', '++####...', '+######..', '+#######.', '#########', 'ooooooooo'],
-    rp[3],
-    rp[4],
+function boot(c: Ctx, x: number, y: number, rp: Ramp, big = false): void {
+  const k = big ? 1.4 : 1;
+  const X = (v: number): number => x + v * k;
+  const Y = (v: number): number => y + v * k;
+  fpoly(c, [X(0.5), Y(1), X(6.5), Y(1), X(6.5), Y(8), X(11), Y(9.5), X(12), Y(11), X(12), Y(13), X(0), Y(13), X(0.5), Y(8)], (px0, py0) =>
+    px0 < X(2.2) ? rp[4] : py0 > Y(10.5) && px0 > X(7) ? rp[2] : rp[3],
   );
-  rect(c, x + 1, y + 1, 4, 1, rp[1]);
-  px(c, x + 1, y, rp[5]);
-  rect(c, x, y + 9, 9, 1, rp[1]);
+  rect(c, X(0), Y(0), 7.5 * k, 2 * k, rp[4]);
+  rect(c, X(0), Y(0), 7.5 * k, 1, rp[5]);
+  rect(c, X(0), Y(13), 12.5 * k, 1.4 * k, rp[1]);
+  px(c, X(9), Y(10), rp[4]);
 }
 
 function wing(c: Ctx, x: number, y: number, rp: Ramp, flip = false): void {
@@ -824,17 +883,20 @@ function crown(c: Ctx, cx: number, by: number, w: number, rp: Ramp, gem: string)
 }
 
 function mask(c: Ctx, cx: number, cy: number, rp: Ramp): void {
-  paint(c, cx - 7, cy - 7, cx + 7, cy + 8, (x, y) => {
-    const dx = (x - cx) / 6;
-    const dy = (y - cy + 1) / 7;
+  // a two-faced mask: pale left half, dusky right half (the mimic's borrowed face)
+  paint(c, cx - 8, cy - 8, cx + 8, cy + 9, (x, y) => {
+    const dx = (x - cx) / 6.5;
+    const dy = (y - cy + 0.5) / (y < cy ? 7 : 8);
     if (dx * dx + dy * dy > 1) return null;
-    return x < cx ? rp[5] : rp[3];
+    if (x < cx) return dx < -0.6 ? rp[4] : rp[5];
+    return dx > 0.6 ? R.violet[2] : R.violet[3];
   });
-  rect(c, cx - 4, cy - 2, 3, 2, OUT);
-  rect(c, cx + 1, cy - 2, 3, 2, OUT);
-  seg(c, cx - 3, cy + 3, cx + 3, cy + 3, OUT);
-  px(c, cx - 3, cy + 2, OUT);
-  px(c, cx + 3, cy + 2, OUT);
+  fpoly(c, [cx - 5, cy - 2, cx - 2, cy - 3, cx - 1, cy - 1, cx - 4, cy - 1], OUT);
+  fpoly(c, [cx + 1, cy - 1, cx + 2, cy - 3, cx + 5, cy - 2, cx + 4, cy - 1], R.violet[5]);
+  seg(c, cx - 3, cy + 3, cx, cy + 4, OUT);
+  seg(c, cx, cy + 4, cx + 3, cy + 2, R.violet[5]);
+  rect(c, cx - 8, cy - 2, 2, 1, R.blood[4]);
+  rect(c, cx + 7, cy - 2, 2, 1, R.blood[4]);
 }
 
 function bolt(c: Ctx, x: number, y: number, s: number, rp: Ramp): void {
@@ -875,32 +937,44 @@ function planet(c: Ctx, cx: number, cy: number, r: number, rp: Ramp, ringRp: Ram
   });
 }
 
+/** War horn: a tapering tube along a curve from the mouthpiece (x, y) up-right to a flared bell. */
 function horn(c: Ctx, x: number, y: number, rp: Ramp, scale = 1): void {
-  const cx = x + 10 * scale;
-  const cy = y + 2 * scale;
-  const R0 = 10 * scale;
-  const a0 = 180 * DEG;
-  const span = 140 * DEG;
-  paint(c, cx - R0 - 6 * scale, cy - R0 - 6 * scale, cx + R0 + 6 * scale, cy + 6 * scale, (px0, py0) => {
-    const d = Math.hypot(px0 - cx, py0 - cy);
-    let a = Math.atan2(py0 - cy, px0 - cx) - a0;
-    a = ((a % (2 * PI)) + 2 * PI) % (2 * PI);
-    const t = a / span;
-    if (t > 1) return null;
-    const th = (0.8 + t * 3.6) * scale;
-    if (Math.abs(d - R0) > th) return null;
-    if (Math.floor(t * 9) % 3 === 2 && t < 0.9) return R.gold[d < R0 ? 5 : 3];
-    return d < R0 - th * 0.3 ? rp[5] : d < R0 + th * 0.4 ? rp[4] : rp[2];
+  const x1 = x + 19 * scale;
+  const y1 = y - 9 * scale;
+  const mx = (x + x1) / 2 + 3 * scale;
+  const my = (y + y1) / 2 + 5 * scale;
+  const N = 48;
+  let tx = 1;
+  let ty = 0;
+  for (let i = 0; i <= N; i++) {
+    const t = i / N;
+    const px0 = (1 - t) * (1 - t) * x + 2 * (1 - t) * t * mx + t * t * x1;
+    const py0 = (1 - t) * (1 - t) * y + 2 * (1 - t) * t * my + t * t * y1;
+    tx = 2 * (1 - t) * (mx - x) + 2 * t * (x1 - mx);
+    ty = 2 * (1 - t) * (my - y) + 2 * t * (y1 - my);
+    const r = (0.9 + t * t * 3.4) * scale;
+    const band = Math.floor(t * 10) % 3 === 2 && t < 0.8;
+    paint(c, px0 - r - 1, py0 - r - 1, px0 + r + 1, py0 + r + 1, (qx, qy) => {
+      const dx = qx - px0;
+      const dy = qy - py0;
+      if (dx * dx + dy * dy > r * r) return null;
+      const lit = -(dx + dy) / Math.max(r, 0.5);
+      if (band) return lit > 0.3 ? R.gold[5] : lit < -0.6 ? R.gold[2] : R.gold[4];
+      return lit > 0.55 ? rp[5] : lit < -0.7 ? rp[2] : rp[4];
+    });
+  }
+  const tl = Math.hypot(tx, ty) || 1;
+  const ux = tx / tl;
+  const uy = ty / tl;
+  const rb = 4.6 * scale;
+  paint(c, x1 - rb - 2, y1 - rb - 2, x1 + rb + 2, y1 + rb + 2, (qx, qy) => {
+    const a = (qx - x1) * ux + (qy - y1) * uy;
+    const b = -(qx - x1) * uy + (qy - y1) * ux;
+    const e = (a / (1.8 * scale)) ** 2 + (b / rb) ** 2;
+    if (e > 1) return null;
+    return e < 0.42 && a > -0.6 * scale ? '#1a120c' : b < 0 ? R.gold[5] : R.gold[3];
   });
-  const bx = cx + Math.cos(a0 + span) * R0;
-  const by = cy + Math.sin(a0 + span) * R0;
-  paint(c, bx - 6 * scale, by - 6 * scale, bx + 6 * scale, by + 6 * scale, (px0, py0) => {
-    const u = (px0 - bx) * Math.cos(a0 + span) + (py0 - by) * Math.sin(a0 + span);
-    const v = -(px0 - bx) * Math.sin(a0 + span) + (py0 - by) * Math.cos(a0 + span);
-    const e = (u / (4.8 * scale)) ** 2 + (v / (1.7 * scale)) ** 2;
-    return e <= 1 ? (e < 0.45 ? '#1a120c' : R.gold[4]) : null;
-  });
-  rect(c, x - 1, y + 1, 2 * scale, 2 * scale, R.gold[3]);
+  rect(c, x - 1.5 * scale, y - 1, 2 * scale, 2 * scale, R.gold[3]);
 }
 
 function hourglass(c: Ctx, cx: number, cy: number, sand: Ramp): void {
@@ -943,7 +1017,7 @@ interface SkillCtx {
 function skillRamps(def: SkillDef): { fx: Ramp; bg: readonly string[] } {
   if (def.element) {
     const fx = ELEMENT_RAMPS[def.element];
-    if (fx) return { fx, bg: [mix(fx[0], '#0c0806', 0.45), mix(fx[0], fx[1], 0.35), mix(fx[0], fx[1], 0.8), mix(fx[1], fx[2], 0.35)] };
+    if (fx) return { fx, bg: [mix(fx[0], '#0c0806', 0.6), mix(fx[0], '#0c0806', 0.15), mix(fx[0], fx[1], 0.5), mix(fx[0], fx[1], 0.95)] };
   }
   const t = new Set(def.tags);
   if (t.has('toxin')) return { fx: R.venom, bg: BG.venom };
@@ -1025,11 +1099,17 @@ function tileFrame(c: Ctx, tier: number, gem: Ramp): void {
 
 /** Small weapon glyph for the bottom-right corner. */
 function weaponBadge(c: Ctx, weapon: WeaponType, fx: Ramp): void {
-  onLayer(c, (l) => {
-    if (weapon === 'sword') swordAt(l, 22, 27, -45 * DEG, 7.5);
-    else if (weapon === 'dagger') daggerAt(l, 23, 26.5, -45 * DEG, 5.5);
-    else staffAt(l, 21, 28, -45 * DEG, 8, fx === R.steel ? R.arcane : fx);
-  });
+  rect(c, 21, 21, 10, 10, OUT);
+  rect(c, 22, 22, 9, 9, R.gold[2]);
+  rect(c, 22, 22, 9, 1, R.gold[4]);
+  rect(c, 22, 22, 1, 9, R.gold[4]);
+  rect(c, 23, 23, 7, 7, '#1c140e');
+  const glyph: Record<WeaponType, readonly string[]> = {
+    sword: ['......#', '.....#.', '....#..', '.+.#...', '..+....', '.+.+...', '+......'],
+    dagger: ['.......', '.....#.', '....#..', '..+#...', '..+....', '.+.....', '.......'],
+    staff: ['....**.', '....**.', '...+...', '..+....', '.+.....', '+......', '.......'],
+  };
+  bitmap(c, 23, 23, glyph[weapon], R.steel[5], weapon === 'staff' ? R.wood[5] : R.gold[4], fx === R.steel ? R.arcane[4] : fx[4]);
 }
 
 // ---- motifs
@@ -1041,10 +1121,9 @@ function motifStrike(c: Ctx, k: SkillCtx): void {
   const wpn = k.weapon;
   if (has(k, 'kick', 'heel')) {
     swoosh(c, 15, 17, 12, 4, 110 * DEG, -200 * DEG, fx);
-    boot(c, 14, 7, R.wood);
-    if (has(k, 'heel')) {
-      wing(c, 22, 9, R.cream);
-    }
+    boot(c, 11, 5, LEATHER, true);
+    star4(c, 24, 6, 3, fx);
+    if (has(k, 'heel')) wing(c, 10, 9, R.cream, true);
     return;
   }
   if (has(k, 'palm', 'point')) {
@@ -1184,17 +1263,23 @@ function motifSpin(c: Ctx, k: SkillCtx): void {
   const a0 = rng() * 2 * PI;
   if (has(k, 'tornado') || (has(k, 'eye') && has(k, 'storm')) || has(k, 'firestorm')) {
     for (let i = 0; i < 6; i++) {
-      const y = 5 + i * 4;
-      const w = 12 - i * 1.7;
-      const cx = 16 + Math.sin(i * 0.9) * 2;
-      ring(c, cx, y, 0, w, (a) => (a < 0.5 ? fx[5 - (i % 2)] : fx[3]), 0, 2 * PI);
+      const y = 6.5 + i * 3.7;
+      const w = 12.5 - i * 1.85;
+      const cx = 16 + Math.sin(i * 1.2) * 1.6;
+      paint(c, cx - w - 1, y - 4, cx + w + 1, y + 4, (x, yy) => {
+        const u = (x - cx) / w;
+        const v = (yy - y) / 2.6;
+        const d = u * u + v * v;
+        if (d > 1 || d < 0.4) return null;
+        return yy < y - 0.4 ? fx[2] : u < -0.25 ? fx[5] : fx[4];
+      });
     }
-    // carve the funnel back into thin bands
-    c.globalCompositeOperation = 'destination-out';
-    for (let i = 0; i < 6; i++) rect(c, 0, 7 + i * 4, 32, 1, '#000');
-    c.globalCompositeOperation = 'source-over';
-    if (has(k, 'eye')) eye(c, 16, 9, 6, R.bone, fx);
-    if (has(k, 'firestorm')) flame(c, 16, 14, 7, 9, ELEMENT_RAMPS.fire);
+    for (let i = 0; i < 4; i++) rect(c, 4 + rng() * 24, 22 + rng() * 6, 2, 1, fx[3]);
+    if (has(k, 'eye')) eye(c, 16, 8, 5, R.bone, fx);
+    if (has(k, 'firestorm')) {
+      flame(c, 9, 29, 6, 10, ELEMENT_RAMPS.fire, -1);
+      flame(c, 23, 29, 6, 9, ELEMENT_RAMPS.fire, 1);
+    }
     return;
   }
   if (has(k, 'ring', 'inferno')) {
@@ -1303,22 +1388,24 @@ function motifProjectile(c: Ctx, k: SkillCtx): void {
   const sh = k.def.shape.kind === 'projectile' ? k.def.shape : { count: 1, radial: false };
   const n = sh.count ?? 1;
   const obj = projObj(k);
-  if (obj === 'sword' || obj === 'knife') k.showsWeapon = true;
-  const objFx = obj === 'sword' || obj === 'knife' ? (fx === R.steel || fx === R.dusk ? R.steel : fx) : fx;
+  const bladed = obj === 'sword' || obj === 'knife';
+  if (bladed) k.showsWeapon = true;
+  const objFx = bladed ? (fx === R.steel || fx === R.dusk ? R.steel : fx) : fx;
   if (sh.radial) {
     const m = Math.min(n, 8);
     const rot = rng() * PI;
-    ball(c, 16, 16, 3, fx);
-    ring(c, 16, 16, 5, 5.9, (_a, _d, x, y) => (chk(x, y) ? fx[4] : null));
+    spiral(c, 16, 16, 7, fx, rot, 2);
+    ball(c, 16, 16, 2.6, fx);
     for (let i = 0; i < m; i++) {
       const a = rot + (i / m) * 2 * PI;
-      object(c, obj, 16 + Math.cos(a) * 10, 16 + Math.sin(a) * 10, a, 8, objFx, rng);
+      if (bladed) object(c, 'blade', 16 + Math.cos(a) * 10.5, 16 + Math.sin(a) * 10.5, a, 9, objFx === R.steel ? R.steel : bladeRamp(objFx), rng);
+      else object(c, obj, 16 + Math.cos(a) * 10, 16 + Math.sin(a) * 10, a, 8, objFx, rng);
     }
     return;
   }
   if (has(k, 'boomerang') || k.def.riders?.returns) {
     ring(c, 15, 17, 10, 11, (a, _d, x, y) => (a > 0.15 && (a < 0.5 || chk(x, y)) ? fx[4] : null), 120 * DEG, 270 * DEG);
-    object(c, obj, 21, 9, -20 * DEG, 13, objFx, rng);
+    object(c, obj, 20, 10, -20 * DEG, 16, objFx, rng);
     seg(c, 5, 23, 8, 20, fx[5]);
     return;
   }
@@ -1331,80 +1418,118 @@ function motifProjectile(c: Ctx, k: SkillCtx): void {
       const x = 7 + gx * 9 + (gy % 2) * 3 + rng() * 2;
       const y = 7 + gy * 8 + rng() * 2;
       streaks(c, x, y, ang, 1, 5, fx, rng);
-      object(c, obj, x, y, ang, 7, objFx, rng);
+      object(c, obj, x, y, ang, 8, objFx, rng);
+    }
+    return;
+  }
+  if (n >= 2 && !['sword', 'knife', 'feather', 'axe', 'hammer'].includes(obj)) {
+    const m = Math.min(n, 5);
+    const ang = (-36 - rng() * 8) * DEG;
+    const dx = Math.cos(ang);
+    const dy = Math.sin(ang);
+    const spacing = m >= 5 ? 5.2 : m === 3 ? 7.5 : 9;
+    for (let i = 0; i < m; i++) {
+      const off = (i - (m - 1) / 2) * spacing;
+      const stag = m > 2 ? (i % 2 ? -3 : 2) : 0;
+      const x = 16 - dy * off + dx * stag;
+      const y = 16 + dx * off + dy * stag;
+      streaks(c, x, y, ang, 1, 8, fx, rng);
+      object(c, obj, x, y, ang, m >= 5 ? 9 : 12, objFx, rng);
     }
     return;
   }
   if (n >= 2) {
     const m = Math.min(n, 5);
-    const lo = -80;
-    const hi = -10;
-    const ox = 5;
-    const oy = 27;
+    const lo = -84;
+    const hi = -6;
+    const ox = 4;
+    const oy = 28;
+    const big = obj === 'crescent' || obj === 'feather' || obj === 'prism';
     for (let i = 0; i < m; i++) {
       const a = (lo + ((hi - lo) * (i + 0.5)) / m) * DEG;
-      const d = m >= 5 ? 17 : 16;
+      const d = m >= 5 ? 18 : 17;
       const x = ox + Math.cos(a) * d;
       const y = oy + Math.sin(a) * d;
       streaks(c, x, y, a, 1, 6, fx, rng);
-      object(c, obj, x, y, a, m >= 5 ? 9 : 11, objFx, rng);
+      if (obj === 'knife' && m >= 4) object(c, 'blade', x, y, a, 11, objFx === R.steel ? R.steel : bladeRamp(objFx), rng);
+      else object(c, obj, x, y, a, (m >= 5 ? 10 : 12) + (big ? 2 : 0), objFx, rng);
     }
     if (has(k, 'tether')) zap(c, 4, 28, 26, 6, ELEMENT_RAMPS.lightning, rng, 5, 1.5);
     return;
   }
   const ang = (-38 - rng() * 12) * DEG;
-  const x = 18 + rng() * 2;
-  const y = 14 - rng() * 2;
-  streaks(c, x, y, ang, 3, 12, fx, rng);
-  object(c, obj, x, y, ang, obj === 'net' ? 18 : 15, objFx, rng);
+  const x = 17 + rng() * 2;
+  const y = 15 - rng() * 2;
+  streaks(c, x, y, ang, 3, 13, fx, rng);
+  object(c, obj, x, y, ang, obj === 'net' ? 20 : 19, objFx, rng);
   if (has(k, 'tether')) zap(c, 4, 28, x - 2, y + 3, ELEMENT_RAMPS.lightning, rng, 4, 1.5);
   if (has(k, 'plasma')) zap(c, 6, 24, 24, 6, ELEMENT_RAMPS.lightning, rng, 4, 2);
-  if (has(k, 'pull', 'hook')) {
-    along(c, 8, 22, (-38 + 180) * DEG, 0, 4, () => 0.6, () => fx[5]);
-  }
 }
 
-function dashHead(k: SkillCtx): (c: Ctx, x: number, y: number) => void {
+type Head = { draw: (c: Ctx, x: number, y: number) => void; ghost: boolean };
+
+function dashHead(k: SkillCtx): Head {
   const { fx, rng } = k;
-  if (has(k, 'boulder', 'rockslide')) return (c, x, y) => {
-    ball(c, x, y, 6, has(k, 'rockslide') ? R.stone : ELEMENT_RAMPS.earth);
-    seg(c, x - 2, y - 4, x + 1, y + 1, R.stone[1]);
-  };
-  if (has(k, 'millstone')) return (c, x, y) => millstone(c, x, y, 7);
-  if (has(k, 'phantom') || (has(k, 'rush') && has(k, 'stealth'))) return (c, x, y) => ghost(c, x, y, 6, R.dusk.map((v, i) => (i > 2 ? mix(v, '#ffffff', 0.25) : v)));
-  if (has(k, 'pounce', 'ambush', 'lunge')) return (c, x, y) => claws(c, x, y, 14, has(k, 'ambush', 'lunge') ? R.dusk : fx);
-  if (has(k, 'shadowstep')) return (c, x, y) => {
-    footprint(c, x - 6, y + 2, R.dusk[4]);
-    footprint(c, x + 1, y - 4, R.dusk[5]);
-  };
-  if (has(k, 'quickstep', 'quakestride')) return (c, x, y) => {
-    boot(c, x - 4, y - 5, has(k, 'quakestride') ? R.stone : R.wood);
-    if (has(k, 'quickstep')) wing(c, x - 5, y - 4, R.cream, true);
-  };
-  if (has(k, 'shoulder', 'charge')) return (c, x, y) => shield(c, x, y, 11, 13, R.blood, R.iron);
-  if (has(k, 'blink')) return (c, x, y) => {
-    ring(c, x, y, 4, 6, (a) => (a < 0.5 ? fx[5] : fx[3]));
-    star4(c, x, y, 2, fx);
-  };
-  if (has(k, 'dive')) return (c, x, y) => bolt(c, x - 5, y - 8, 1, fx);
-  if (has(k, 'flare')) return (c, x, y) => object(c, 'fireball', x, y, -18 * DEG, 14, fx, rng);
-  if (has(k, 'eclipse')) return (c, x, y) => {
-    ball(c, x, y, 6, R.gold);
-    dot(c, x + 2, y - 1, 5, R.violet[1]);
-  };
-  if (has(k, 'spin', 'waltz')) return (c, x, y) => {
-    spiral(c, x, y, 8, fx, rng() * 2 * PI, 2);
-    ball(c, x, y, 2, fx);
-  };
-  if (k.weapon === 'dagger') return (c, x, y) => daggerAt(c, x - 4, y + 2, -18 * DEG, 10);
-  if (k.weapon === 'sword' || has(k, 'blade')) return (c, x, y) => swordAt(c, x - 6, y + 2, -18 * DEG, 13, fx === R.steel ? R.steel : bladeRamp(fx));
-  if (k.weapon === 'staff') return (c, x, y) => staffAt(c, x - 7, y + 2, -18 * DEG, 13, fx);
-  return (c, x, y) => {
+  const solid = (draw: Head['draw']): Head => ({ draw, ghost: true });
+  const loose = (draw: Head['draw']): Head => ({ draw, ghost: false });
+  if (has(k, 'boulder', 'rockslide'))
+    return solid((c, x, y) => {
+      ball(c, x, y, 6.5, has(k, 'rockslide') ? R.stone : ELEMENT_RAMPS.earth);
+      seg(c, x - 2, y - 5, x + 1, y + 1, has(k, 'rockslide') ? R.stone[1] : ELEMENT_RAMPS.earth[1]);
+      seg(c, x + 1, y + 1, x + 4, y + 2, has(k, 'rockslide') ? R.stone[1] : ELEMENT_RAMPS.earth[1]);
+    });
+  if (has(k, 'millstone')) return solid((c, x, y) => millstone(c, x, y, 7.5));
+  if (has(k, 'phantom') || (has(k, 'rush') && has(k, 'stealth'))) return solid((c, x, y) => ghost(c, x, y, 7, R.dusk.map((v, i) => (i > 2 ? mix(v, '#ffffff', 0.3) : v))));
+  if (has(k, 'pounce', 'ambush', 'lunge')) return loose((c, x, y) => claws(c, x, y + 1, 18, has(k, 'ambush', 'lunge') ? R.cream : fx));
+  if (has(k, 'shadowstep'))
+    return loose((c, x, y) => {
+      const portal = (px0: number, py0: number, rx: number): void =>
+        paint(c, px0 - rx - 1, py0 - 4, px0 + rx + 1, py0 + 4, (qx, qy) => {
+          const u = (qx - px0) / rx;
+          const v = (qy - py0) / (rx * 0.45);
+          const d = u * u + v * v;
+          return d > 1 ? null : d > 0.55 ? (qy < py0 ? R.dusk[5] : R.dusk[4]) : '#0c0814';
+        });
+      portal(x - 13, y + 11, 6);
+      portal(x + 3, y - 4, 6);
+      ring(c, x - 5, y + 9, 10, 11, (a, _d, qx, qy) => (a > 0.1 && a < 0.9 && chk(qx, qy) ? R.dusk[5] : null), PI * 1.15, PI * 0.6);
+      footprint(c, x - 4, y + 2, R.dusk[5]);
+    });
+  if (has(k, 'quickstep', 'quakestride'))
+    return loose((c, x, y) => {
+      boot(c, x - 6, y - 7, has(k, 'quakestride') ? R.stone : LEATHER, true);
+      if (has(k, 'quickstep')) wing(c, x - 4, y - 4, R.cream, true);
+    });
+  if (has(k, 'shoulder', 'charge')) return solid((c, x, y) => shield(c, x, y, 12, 14, R.blood, R.iron));
+  if (has(k, 'blink'))
+    return loose((c, x, y) => {
+      ring(c, x, y, 4, 6.5, (a) => (a < 0.5 ? fx[5] : fx[3]));
+      star4(c, x, y, 2, fx);
+      star4(c, x - 9, y + 7, 2, fx);
+    });
+  if (has(k, 'dive')) return loose((c, x, y) => bolt(c, x - 6, y - 10, 1.15, fx));
+  if (has(k, 'flare')) return loose((c, x, y) => object(c, 'fireball', x, y, -18 * DEG, 17, fx, rng));
+  if (has(k, 'eclipse'))
+    return solid((c, x, y) => {
+      ball(c, x, y, 6.5, R.gold);
+      dot(c, x + 2, y - 1, 5.5, R.violet[1]);
+    });
+  if (has(k, 'spin', 'waltz'))
+    return loose((c, x, y) => {
+      spiral(c, x - 1, y + 1, 10, fx, rng() * 2 * PI, 3);
+      if (k.weapon === 'sword' || has(k, 'blade')) swordAt(c, x - 5, y + 5, -45 * DEG, 10);
+      else if (k.weapon === 'dagger') daggerAt(c, x - 4, y + 4, -45 * DEG, 8);
+      else ball(c, x - 1, y + 1, 2.4, fx);
+    });
+  if (k.weapon === 'dagger') return solid((c, x, y) => daggerAt(c, x - 4, y + 2, -18 * DEG, 11));
+  if (k.weapon === 'sword' || has(k, 'blade')) return solid((c, x, y) => swordAt(c, x - 7, y + 2, -18 * DEG, 15, fx === R.steel ? R.steel : bladeRamp(fx)));
+  if (k.weapon === 'staff') return solid((c, x, y) => staffAt(c, x - 8, y + 2, -18 * DEG, 14, fx));
+  return loose((c, x, y) => {
     for (let i = 0; i < 2; i++) {
-      const ox = x - 3 + i * 5;
-      fpoly(c, [ox - 2, y - 5, ox + 3, y, ox - 2, y + 5, ox, y], fx[4]);
+      const ox = x - 3 + i * 6;
+      fpoly(c, [ox - 3, y - 6, ox + 3, y, ox - 3, y + 6, ox, y], i ? fx[5] : fx[4]);
     }
-  };
+  });
 }
 
 function motifDash(c: Ctx, k: SkillCtx): void {
@@ -1414,10 +1539,12 @@ function motifDash(c: Ctx, k: SkillCtx): void {
   const hy = 14 + rng() * 2;
   const head = dashHead(k);
   if (/^(sword|dagger|staff)$/.test(k.weapon ?? '') || has(k, 'blade')) k.showsWeapon = true;
-  ghostOf(c, (l) => head(l, hx, hy), -11, 3, fx[2], 1);
-  ghostOf(c, (l) => head(l, hx, hy), -6, 1.5, fx[3], 0);
+  if (head.ghost) {
+    ghostOf(c, (l) => head.draw(l, hx, hy), -12, 3.5, fx[1]);
+    ghostOf(c, (l) => head.draw(l, hx, hy), -6, 1.5, fx[2]);
+  }
   streaks(c, hx - 5, hy + 2, ang, 4, 14, fx, rng, 3);
-  head(c, hx, hy);
+  head.draw(c, hx, hy);
   if (has(k, 'quakestride', 'rockslide', 'millstone')) {
     seg(c, 4, 27, 28, 27, R.stone[3]);
     for (let i = 0; i < 3; i++) spike(c, 8 + i * 7, 27, 4, 3 + rng() * 3, R.stone);
@@ -1474,12 +1601,14 @@ function motifNova(c: Ctx, k: SkillCtx): void {
     rect(c, 3, 26, 26, 2, R.stone[3]);
     return;
   }
-  if (has(k, 'smoke', 'veil', 'shroud', 'gloom')) {
-    cloud(c, 11, 19, 12, has(k, 'moonveil') ? R.cream : R.dusk);
-    cloud(c, 21, 15, 11, has(k, 'moonveil') ? R.cream : R.dusk);
-    if (has(k, 'gloom')) eye(c, 16, 17, 5, R.violet, R.blood);
-    if (has(k, 'moonveil')) moon(c, 12, 9, 5, ELEMENT_RAMPS.holy);
-    if (has(k, 'smoke')) daggerAt(c, 22, 26, -60 * DEG, 7);
+  if (has(k, 'smoke', 'veil', 'shroud', 'gloom', 'moonveil')) {
+    const puff = has(k, 'moonveil') ? R.cream : R.dusk;
+    if (has(k, 'moonveil')) moon(c, 11, 10, 7, ELEMENT_RAMPS.holy);
+    cloud(c, 10, 21, 17, puff);
+    cloud(c, 22, 18, 16, puff);
+    if (has(k, 'gloom')) eye(c, 16, 19, 6, R.violet, R.blood);
+    if (has(k, 'smoke')) daggerAt(c, 19, 13, -60 * DEG, 11);
+    if (has(k, 'moonveil')) for (let i = 0; i < 3; i++) star4(c, 20 + i * 4, 5 + (i % 2) * 4, 1, ELEMENT_RAMPS.holy);
     return;
   }
   if (has(k, 'starfall', 'lattice')) {
@@ -1550,34 +1679,42 @@ function motifNova(c: Ctx, k: SkillCtx): void {
 function motifChain(c: Ctx, k: SkillCtx): void {
   const { fx, rng } = k;
   const sh = k.def.shape.kind === 'chain' ? k.def.shape : { jumps: 2 };
-  const pts: [number, number][] = [
-    [6, 24],
-    [14 + rng() * 3, 8 + rng() * 3],
-    [25, 15 + rng() * 4],
-  ];
-  if ((sh.jumps ?? 2) >= 3) pts.push([20 + rng() * 3, 26]);
-  const bolts = has(k, 'lightning', 'storm', 'static', 'thunder', 'zap') ? ELEMENT_RAMPS.lightning : fx;
-  for (let i = 0; i + 1 < pts.length; i++) zap(c, pts[i][0], pts[i][1], pts[i + 1][0], pts[i + 1][1], bolts, rng, 3, 2);
+  const javelin = has(k, 'javelin');
+  const pts: [number, number][] = javelin
+    ? [[18, 13], [26, 6 + rng() * 2], [25, 21 + rng() * 2]]
+    : [[7, 24], [15 + rng() * 2, 8 + rng() * 2], [25, 15 + rng() * 3]];
+  if ((sh.jumps ?? 2) >= 3) pts.push(javelin ? [13, 26] : [19 + rng() * 2, 26]);
+  const electric = has(k, 'lightning', 'storm', 'static', 'thunder', 'zap');
+  const bolts = electric ? ELEMENT_RAMPS.lightning : fx;
   const knives = has(k, 'knives', 'needles', 'ricochet');
+  for (let i = 0; i + 1 < pts.length; i++) {
+    const [ax, ay] = pts[i];
+    const [bx, by] = pts[i + 1];
+    if (electric || !knives) zap(c, ax, ay, bx, by, bolts, rng, 3, 2.2, true);
+    else {
+      seg(c, ax, ay, bx, by, (j) => (j % 3 === 2 ? null : bolts[4]));
+      seg(c, ax + 1, ay, bx + 1, by, (j) => (j % 3 === 2 ? null : bolts[3]));
+    }
+  }
+  if (javelin) {
+    along(c, 4, 28, -45 * DEG, 0, 15, () => 0.9, shadeAcross(R.wood, -45 * DEG, 5, 4, 2));
+    object(c, 'lance', 15, 17, -45 * DEG, 10, R.steel, rng);
+    k.showsWeapon = true;
+  }
   pts.forEach(([x, y], i) => {
-    if (i === 0) {
-      if (has(k, 'javelin')) {
-        along(c, x - 2, y + 2, -50 * DEG, 0, 12, () => 0.8, () => R.wood[4]);
-        k.showsWeapon = true;
-      } else if (has(k, 'palm')) palm(c, x - 4, y - 4, R.cream);
-      else ball(c, x, y, 2.6, fx);
+    if (i === 0 && !javelin) {
+      if (has(k, 'palm')) palm(c, x - 5, y - 4, R.cream);
+      else if (knives) object(c, has(k, 'needles') ? 'nail' : 'knife', x, y, -60 * DEG, 10, R.steel, rng);
+      else ball(c, x, y, 3.6, bolts);
       return;
     }
+    if (i === 0) return;
     if (knives) {
-      object(c, has(k, 'needles') ? 'nail' : 'knife', x, y, (i * 70 - 60) * DEG, 8, R.steel, rng);
+      object(c, has(k, 'needles') ? 'nail' : 'knife', x, y, (i * 70 - 40) * DEG, 9, R.steel, rng);
       k.showsWeapon = true;
-    } else {
-      ring(c, x, y, 2.2, 3.3, bolts[4]);
-      px(c, x, y, bolts[5]);
-    }
+    } else star4(c, x, y, 3, bolts);
   });
-  if (has(k, 'javelin')) object(c, 'lance', pts[1][0], pts[1][1], -60 * DEG, 10, bolts, rng);
-  if (has(k, 'gyre')) spiral(c, 16, 16, 6, fx, 0, 2);
+  if (has(k, 'gyre')) spiral(c, 16, 17, 7, fx, 0, 2);
   if (has(k, 'charge') && has(k, 'static')) {
     fpoly(c, [10, 12, 14, 12, 14, 18, 18, 18, 18, 12, 22, 12, 22, 19, 16, 23, 10, 19], (x) => (x < 16 ? R.blood[4] : R.blood[3]));
     rect(c, 10, 11, 4, 2, R.steel[5]);
@@ -1585,24 +1722,40 @@ function motifChain(c: Ctx, k: SkillCtx): void {
   }
 }
 
+const STAT_AURA: Readonly<Record<string, Ramp>> = {
+  atk: ['#3a1410', '#7a2a16', '#b8501e', '#e08a3a', '#f8c070', '#fff0c8'],
+  def: R.gold,
+  speed: R.teal,
+  crit: R.blood,
+  regen: R.leaf,
+  matk: R.arcane,
+};
+
 function motifBuff(c: Ctx, k: SkillCtx): void {
-  const { fx, rng } = k;
+  const { rng } = k;
   const stat = k.def.shape.kind === 'buff' ? k.def.shape.stat : 'atk';
-  // aura: base ellipse + rising wisps
-  ring(c, 16, 25, 0, 11, (_a, _d, x, y) => {
-    const v = (y - 25) / 3;
-    const u = (x - 16) / 11;
+  // unaligned stances glow in their stat's colour (steel auras read as noise)
+  const fx = k.fx === R.steel ? (STAT_AURA[stat] ?? k.fx) : k.fx;
+  // aura: a glowing ground ring and spirit-flame tongues rising around the emblem
+  paint(c, 3, 20, 29, 30, (x, y) => {
+    const u = (x - 16) / 12;
+    const v = (y - 25.5) / 3.4;
     const d = u * u + v * v;
-    return d <= 1 && d > 0.45 ? (y < 25 ? fx[3] : fx[4]) : null;
+    return d <= 1 && d > 0.5 ? (y < 25 ? fx[3] : fx[4]) : null;
   });
-  for (let i = 0; i < 6; i++) {
-    const x = 5 + i * 4.4 + rng() * 1.5;
-    const h = 7 + rng() * 9;
-    seg(c, x, 24, x, 24 - h, (j, n) => (j > n * 0.6 && j % 2 ? null : j > n * 0.5 ? fx[3] : fx[4]));
+  for (const [x, h, w] of [[5.5, 10, 4], [10, 13, 4.5], [22, 13, 4.5], [26.5, 10, 4]] as const) {
+    flame(c, x, 26.5, w, h + rng() * 3, fx, x < 16 ? -1 : 1);
   }
   const cx = 16;
   const cy = 14;
-  if (has(k, 'horn', 'rally')) horn(c, 7, 17, R.bone);
+  if (has(k, 'horn', 'rally')) {
+    horn(c, 6, 21, R.bone, 0.95);
+    for (const [a, l0] of [[-80, 3], [-40, 4], [0, 3]] as const) {
+      const ax = 25 + Math.cos(a * DEG) * 4;
+      const ay = 12 + Math.sin(a * DEG) * 4;
+      seg(c, ax, ay, ax + Math.cos(a * DEG) * l0, ay + Math.sin(a * DEG) * l0, R.gold[5]);
+    }
+  }
   else if (has(k, 'searing')) {
     flame(c, 16, 22, 10, 17, ELEMENT_RAMPS.fire);
     swordAt(c, 16, 22, -90 * DEG, 15, bladeRamp(ELEMENT_RAMPS.fire));
@@ -1781,28 +1934,48 @@ function paintElement(c: Ctx, id: ElementId | 'generic'): void {
         droplet(l, 15, 29, 9, 27, rp);
         droplet(l, 26, 12, 2.4, 7, rp);
         break;
-      case 'earth':
-        rock(l, [4, 28, 3, 19, 8, 11, 15, 8, 21, 11, 26, 18, 28, 28], rp, 13, 16);
-        rock(l, [18, 29, 20, 22, 25, 20, 29, 24, 29, 29], rp, 23, 24);
-        seg(l, 10, 14, 13, 19, rp[1]);
-        seg(l, 13, 19, 12, 24, rp[1]);
-        rect(l, 15, 12, 2, 2, ELEMENT_RAMPS.holy[4]);
-        rect(l, 6, 9, 3, 1, R.leaf[4]);
-        rect(l, 7, 8, 1, 1, R.leaf[5]);
+      case 'earth': {
+        fpoly(l, [1, 29, 4, 22, 7, 18, 11, 9, 13, 12, 15, 13, 20, 3, 23, 8, 25, 11, 27, 18, 31, 29], (x, y) => {
+          const big = x >= 15 || (x > 12.5 && y < 13);
+          const px0 = big ? 20 : 11;
+          const py0 = big ? 3 : 9;
+          const lit = x < px0 + (y - py0) * 0.2;
+          if (y < py0 + 3) return lit ? rp[5] : rp[3];
+          if (y > 26) return lit ? rp[3] : rp[1];
+          return lit ? rp[4] : rp[2];
+        });
+        for (const [x0, y0, x1, y1] of [[8, 19, 10, 19], [16, 15, 18, 15], [14, 22, 17, 22], [5, 25, 7, 25], [22, 13, 23, 13]]) seg(l, x0, y0, x1, y1, rp[2]);
+        for (const [x, y] of [[9, 18], [17, 14], [15, 21]]) px(l, x, y, rp[5]);
+        rock(l, [20, 30, 21, 25, 25, 23, 30, 26, 30, 30], R.stone, 25, 26);
+        for (const [x, h] of [[3, 4], [5, 3], [7, 5]] as const) rect(l, x, 30 - h, 1, h, R.leaf[4]);
+        px(l, 7, 25, R.leaf[5]);
         break;
+      }
       case 'wind':
-        swoosh(l, 13, 14, 11, 3.5, 200 * DEG, 230 * DEG, rp, { head: 0.55 });
-        swoosh(l, 18, 18, 8, 3, 20 * DEG, 220 * DEG, rp, { head: 0.55 });
-        along(l, 22, 8, -30 * DEG, -4, 4, (s) => 1.8 * Math.cos((s / 4) * (PI / 2)) + 0.2, shadeAcross(R.leaf, -30 * DEG, 5, 4, 2));
+        rect(l, 6, 8, 14, 1, rp[5]);
+        rect(l, 6, 9, 14, 1, rp[4]);
+        ring(l, 20, 5.5, 1.6, 3.6, rp[4], PI, 1.5 * PI);
+        rect(l, 2, 15, 23, 1, rp[5]);
+        rect(l, 2, 16, 23, 1, rp[4]);
+        ring(l, 25, 18.5, 1.6, 3.6, rp[4], 1.5 * PI, 1.5 * PI);
+        rect(l, 9, 23, 10, 1, rp[5]);
+        rect(l, 9, 24, 10, 1, rp[3]);
+        ring(l, 19, 20.5, 1.6, 3.6, rp[4], PI, 1.5 * PI);
+        along(l, 9, 27, -30 * DEG, -3.5, 3.5, (s) => 1.6 * Math.cos((s / 3.5) * (PI / 2)) + 0.2, shadeAcross(R.leaf, -30 * DEG, 5, 4, 2));
+        along(l, 28, 10, 200 * DEG, -3, 3, (s) => 1.4 * Math.cos((s / 3) * (PI / 2)) + 0.2, shadeAcross(R.leaf, 200 * DEG, 5, 4, 2));
         break;
       case 'lightning':
         bolt(l, 6, 2, 1.65, rp);
         break;
-      case 'shadow':
-        ball(l, 16, 17, 11, rp, false);
-        moon(l, 16, 17, 11, R.violet, -0.35, -0.2);
-        eye(l, 17, 18, 4.5, R.violet, R.blood);
+      case 'shadow': {
+        const dark: Ramp = [rp[0], rp[1], rp[4], rp[3], rp[1], '#0c0814'];
+        flame(l, 8, 29, 7, 12, dark, -2);
+        flame(l, 24, 29, 7, 11, dark, 2);
+        flame(l, 16, 30, 18, 28, dark, 1);
+        rect(l, 13, 20, 2, 1, rp[5]);
+        rect(l, 18, 20, 2, 1, rp[5]);
         break;
+      }
       case 'holy':
         for (let i = 0; i < 8; i++) {
           const a = (i / 8) * 2 * PI - PI / 2;
@@ -1833,9 +2006,9 @@ function paintElement(c: Ctx, id: ElementId | 'generic'): void {
         droplet(l, 25, 31, 1.8, 6, rp);
         break;
       case 'storm':
-        cloud(l, 15, 11, 15, rp);
-        bolt(l, 11, 15, 0.9, ELEMENT_RAMPS.lightning);
-        for (const x of [6, 24, 27]) seg(l, x, 20, x - 2, 25, rp[4]);
+        for (const x of [5, 9, 24, 28]) seg(l, x, 18, x - 3, 26, (i) => (i % 3 === 2 ? null : rp[4]));
+        cloud(l, 16, 11, 21, rp);
+        bolt(l, 11, 13, 1.05, ELEMENT_RAMPS.lightning);
         break;
       case 'twilight':
         for (let i = 0; i < 8; i++) {
@@ -1947,6 +2120,7 @@ function paintEssence(c: Ctx, e: EssenceDef | undefined): void {
         if (d[(y * 32 + x + 1) * 4 + 3] || d[(y * 32 + x - 1) * 4 + 3] || d[((y + 1) * 32 + x) * 4 + 3] || d[((y - 1) * 32 + x) * 4 + 3]) l.fillRect(x, y, 1, 1);
       }
     l.drawImage(g.el, 0, 0);
+    release(g);
     px(l, 16, 3, stone[5]);
     px(l, 6, 9, stone[5]);
   });
@@ -1981,22 +2155,25 @@ const MOD_PIP: Readonly<Record<string, readonly string[]>> = {
   leech: ['..#..', '.###.', '#####', '#####', '.###.'],
 };
 
-function paintElementPip(c: Ctx, id: string): void {
+function paintElementPip(c: Ctx, id: string, ox = 0, oy = 0, size = PIP_SIZE): void {
   const rp = ELEMENT_RAMPS[id as ElementId] ?? R.arcane;
-  onLayer(c, (l) => {
-    ball(l, 6, 6, 5, rp, false);
-  });
-  bitmap(c, 4, 4, EL_PIP[id] ?? ['..#..', '.###.', '#####', '.###.', '..#..'], mix(rp[5], '#ffffff', 0.4));
-  // re-shade glyph pixels on dark ramps so it stays readable
-  if (id === 'holy' || id === 'lightning') bitmap(c, 4, 4, EL_PIP[id], rp[1]);
+  const cx = ox + size / 2;
+  const cy = oy + size / 2;
+  onLayer(c, (l) => ball(l, cx, cy, size / 2 - 1, rp, false));
+  const glyph = EL_PIP[id] ?? ['..#..', '.###.', '#####', '.###.', '..#..'];
+  const gx = Math.round(cx - 2.5);
+  const gy = Math.round(cy - 2.5);
+  // light glyph on dark orbs, dark glyph on the bright ones (holy, lightning)
+  bitmap(c, gx, gy, glyph, id === 'holy' || id === 'lightning' ? rp[1] : mix(rp[5], '#ffffff', 0.4));
 }
 
-function paintModPip(c: Ctx, e: EssenceDef | undefined): void {
+function paintModPip(c: Ctx, e: EssenceDef | undefined, ox = 0, oy = 0, size = PIP_SIZE): void {
   const rp = e ? ESSENCE_RAMPS[e.category] : ESSENCE_RAMPS.repeat;
-  onLayer(c, (l) => {
-    fpoly(l, [6, 1, 11, 3.5, 11, 8.5, 6, 11, 1, 8.5, 1, 3.5], (x, y) => (x + y < 11 ? rp[3] : rp[2]));
-  });
-  bitmap(c, 4, 4, MOD_PIP[e?.id ?? ''] ?? ['..#..', '.###.', '#####', '.###.', '..#..'], rp[5]);
+  const k = size / 12;
+  const hex = [6, 1, 11, 3.5, 11, 8.5, 6, 11, 1, 8.5, 1, 3.5].map((v, i) => v * k + (i % 2 ? oy : ox));
+  onLayer(c, (l) => fpoly(l, hex, (x, y) => (x - ox + (y - oy) < size - 1 ? rp[3] : rp[2])));
+  const g = Math.round(size / 2 - 2.5);
+  bitmap(c, ox + g, oy + g, MOD_PIP[e?.id ?? ''] ?? ['..#..', '.###.', '#####', '.###.', '..#..'], rp[5]);
 }
 
 // ------------------------------------------------------------------ class crests
@@ -2006,8 +2183,10 @@ interface ClassLook {
   glyph: (c: Ctx) => void;
 }
 
-/** Class colours (exported so the HUD can tint class slots). */
-export const CLASS_COLORS: Readonly<Record<string, string>> = {};
+/** A class's signature colour (#rrggbb) for tinting class slots / outfit previews; neutral stone if unknown. */
+export function classColor(id: string): string {
+  return classLook(id).main[3];
+}
 
 function classLook(id: string): ClassLook {
   const E = ELEMENT_RAMPS;
@@ -2030,7 +2209,19 @@ function classLook(id: string): ClassLook {
     case 'pyromancer':
       return { main: E.magma, glyph: (c) => { flame(c, 16, 22, 13, 17, E.fire); palm(c, 12, 17, R.cream); } };
     case 'tidecaller':
-      return { main: E.water, glyph: (c) => { swoosh(c, 16, 22, 10, 5, 180 * DEG, 200 * DEG, E.water, { head: 0.55 }); droplet(c, 16, 15, 3, 9, E.water); } };
+      return {
+        main: E.water,
+        glyph: (c) => {
+          rect(c, 15, 9, 2, 15, R.gold[3]);
+          rect(c, 15, 9, 1, 15, R.gold[5]);
+          rect(c, 10, 11, 12, 2, R.gold[4]);
+          for (const x of [10, 15, 20]) fpoly(c, [x, 11, x + 1, 4, x + 2, 11], R.gold[5]);
+          for (let i = 0; i < 4; i++) {
+            rect(c, 7 + i * 5, 24 + (i % 2), 4, 1, R.cream[4]);
+            px(c, 10 + i * 5, 23 + (i % 2), R.cream[5]);
+          }
+        },
+      };
     case 'stormcaller':
       return { main: E.storm, glyph: (c) => { cloud(c, 16, 11, 12, R.cream); bolt(c, 12, 13, 0.7, E.lightning); } };
     case 'earthshaper':
@@ -2049,7 +2240,17 @@ function classLook(id: string): ClassLook {
     case 'spellblade':
       return { main: R.arcane, glyph: (c) => { ring(c, 16, 15, 6.5, 7.8, R.arcane[4]); sw(c, bladeRamp(R.arcane)); } };
     case 'wayfarer':
-      return { main: R.wood, glyph: (c) => { boot(c, 11, 9, R.wood.map((v) => mix(v, '#c09060', 0.3))); wing(c, 10, 9, R.cream, true); } };
+      return {
+        main: LEATHER,
+        glyph: (c) => {
+          for (let i = 0; i < 4; i++) {
+            const a = (i / 4) * 2 * PI - PI / 2;
+            along(c, 16, 15, a, 0, i === 0 ? 9 : 7, (s) => 2.2 * (1 - s / (i === 0 ? 9 : 7)) + 0.2, shadeAcross(i === 0 ? R.blood : R.cream, a, 5, 4, 3));
+          }
+          ring(c, 16, 15, 3.5, 4.6, R.gold[4]);
+          px(c, 16, 15, R.gold[5]);
+        },
+      };
     case 'paladin':
       return { main: R.gold, glyph: (c) => { shield(c, 16, 15, 12, 14, R.cream, R.gold); rect(c, 15, 10, 2, 10, R.blood[3]); rect(c, 12, 13, 8, 2, R.blood[3]); } };
     case 'twilight_sage':
@@ -2128,11 +2329,6 @@ function paintClass(c: Ctx, def: Pick<ClassDef, 'id' | 'tier'> | undefined): voi
     if (tier >= 3) {
       crown(l, 16, 8, 12, R.gold, R.blood[4]);
     }
-    // dark field for the glyph
-    paint(l, 6, top + 2, 26, 29, (x, y) => {
-      const d = Math.hypot(x - 16, y - (top + 11));
-      return d < 8.8 && chk(x, y) ? mix(body[1], body[2], 0.5) : null;
-    });
   });
   onLayer(c, (l) => {
     l.save();
@@ -2212,24 +2408,33 @@ function paintItem(c: Ctx, it: ItemDef | undefined, reg: Registry | null): void 
         rect(l, 14, 26, 5, 2, R.wood[4]);
         break;
       case 'chime_feather':
-        object(l, 'feather', 15, 15, -60 * DEG, 24, R.teal, artRng(1));
-        seg(l, 23, 25, 23, 21, R.gold[2]);
-        paint(l, 19, 22, 28, 30, (x, y) => (Math.abs(x - 23.5) <= (y - 22) * 0.55 + 1 && y < 29 ? (x < 23 ? R.gold[5] : R.gold[3]) : null));
+        object(l, 'feather', 14, 14, -55 * DEG, 29, R.teal, artRng(1));
+        seg(l, 6, 25, 10, 25, R.gold[2]);
+        seg(l, 10, 25, 10, 22, R.gold[2]);
+        paint(l, 3, 24, 13, 32, (x, y) => (Math.abs(x - 7.5) <= (y - 24.5) * 0.6 + 1.2 && y < 31 ? (x < 7 ? R.gold[5] : R.gold[3]) : null));
+        rect(l, 3, 30, 10, 1, R.gold[2]);
+        px(l, 7, 31, R.gold[4]);
         break;
       case 'umbral_spore':
-        mushroom(l, 16, 29, 9, R.violet);
-        dot(l, 12, 14, 1.2, '#b8f0ff');
-        dot(l, 19, 12, 1, '#b8f0ff');
-        dot(l, 21, 17, 1, '#b8f0ff');
+        mushroom(l, 14, 30, 11, R.violet);
+        mushroom(l, 24, 30, 5, R.violet);
+        dot(l, 10, 13, 1.3, '#b8f0ff');
+        dot(l, 17, 10, 1, '#b8f0ff');
+        dot(l, 20, 15, 1, '#b8f0ff');
+        px(l, 26, 8, '#b8f0ff');
+        px(l, 5, 9, '#b8f0ff');
         break;
       case 'ember_shard':
       case 'storm_shard':
       case 'frost_crystal': {
         const rp = it.id === 'ember_shard' ? E.fire : it.id === 'storm_shard' ? E.storm : E.ice;
-        object(l, 'shard', 16, 16, -70 * DEG, 26, rp, artRng(2));
-        if (it.id !== 'ember_shard') {
-          object(l, 'shard', 8, 22, -110 * DEG, 13, rp, artRng(3));
-          object(l, 'shard', 24, 23, -40 * DEG, 12, rp, artRng(4));
+        object(l, 'shard', 16, 15, -70 * DEG, 29, rp, artRng(2));
+        object(l, 'shard', 8, 23, -115 * DEG, 14, rp, artRng(3));
+        object(l, 'shard', 24, 24, -40 * DEG, 13, rp, artRng(4));
+        if (it.id === 'ember_shard') {
+          px(l, 25, 9, rp[5]);
+          px(l, 6, 12, rp[4]);
+          px(l, 27, 15, rp[4]);
         }
         if (it.id === 'storm_shard') bolt(l, 13, 10, 0.55, E.lightning);
         break;
@@ -2262,7 +2467,7 @@ function paintItem(c: Ctx, it: ItemDef | undefined, reg: Registry | null): void 
         }
         break;
       case 'relic_storm':
-        horn(l, 3, 24, R.bone, 1.35);
+        horn(l, 4, 24, R.bone, 1.25);
         ring(l, 11, 21, 0, 2.6, E.lightning[4]);
         bolt(l, 18, 2, 0.6, E.lightning);
         break;
@@ -2324,6 +2529,114 @@ function paintItem(c: Ctx, it: ItemDef | undefined, reg: Registry | null): void 
   });
 }
 
+// ------------------------------------------------------------------ passives (lazy, medallions)
+
+/** Glyph for a tag / trainer passive, centred on (16, 16) inside a ~20 px field. */
+function passiveGlyph(c: Ctx, key: string): void {
+  switch (key) {
+    case 'blade':
+      swordAt(c, 10, 22, -45 * DEG, 12);
+      break;
+    case 'pierce':
+      daggerAt(c, 11, 21, -45 * DEG, 10);
+      break;
+    case 'arcane':
+      ball(c, 16, 16, 5, R.arcane);
+      star4(c, 16, 16, 2, R.cream);
+      break;
+    case 'spin':
+      spiral(c, 16, 16, 9, R.steel, 0.4, 3);
+      break;
+    case 'projectile':
+      along(c, 9, 23, -45 * DEG, 0, 14, () => 0.7, () => R.wood[4]);
+      fpoly(c, [24, 8, 18, 10, 22, 14], R.steel[5]);
+      for (const o of [0, 2]) seg(c, 8 + o, 21 - o, 6 + o, 23 - o, R.cream[4]);
+      break;
+    case 'dash':
+      for (let i = 0; i < 2; i++) fpoly(c, [9 + i * 6, 9, 15 + i * 6, 16, 9 + i * 6, 23, 12 + i * 6, 16], i ? R.teal[5] : R.teal[4]);
+      break;
+    case 'aoe':
+      burst(c, 16, 16, 10, ELEMENT_RAMPS.fire, 8, 0.3);
+      break;
+    case 'stealth':
+      moon(c, 16, 15, 8, R.bone, 0.45, -0.25);
+      eye(c, 15, 16, 3.5, R.bone, R.blood);
+      break;
+    case 'heavy':
+    case 'forgehand':
+      hammerAt(c, 16, 16, -60 * DEG, 18);
+      break;
+    case 'spirit':
+    case 'still_mind':
+      lotus(c, 16, 18, R.rose);
+      break;
+    case 'echo':
+      for (let i = 0; i < 3; i++) ring(c, 10, 16, 3 + i * 4, 4.2 + i * 4, i % 2 ? R.spirit[3] : R.spirit[4], -PI / 3, (2 * PI) / 3);
+      ball(c, 10, 16, 2.2, R.spirit);
+      break;
+    case 'melee':
+      palm(c, 12, 12, R.cream);
+      break;
+    case 'sure_footing':
+      boot(c, 10, 8, LEATHER);
+      break;
+    case 'devotion':
+      star4(c, 16, 15, 6, ELEMENT_RAMPS.holy);
+      break;
+    case 'patience':
+      seg(c, 16, 5, 16, 16, R.cream[4]);
+      ring(c, 13.5, 18, 1.6, 3, R.steel[4], -PI * 0.1, PI * 1.1);
+      fpoly(c, [10, 17, 12, 15, 12, 19], R.steel[5]);
+      dot(c, 16, 9, 1.6, R.blood[4]);
+      break;
+    case 'field_drill':
+      shield(c, 16, 16, 13, 15, R.blood, R.gold);
+      break;
+    case 'pathfinder':
+      for (let i = 0; i < 4; i++) {
+        const a = (i / 4) * 2 * PI - PI / 2;
+        along(c, 16, 16, a, 0, i === 0 ? 9 : 7, (s) => 2 * (1 - s / (i === 0 ? 9 : 7)) + 0.2, shadeAcross(i === 0 ? R.blood : R.cream, a, 5, 4, 3));
+      }
+      break;
+    default:
+      star4(c, 16, 16, 5, R.gold);
+  }
+}
+
+function paintPassive(c: Ctx, p: { id: string; source: string; tag?: string } | undefined): void {
+  if (p && (p.source === 'class' || p.source === 'imprint')) {
+    const cls = p.id.replace(/^cls_/, '').replace(/^imprint_/, '').replace(/_\d+$/, '');
+    paintClass(c, REG?.classDef(cls) ?? { id: cls, tier: 1 });
+    if (p.source === 'imprint') onLayer(c, (l) => ring(l, 25, 25, 2.5, 4.4, R.gold[4]));
+    return;
+  }
+  const res = p?.source === 'resonance' ? p.id.split('_').slice(1) : null;
+  const rim = p?.source === 'trainer' ? R.steel : p?.source === 'bestiary' ? R.bone : R.gold;
+  onLayer(c, (l) => {
+    paint(l, 1, 1, 31, 31, (x, y) => {
+      const d = Math.hypot(x - 16, y - 16);
+      if (d > 14.5) return null;
+      if (d > 12) {
+        const lit = -((x - 16) + (y - 16));
+        return lit > 4 ? rim[5] : lit < -4 ? rim[2] : rim[3];
+      }
+      if (d > 11) return OUT;
+      if (res && res.length === 2) {
+        const rp = ELEMENT_RAMPS[(x - 16 < y - 16 ? res[0] : res[1]) as ElementId] ?? R.arcane;
+        return d > 9 ? rp[2] : rp[3];
+      }
+      return d > 8.5 ? (chk(x, y) ? '#1c140e' : '#2a1c12') : '#2a1c12';
+    });
+  });
+  if (res && res.length === 2) {
+    seg(c, 8, 8, 24, 24, R.gold[4]);
+    paintElementPip(c, res[0], 7, 15, 10);
+    paintElementPip(c, res[1], 15, 7, 10);
+    return;
+  }
+  onLayer(c, (l) => passiveGlyph(l, p?.tag ?? p?.id ?? ''));
+}
+
 // ------------------------------------------------------------------ registry + entry points
 
 let REG: Registry | null = null;
@@ -2333,16 +2646,23 @@ const PREFIX: Readonly<Record<IconKind, string>> = {
   mod: 'icon_mod_',
   item: 'icon_item_',
   cls: 'icon_cls_',
+  passive: 'icon_passive_',
 };
 
 function drawGenerics(scene: Phaser.Scene): void {
-  pixelTex(scene, 'icon_skill_generic', 32, 32, (c) =>
-    paintSkill(c, { id: 'generic', name: '', desc: '', icon: '', tier: 0, tags: ['blade'], power: 1, spCost: 0, cooldown: 0, shape: { kind: 'strike', range: 1, arc: 120 }, maxRank: 1 }, 'generic'),
-  );
+  pixelTex(scene, 'icon_skill_generic', 32, 32, (c) => {
+    tileBack(c, BG.steel, 0);
+    onLayer(c, (l) => {
+      ring(l, 16, 16, 8, 9.4, (_a, _d, x, y) => (chk(x, y) ? R.steel[3] : null));
+      star4(l, 16, 16, 5, R.steel);
+    });
+    tileFrame(c, 0, R.steel);
+  });
   pixelTex(scene, 'icon_el_generic', 32, 32, (c) => paintElement(c, 'generic'));
   pixelTex(scene, 'icon_mod_generic', 32, 32, (c) => paintEssence(c, undefined));
   pixelTex(scene, 'icon_item_generic', 32, 32, (c) => paintItem(c, undefined, null));
   pixelTex(scene, 'icon_cls_generic', 32, 32, (c) => paintClass(c, undefined));
+  pixelTex(scene, 'icon_passive_generic', 32, 32, (c) => paintPassive(c, undefined));
 }
 
 /** Variant / merge skill icon: redrawn from the composed SkillDef + element / essence / merge badges. */
@@ -2362,24 +2682,25 @@ function drawGeneratedSkill(scene: Phaser.Scene, id: string): string | null {
         ring(l, 26.5, 7, 1.6, 3, R.gold[5]);
       });
     }
-    if (parts.element && scene.textures.exists('icon_pip_el_' + parts.element)) {
-      const src = scene.textures.get('icon_pip_el_' + parts.element).getSourceImage() as CanvasImageSource;
-      c.drawImage(src, 2, 2);
-    }
-    parts.mods.forEach((m, i) => {
-      const k = 'icon_pip_mod_' + m;
-      if (!scene.textures.exists(k)) return;
-      c.drawImage(scene.textures.get(k).getSourceImage() as CanvasImageSource, 2 + i * 10, 18);
-    });
+    if (parts.element) paintElementPip(c, parts.element, 2, 2, 10);
+    parts.mods.forEach((m, i) => paintModPip(c, REG?.essence(m), 2 + i * 9, 20, 10));
   });
   return key;
 }
 
+export interface DrawIconsOptions {
+  /**
+   * Skip painting the ~160 authored skill tiles now; each is painted on first iconKey()/iconUrl() request
+   * instead (≈ 60% of the icon boot cost). Everything else is still drawn eagerly. Default false.
+   */
+  lazySkills?: boolean;
+}
+
 /**
  * Generates every icon texture: authored skills, elements, essences, items, classes, pips and generic
- * fallbacks. Idempotent per key. Call once at boot after the registry exists.
+ * fallbacks. Idempotent per key. Call once at boot after the registry exists (iconKey / iconUrl need it).
  */
-export function drawIcons(scene: Phaser.Scene, reg: Registry): void {
+export function drawIcons(scene: Phaser.Scene, reg: Registry, opts: DrawIconsOptions = {}): void {
   REG = reg;
   drawGenerics(scene);
   for (const el of reg.elements.values()) {
@@ -2390,12 +2711,9 @@ export function drawIcons(scene: Phaser.Scene, reg: Registry): void {
     pixelTex(scene, PREFIX.mod + e.id, 32, 32, (c) => paintEssence(c, e));
     pixelTex(scene, 'icon_pip_mod_' + e.id, PIP_SIZE, PIP_SIZE, (c) => paintModPip(c, e));
   }
-  for (const s of reg.authoredSkills()) pixelTex(scene, PREFIX.skill + s.id, 32, 32, (c) => paintSkill(c, s, s.id));
+  if (!opts.lazySkills) for (const s of reg.authoredSkills()) pixelTex(scene, PREFIX.skill + s.id, 32, 32, (c) => paintSkill(c, s, s.id));
   for (const it of reg.items.values()) pixelTex(scene, PREFIX.item + it.id, 32, 32, (c) => paintItem(c, it, reg));
-  for (const cl of reg.classes) {
-    pixelTex(scene, PREFIX.cls + cl.id, 32, 32, (c) => paintClass(c, cl));
-    (CLASS_COLORS as Record<string, string>)[cl.id] = classLook(cl.id).main[3];
-  }
+  for (const cl of reg.classes) pixelTex(scene, PREFIX.cls + cl.id, 32, 32, (c) => paintClass(c, cl));
 }
 
 /**
@@ -2426,6 +2744,9 @@ export function iconKey(scene: Phaser.Scene, kind: IconKind, id: string): string
     } else if (kind === 'cls' && REG.classDef(id)) {
       pixelTex(scene, key, 32, 32, (c) => paintClass(c, REG!.classDef(id)));
       return key;
+    } else if (kind === 'passive' && REG.passive(id)) {
+      pixelTex(scene, key, 32, 32, (c) => paintPassive(c, REG!.passive(id)));
+      return key;
     }
   }
   drawGenerics(scene);
@@ -2448,4 +2769,137 @@ export function iconUrl(scene: Phaser.Scene, kind: IconKind, id: string): string
 export function pipUrl(scene: Phaser.Scene, kind: 'el' | 'mod', id: string): string {
   const key = `icon_pip_${kind}_${id}`;
   return scene.textures.exists(key) ? textureDataUrl(scene, key) : '';
+}
+
+// ------------------------------------------------------------------ HUD glyphs (used by ./ui.ts)
+
+/** Names of the 24x24 HUD button glyphs drawn by ui.ts as `ui_ico_<name>`. */
+export const UI_GLYPHS = [
+  'skills',
+  'fuse',
+  'class',
+  'codex',
+  'bag',
+  'map',
+  'menu',
+  'quest',
+  'attack',
+  'auto',
+  'target',
+  'potion',
+  'recall',
+  'rest',
+  'close',
+] as const;
+export type UiGlyph = (typeof UI_GLYPHS)[number];
+
+/** Paints one 24x24 HUD glyph (outlined, transparent background). */
+export function paintUiGlyph(c: Ctx, name: UiGlyph): void {
+  onLayer(c, (l) => {
+    switch (name) {
+      case 'skills':
+        for (const [x0, y0, x1, y1] of [[5, 17, 11, 7], [11, 7, 19, 11], [19, 11, 17, 19], [11, 7, 9, 13]]) seg(l, x0, y0, x1, y1, R.gold[2]);
+        star4(l, 5, 17, 2, R.gold);
+        star4(l, 11, 7, 3, R.gold);
+        star4(l, 19, 11, 2, R.gold);
+        star4(l, 17, 19, 2, R.gold);
+        break;
+      case 'fuse':
+        paint(l, 3, 9, 21, 22, (x, y) => {
+          const u = (x - 12) / 8.5;
+          const v = (y - 14) / 7.5;
+          return u * u + v * v <= 1 && y > 11 ? (u + v < -0.5 ? R.iron[4] : R.iron[3]) : null;
+        });
+        rect(l, 3, 10, 18, 2, R.iron[5]);
+        rect(l, 5, 21, 3, 2, R.iron[2]);
+        rect(l, 16, 21, 3, 2, R.iron[2]);
+        dot(l, 9, 7, 2.2, ELEMENT_RAMPS.fire[4]);
+        dot(l, 15, 6, 2.2, ELEMENT_RAMPS.water[4]);
+        px(l, 12, 3, R.violet[5]);
+        break;
+      case 'class':
+        paint(l, 4, 3, 20, 22, (x, y) => {
+          const t = (y - 3) / 18;
+          const half = 7.5 * (t < 0.55 ? 1 : Math.sqrt(Math.max(0, 1 - ((t - 0.55) / 0.45) ** 2)));
+          if (Math.abs(x - 12) > half) return null;
+          if (Math.abs(x - 12) > half - 1.2 || y < 4.2) return x + y < 18 ? R.gold[5] : R.gold[3];
+          return x < 12 ? R.blood[4] : R.blood[3];
+        });
+        swordAt(l, 12, 17, -90 * DEG, 9);
+        break;
+      case 'codex':
+        fpoly(l, [3, 5, 16, 2, 20, 18, 7, 21], (x, y) => ((x - 3) + (y - 5) * 0.2 < 3 ? R.teal[5] : R.teal[4]));
+        fpoly(l, [7, 21, 20, 18, 21, 20, 8, 23], R.cream[4]);
+        seg(l, 8, 22, 20, 19, R.cream[2]);
+        seg(l, 3, 5, 7, 21, R.teal[2]);
+        ball(l, 12, 12, 2.6, R.gold);
+        px(l, 6, 4, R.gold[4]);
+        px(l, 17, 18, R.gold[4]);
+        break;
+      case 'bag':
+        paint(l, 3, 7, 22, 23, (x, y) => {
+          const u = (x - 12.5) / 8.5;
+          const v = (y - 15.5) / 7;
+          return u * u + v * v <= 1 ? (u + v < -0.5 ? LEATHER[5] : u + v < 0.4 ? LEATHER[4] : LEATHER[3]) : null;
+        });
+        fpoly(l, [7, 9, 10, 3, 15, 3, 18, 9], LEATHER[3]);
+        rect(l, 7, 8, 11, 2, R.gold[3]);
+        rect(l, 11, 14, 3, 3, R.gold[4]);
+        break;
+      case 'map':
+        fpoly(l, [3, 6, 9, 4, 15, 6, 21, 4, 21, 19, 15, 21, 9, 19, 3, 21], (x) => (x < 9 ? R.cream[4] : x < 15 ? R.cream[3] : R.cream[4]));
+        seg(l, 9, 4, 9, 19, R.cream[2]);
+        seg(l, 15, 6, 15, 21, R.cream[2]);
+        for (const [x, y] of [[6, 15], [8, 12], [11, 11], [13, 9]]) px(l, x, y, R.blood[3]);
+        bitmap(l, 15, 9, ['#.#', '.#.', '#.#'], R.blood[3]);
+        break;
+      case 'menu':
+        for (const y of [5, 11, 17]) {
+          rect(l, 4, y, 16, 3, R.cream[4]);
+          rect(l, 4, y, 16, 1, R.cream[5]);
+        }
+        break;
+      case 'quest':
+        fpoly(l, [6, 3, 18, 3, 18, 20, 6, 20], (x) => (x < 12 ? R.cream[5] : R.cream[4]));
+        rect(l, 5, 2, 14, 2, LEATHER[4]);
+        rect(l, 5, 20, 14, 2, LEATHER[3]);
+        rect(l, 11, 6, 2, 8, R.blood[3]);
+        rect(l, 11, 16, 2, 2, R.blood[3]);
+        break;
+      case 'attack':
+        swoosh(l, 12, 12, 10, 3.5, 160 * DEG, 200 * DEG, R.steel);
+        swordAt(l, 6, 18, -45 * DEG, 14);
+        break;
+      case 'auto':
+        ring(l, 12, 12, 6, 8.5, R.gold[4], PI * 0.15, PI * 0.75);
+        ring(l, 12, 12, 6, 8.5, R.gold[3], PI * 1.15, PI * 0.75);
+        bitmap(l, 4, 5, ['#...', '##..', '###.'], R.gold[4]);
+        bitmap(l, 16, 16, ['.###', '..##', '...#'], R.gold[3]);
+        bitmap(l, 10, 9, ['.##.', '#..#', '####', '#..#', '#..#'], R.cream[5]);
+        break;
+      case 'target':
+        ring(l, 12, 12, 6, 7.6, R.blood[4]);
+        for (const [x, y, w, h] of [[11, 2, 2, 6], [11, 16, 2, 6], [2, 11, 6, 2], [16, 11, 6, 2]]) rect(l, x, y, w, h, R.cream[5]);
+        dot(l, 12, 12, 1.3, R.blood[5]);
+        break;
+      case 'potion':
+        rect(l, 10, 2, 5, 3, R.wood[3]);
+        rect(l, 11, 5, 3, 3, '#c8dce0');
+        ball(l, 12.5, 15, 7, R.blood);
+        px(l, 9, 13, '#ffffff');
+        break;
+      case 'recall':
+        fpoly(l, [9, 2, 16, 4, 19, 13, 14, 22, 7, 20, 5, 10], (x, y) => ((x - 12) + (y - 12) < -3 ? R.stone[5] : (x - 12) + (y - 12) < 3 ? R.stone[4] : R.stone[3]));
+        bitmap(l, 10, 7, ['..#..', '.###.', '#.#.#', '..#..', '.#.#.', '#...#'], R.teal[5]);
+        break;
+      case 'rest':
+        for (const [x0, y0, x1, y1] of [[4, 21, 20, 16], [4, 16, 20, 21]]) along(l, x0, y0, Math.atan2(y1 - y0, x1 - x0), 0, Math.hypot(x1 - x0, y1 - y0), () => 1.2, shadeAcross(R.wood, Math.atan2(y1 - y0, x1 - x0), 4, 3, 2));
+        flame(l, 12, 18, 9, 14, ELEMENT_RAMPS.fire);
+        break;
+      case 'close':
+        along(l, 5, 5, 45 * DEG, 0, 19.8, () => 1.5, () => R.cream[5]);
+        along(l, 19, 5, 135 * DEG, 0, 19.8, () => 1.5, () => R.cream[4]);
+        break;
+    }
+  });
 }

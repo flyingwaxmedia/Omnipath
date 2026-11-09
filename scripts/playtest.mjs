@@ -544,9 +544,12 @@ if (args.includes('--portals')) {
     for (let i = 0; i < 30 && (await p3.evaluate(() => !!window.omnipath.scene?.warping)); i++) await p3.waitForTimeout(100);
   };
   const close3 = async () => {
-    for (let i = 0; i < 8 && (await inf()).open; i++) {
-      await p3.evaluate(() => window.omnipath.ui.close());
-      await p3.waitForTimeout(120);
+    for (let i = 0; i < 12 && (await inf()).open; i++) {
+      // Discovery cards only close via their own button (ui.close() leaves them up).
+      const btn = await p3.$('.discovery .ok');
+      if (btn) await btn.click().catch(() => {});
+      else await p3.evaluate(() => window.omnipath.ui.close());
+      await p3.waitForTimeout(150);
     }
   };
   /** Page point to tap toward a portal rect: inside it if visible, else the farthest visible point of the path. */
