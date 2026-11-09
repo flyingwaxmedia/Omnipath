@@ -430,9 +430,16 @@ export class Hud {
       b.addEventListener('pointerdown', (e) => {
         e.preventDefault();
         onSlot(i, b.classList.contains('empty'));
+        if (i < 0) c.holdAttack(true);
         b.classList.add('pressed');
         setTimeout(() => b.classList.remove('pressed'), 120);
       });
+      if (i < 0) {
+        const release = () => c.holdAttack(false);
+        b.addEventListener('pointerup', release);
+        b.addEventListener('pointercancel', release);
+        b.addEventListener('pointerleave', release);
+      }
     });
     this.hotbar.querySelector<HTMLButtonElement>('.autobtn')?.addEventListener('pointerdown', (e) => {
       e.preventDefault();

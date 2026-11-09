@@ -195,8 +195,13 @@ export class MapScene extends Phaser.Scene implements GameController {
     const kb = this.input.keyboard;
     if (kb) {
       const onKey = (e: KeyboardEvent) => this.handleKey(e);
+      const onKeyUp = (e: KeyboardEvent) => {
+        if (e.key === ' ') this.holdAttack(false);
+      };
       kb.on('keydown', onKey);
+      kb.on('keyup', onKeyUp);
       this.disposers.push(() => kb.off('keydown', onKey));
+      this.disposers.push(() => kb.off('keyup', onKeyUp));
     }
 
     this.wireEvents();
@@ -215,7 +220,8 @@ export class MapScene extends Phaser.Scene implements GameController {
           'Mirelle, Waykeeper',
           '🧭',
           `Welcome to Hearthvale, ${esc(s.player.name)}. You carry ${/^[aeiou]/i.test(w.name) ? 'an' : 'a'} <b>${w.name}</b> and know only <b>${basic.name}</b>.<br><br>
-          Tap the ground to walk. Tap a monster to fight it — every strike trains <b>${basic.name}</b>.
+          Tap the ground to walk. Tap a monster to face it, then press ⚔ to strike (hold to keep swinging) — or switch
+          <b>AUTO</b> on and you will hunt and fight on your own. Every strike trains <b>${basic.name}</b>.
           Master it and it will <b>morph</b> into something new.<br><br>
           Elements hide in ordinary work: Brann's forge, the lake, the quarry, the hills. Find them, then <b>fuse</b> them at the altar.
           Touch the waystone here so the vale remembers you.`,
@@ -884,7 +890,10 @@ export class MapScene extends Phaser.Scene implements GameController {
       this.setAutoCastOn(!this.autoCastOn());
       this.ui.toast(this.autoCastOn() ? '⟳ AUTO on: hunting the nearest foe' : 'AUTO off');
     } else if (e.key >= '1' && e.key <= String(this.session.player.hotbar.length)) this.castSlot(Number(e.key) - 1);
-    else if (e.key === ' ') this.castSlot(-1);
+    else if (e.key === ' ') {
+      this.castSlot(-1);
+      this.holdAttack(true);
+    }
   }
 
   pathTo(x: number, y: number): { x: number; y: number }[] | null {
@@ -1160,17 +1169,26 @@ export class MapScene extends Phaser.Scene implements GameController {
     this.combat.lastInput = this.time.now;
     const pl = this.session.player;
     if (i < 0) {
-      const w = WEAPONS[pl.weapon];
-      if (!this.combat.target || !this.combat.target.alive) {
-        const best = this.combat.nearestMonster(320);
-        if (best) this.combat.setTarget(best);
-        else this.ui.toast('No enemies nearby.');
+      // AUTO on: the basic attack already runs by itself; a press just (re)targets the nearest foe.
+      if (pl.autoOn) {
+        if (!this.combat.target || !this.combat.target.alive) {
+          const best = this.combat.nearestMonster(320);
+          if (best) this.combat.setTarget(best);
+          else this.ui.toast('No enemies nearby.');
+        }
+        return;
       }
-      if (this.combat.target) this.combat.castSkill(w.basic);
+      this.combat.pressAttack();
       return;
     }
     const id = pl.hotbar[i];
     if (id) this.combat.castSkill(id);
+  }
+
+  holdAttack(on: boolean): void {
+    if (!this.combat) return;
+    this.combat.attackHeld = on;
+    if (on) this.combat.lastInput = this.time.now;
   }
 
   autoCastOn(): boolean {

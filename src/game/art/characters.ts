@@ -135,7 +135,7 @@ function layer(dst: Ctx, draw: (c: Ctx) => void, outlined = true): void {
 
 // ---------------------------------------------------------------- looks
 
-type HairStyle = 'tousled' | 'spiky' | 'long' | 'bun' | 'pony' | 'bald' | 'braid' | 'tuft' | 'crop' | 'swept';
+type HairStyle = 'tousled' | 'spiky' | 'long' | 'bun' | 'pony' | 'bald' | 'braid' | 'tuft' | 'crop';
 type Hat = 'wizard' | 'hood' | 'veil' | 'cowl' | 'straw' | 'shako' | 'cap' | 'miner' | 'feather' | 'goggles' | 'circlet' | 'bandana';
 type Prop =
   | 'sword'
@@ -353,24 +353,6 @@ const HAIR: Record<HairStyle, readonly string[]> = {
     '.................',
     '.................',
   ],
-  swept: [
-    '.................',
-    '......hhhhh......',
-    '....hhhllllhhh...',
-    '...hhhllhhhhhhh..',
-    '..hhhllhhhhhhhhhh',
-    '.hhhhhhhhhhhhhhhh',
-    '.Hhhhhhhhhhhhhhh.',
-    '.HHhhhhhhhhhhhh..',
-    '.HHhhhhhh.hhh....',
-    '.HHHhhh..........',
-    '.dHHH............',
-    '..dHH............',
-    '..dH.............',
-    '.................',
-    '.................',
-    '.................',
-  ],
   spiky: [
     '...l...h...h.....',
     '...hl.hhh.hhh.h..',
@@ -512,15 +494,6 @@ function paintHead(c: Ctx, R: Rig): void {
     tpl(c, hx - 2 - sway, hy + 6, ['.hh..', 'hhhh.', 'hhhH.', 'hhHH.', '.hHH.', '.HHd.', '..Hd.', '..d..'], { h: hr[2], H: hr[1], d: hr[0] });
     rect(c, hx + 1, hy + 6, 2, 2, PAL.crimson);
   }
-  if (L.style === 'braid') {
-    for (let i = 0; i < 5; i++) {
-      const bx = hx + 2 + (i % 2) - (P.t % 2 && i > 2 ? 1 : 0);
-      rect(c, bx, hy + 13 + i * 2, 3, 2, i % 2 ? hr[1] : hr[2]);
-      px(c, bx, hy + 13 + i * 2, hr[3]);
-    }
-    rect(c, hx + 2, hy + 23, 3, 1, PAL.crimson);
-  }
-
   tpl(c, hx, hy, FACE, { s: sk[2], S: sk[1] });
   // Hair (hoods and full hats replace it).
   const hidesHair = L.hat === 'hood' || L.hat === 'cowl' || L.hat === 'veil';
@@ -529,6 +502,19 @@ function paintHead(c: Ctx, R: Rig): void {
     px(c, hx + 6, hy + 4, sk[3]);
     px(c, hx + 7, hy + 4, sk[3]);
     px(c, hx + 5, hy + 5, sk[3]);
+  }
+
+  if (L.style === 'braid') {
+    // braid draped forward over the shoulder, ribbon at the tip
+    const sway = P.t % 2;
+    for (let i = 0; i < 5; i++) {
+      const bx = hx + 4 + (i > 2 ? sway : 0);
+      const by = hy + 13 + i * 2;
+      rect(c, bx, by, 3, 2, i % 2 ? hr[1] : hr[2]);
+      px(c, bx, by, hr[3]);
+    }
+    rect(c, hx + 4 + sway, hy + 23, 3, 1, PAL.crimson);
+    px(c, hx + 5 + sway, hy + 24, hr[1]);
   }
 
   // Ear (3/4 view: behind the cheek, at the hair line).
@@ -829,12 +815,12 @@ function paintBack(c: Ctx, R: Rig): void {
     px(c, tx0 - 2, ty0 - 1, '#5a4480');
   }
   if (L.back === 'quiver') {
+    // hip quiver slung behind, fletchings poking out at the back
     const q = ramp('#7d5530');
-    const qx = tx0 - 5;
-    const qy = ty0 - 9;
-    for (let i = 0; i < 15; i++) rect(c, qx + Math.floor(i / 3), qy + i, 3, 1, i < 2 ? q[3] : i % 5 === 4 ? q[1] : q[2]);
-    // fletchings peeking over the shoulder
-    tpl(c, qx - 3, qy - 4, ['c..r.', 'cc.rr', '.cc.r', '..b.b'], { c: PAL.cream, r: PAL.crimson, b: LEATHER[1] });
+    const qx = tx0 - 3;
+    const qy = ty0 + 3;
+    for (let i = 0; i < 9; i++) rect(c, qx + Math.floor(i / 3), qy + i, 3, 1, i < 1 ? q[3] : i % 4 === 3 ? q[1] : q[2]);
+    tpl(c, qx - 3, qy - 3, ['c..r', 'cc.r', '.cbr', '..b.'], { c: PAL.cream, r: PAL.crimson, b: LEATHER[1] });
   }
   if (L.back === 'scrolls') {
     const q = ramp('#5c3d22');
@@ -961,10 +947,7 @@ function paintTorso(c: Ctx, R: Rig): void {
     rect(c, tx0 + 1, ty0 + 1, 2, ty1 - ty0 - 3, st);
     px(c, tx0 + 1, ty0 + 5, GOLD[1]);
   }
-  if (L.back === 'quiver') {
-    // strap across the chest
-    for (let i = 0; i < 9; i++) px(c, tx0 + 1 + i, ty0 + 1 + i, LEATHER[1]);
-  }
+
 }
 
 function paintArm(c: Ctx, R: Rig, front: boolean): void {
@@ -1058,7 +1041,7 @@ function paintProp(c: Ctx, R: Rig, over: boolean): void {
       if (over) return;
       // smith's hammer held head-up: wooden haft, square steel head with a dark striking face
       const ang = P.ang ?? -1.5;
-      along(c, hx, hy, ang, -2, 9, 1, (a, s) => (Math.abs(s) <= 0.6 ? (s < 0 ? LEATHER[3] : LEATHER[2]) : null));
+      along(c, hx, hy, ang, -2, 9, 1, (_a, s) => (Math.abs(s) <= 0.6 ? (s < 0 ? LEATHER[3] : LEATHER[2]) : null));
       const [kx, ky] = axisPt(hx, hy, ang, 11);
       tpl(c, kx - 4, ky - 2, ['.lllllll.', 'SlssssssD', 'SssssssSD', 'SSSSSSSSD', '...bb....'], {
         l: STEEL[3],
@@ -1205,11 +1188,17 @@ function paintProp(c: Ctx, R: Rig, over: boolean): void {
     }
     case 'pickaxe': {
       if (over) return;
-      // resting on the shoulder: handle diagonally back, head behind the head
-      const ang = -2.25 + (t % 2) * 0.06;
-      along(c, hx, hy, ang, -2, 13, 1, (a, s) => (Math.abs(s) <= 0.6 ? (s < 0 ? LEATHER[3] : LEATHER[2]) : null));
-      const [px0, py0] = axisPt(hx, hy, ang, 13);
-      tpl(c, px0 - 6, py0 - 3, ['..ssss...', '.sSSSSs..', 'sS..s.Ss.', 'S...s..Ss', '....s...S', '.........'], { s: STEEL[2], S: STEEL[1] });
+      // carried over the shoulder: haft runs up behind the head, the pick pokes out at the back
+      const ang = -2.42 + (t % 2) * 0.05;
+      const len = 18;
+      along(c, hx, hy, ang, -2, len, 1, (_a, s) => (Math.abs(s) <= 0.6 ? (s < 0 ? LEATHER[3] : LEATHER[2]) : null));
+      const [px0, py0] = axisPt(hx, hy, ang, len);
+      tpl(c, px0 - 4, py0 - 3, ['..lsss..', '.sSSSSs.', 'sS.ss.Ss', 'S..bb..S', 'S......S'], {
+        l: STEEL[3],
+        s: STEEL[2],
+        S: STEEL[1],
+        b: LEATHER[1],
+      });
       return;
     }
     case 'bow': {
@@ -1248,7 +1237,7 @@ function paintFx(c: Ctx, R: Rig): void {
     const tipX = 37;
     const tipY = 6 + (P.t % 2);
     const bobY = 30 - (P.t % 2);
-    for (let y = tipY + 1; y < bobY; y++) px(c, tipX + (y > tipY + 12 ? 1 : 0), y, 'rgba(239,230,200,0.75)');
+    for (let y = tipY + 1; y < bobY; y++) px(c, tipX + (y > tipY + 12 ? 1 : 0), y, '#d6ccaa');
     rect(c, tipX, bobY, 2, 2, PAL.crimson);
     px(c, tipX, bobY + 2, '#efe6c8');
   }
@@ -1258,7 +1247,7 @@ function paintFx(c: Ctx, R: Rig): void {
     for (let i = 1; i < 12; i++) {
       const yy = ky + 4 + i * 2;
       const xx = kx - Math.round(i * 0.55) + (P.t % 2 && i > 6 ? 1 : 0);
-      if (yy < hy - 1) px(c, xx, yy, 'rgba(239,230,200,0.8)');
+      if (yy < hy - 1) px(c, xx, yy, '#e6dcbc');
     }
     // tail ribbons
     const w = P.t % 2;
@@ -1286,12 +1275,6 @@ function paintFx(c: Ctx, R: Rig): void {
       for (const [dx, dy] of [[-3, -3], [3, -3], [3, 3], [-3, 3]]) px(c, ox + dx, oy + dy, '#7fd6ff');
     }
     if (P.fx === 'cast') {
-      // arc trail from the raised position down to the orb
-      for (let a = -1.95; a < ang - 0.2; a += 0.11) {
-        const x = Math.round(hx + Math.cos(a) * len);
-        const y = Math.round(hy + Math.sin(a) * len);
-        px(c, x, y, a > ang - 0.5 ? '#bfe8ff' : '#7fd6ff');
-      }
       // starburst at the orb
       for (let k = 0; k < 8; k++) {
         const a = (k / 8) * Math.PI * 2 + 0.2;
@@ -1341,9 +1324,26 @@ function paintFx(c: Ctx, R: Rig): void {
 
 // ---------------------------------------------------------------- compositing
 
+/** Layer slot of the held prop: over the arm (held against the chest), between torso and head
+ *  (carried over the shoulder), or in front of the head (default). */
+function propSlot(L: Look): 'over' | 'mid' | 'front' {
+  switch (L.prop) {
+    case 'baton':
+    case 'ledger':
+    case 'book':
+    case 'scroll':
+    case 'compass':
+      return 'over';
+    case 'pickaxe':
+      return 'mid';
+    default:
+      return 'front';
+  }
+}
+
 function paintCharacter(c: Ctx, L: Look, P: Pose): void {
   const R = rig(L, P);
-  const propOver = L.prop === 'baton' || L.prop === 'ledger' || L.prop === 'book' || L.prop === 'scroll' || L.prop === 'compass';
+  const slot = propSlot(L);
   paintFxBack(c, R);
   layer(c, (l) => paintBack(l, R));
   if (P.behind) layer(c, (l) => paintProp(l, R, false));
@@ -1352,10 +1352,11 @@ function paintCharacter(c: Ctx, L: Look, P: Pose): void {
   layer(c, (l) => paintLeg(l, R, true));
   layer(c, (l) => paintTorso(l, R));
   if (P.armBehind) layer(c, (l) => paintArm(l, R, true));
+  if (!P.behind && slot === 'mid') layer(c, (l) => paintProp(l, R, false));
   layer(c, (l) => paintHead(l, R));
-  if (!P.behind && !propOver) layer(c, (l) => paintProp(l, R, false));
+  if (!P.behind && slot === 'front') layer(c, (l) => paintProp(l, R, false));
   if (!P.armBehind) layer(c, (l) => paintArm(l, R, true));
-  if (propOver) layer(c, (l) => paintProp(l, R, true));
+  if (slot === 'over') layer(c, (l) => paintProp(l, R, true));
   paintFx(c, R);
 }
 
@@ -1566,7 +1567,7 @@ const NPCS: Record<string, Look> = {
   },
   archivist: {
     skin: '#c8906a',
-    hair: '#1e1e2a',
+    hair: '#2e2440',
     style: 'braid',
     top: '#2f6a5a',
     legs: '#2a4a40',
@@ -1638,8 +1639,8 @@ const NPC_IDLE: Pose[] = [
 ];
 
 /** Per-NPC hand placement so props sit naturally. */
-const NPC_HANDS: Record<string, { front?: [number, number]; back?: [number, number] }> = {
-  hammer: { front: [0, -1] },
+const NPC_HANDS: Record<string, { front?: [number, number]; back?: [number, number]; front1?: [number, number] }> = {
+  hammer: { front: [0, 0], front1: [0, -3] },
   sunstaff: { front: [0, -1] },
   walkstick: { front: [1, 0] },
   rod: { front: [-1, -1] },
@@ -1692,7 +1693,7 @@ export function drawCharacters(scene: Phaser.Scene): void {
   for (const w of WEAPONS) {
     const L = PLAYERS[w];
     charTex(scene, `player_${w}`, L, IDLE[0]);
-    charTex(scene, `player_${w}_idle_1`, L, IDLE[1]);
+    charTex(scene, `player_${w}_idle_1`, L, w === 'sword' ? { ...IDLE[1], fx: 'glint' } : IDLE[1]);
     WALK.forEach((p, i) => charTex(scene, `player_${w}_walk_${i}`, L, p));
     ATTACK[w].forEach((p, i) => charTex(scene, `player_${w}_atk_${i}`, L, p));
   }
@@ -1700,7 +1701,8 @@ export function drawCharacters(scene: Phaser.Scene): void {
     const L = NPCS[n];
     const hands = (L.prop && NPC_HANDS[L.prop]) || {};
     NPC_IDLE.forEach((p, i) => {
-      const pose: Pose = { ...p, frontHand: hands.front ?? [0, 0], backHand: hands.back ?? [0, 0] };
+      const front = (i && hands.front1) || hands.front || [0, 0];
+      const pose: Pose = { ...p, frontHand: front, backHand: hands.back ?? [0, 0] };
       charTex(scene, i ? `npc_${n}_1` : `npc_${n}`, L, pose);
     });
   }

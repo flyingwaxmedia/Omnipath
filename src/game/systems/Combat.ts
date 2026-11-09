@@ -33,8 +33,6 @@ const AUTO_HOLD_MS = 4000;
 const AUTO_BUFF_RANGE = 192;
 /** A monster AUTO could not path to is skipped for this long (ms). */
 const AUTO_UNREACHABLE_MS = 15000;
-/** Auto-attack chains stop after this long without player input. */
-const AFK_MS = 30000;
 const LEECH_CAP = 0.08;
 /** Arc rider: zaps the N nearest other monsters within this radius. */
 const ARC_RADIUS = 120;
@@ -85,6 +83,16 @@ export class Combat implements CombatHost {
   private autoHoldUntil = 0;
   /** Monsters AUTO could not reach, with the time they become eligible again. */
   private autoSkip = new Map<Monster, number>();
+  /**
+   * Manual attack (AUTO off — nothing is automatic, basic attack included):
+   * `approaching` walks into reach after tapping a monster; `swingQueued` is one basic attack from a tap of the attack
+   * button; `attackHeld` keeps swinging while the attack button (or Space) is held; `sticky` swings until the current
+   * target dies (debug/test helper and explicit "attack" commands).
+   */
+  private approaching = false;
+  private swingQueued = false;
+  private sticky = false;
+  attackHeld = false;
   /** Global skill lock after a cast (afterCastMs); walking and auto-attacks stay allowed. */
   lockUntil = 0;
   private lockTotal = 0;
@@ -219,6 +227,11 @@ export class Combat implements CombatHost {
 
   setTarget(m: Monster | null): void {
     if (this.target && this.target !== m) this.target.label.setVisible(this.target.warden && this.target.alive);
+    if (this.target !== m) {
+      this.swingQueued = false;
+      this.sticky = false;
+      this.approaching = !!m;
+    }
     this.target = m;
     if (m) {
       m.label.setVisible(true);
@@ -294,27 +307,50 @@ export class Combat implements CombatHost {
     if (s.interactions.channel) return;
     this.autoBattle(now);
     if (this.windup) return;
+    const auto = s.session.player.autoOn;
+    // Holding attack with no target picks the nearest foe in range (like a fresh press).
+    if (!auto && this.attackHeld && !(this.target && this.target.alive)) {
+      const m = this.nearestMonster(320);
+      if (m) this.setTarget(m);
+    }
     const t = this.target;
     if (!t || !t.alive) return;
-    if (!s.session.player.autoOn && now - this.lastInput > AFK_MS) {
-      this.setTarget(null);
-      s.ui.log('You lower your weapon. (Tap an enemy to fight again.)', 'info');
-      return;
-    }
     if (p.stunned(now) || this.pushDest) return;
+    const wantSwing = auto || this.attackHeld || this.swingQueued || this.sticky;
     const w = WEAPONS[s.session.player.weapon];
     const reach = w.range + t.radius;
     const d = Math.hypot(t.x - p.x, t.y - p.y);
     if (d > reach) {
-      if (now >= this.repathAt) {
+      if ((wantSwing || this.approaching) && now >= this.repathAt) {
         this.repathAt = now + 350;
         p.path = s.pathTo(t.x, t.y) ?? [];
       }
     } else {
-      p.path = [];
+      if (this.approaching || wantSwing) p.path = [];
+      this.approaching = false;
+      if (!wantSwing) return;
       const cd = this.ownCooldown(w.basic);
-      if (cd.remain <= 0 && now >= p.lockedUntil) this.castSkill(w.basic, true);
+      if (cd.remain <= 0 && now >= p.lockedUntil && this.castSkill(w.basic, true)) this.swingQueued = false;
     }
+  }
+
+  /** Attack button / Space press (AUTO off): target the nearest foe if needed and queue one basic attack. */
+  pressAttack(): void {
+    if (!(this.target && this.target.alive)) {
+      const m = this.nearestMonster(320);
+      if (!m) {
+        this.scene.ui.toast('No enemies nearby.');
+        return;
+      }
+      this.setTarget(m);
+    }
+    this.swingQueued = true;
+  }
+
+  /** Swing at the current target until it dies (manual "attack" command; used by the debug/test hooks). */
+  attackUntilDead(m: Monster): void {
+    this.setTarget(m);
+    this.sticky = true;
   }
 
   /** Pauses AUTO target hunting after a manual move or interaction tap (combat casts continue). */

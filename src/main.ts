@@ -95,12 +95,12 @@ game.events.once('omnipath:ready', async () => {
       session.player.hp = st.maxHp;
       session.player.sp = st.maxSp;
     },
-    /** Targets the nearest monster (auto-attack engages). Returns its id or null. */
+    /** Attacks the nearest monster until it dies (manual attack command). Returns its id or null. */
     fight: () => {
       const m = scene.combat.nearestMonster(4000);
       if (m) {
         scene.combat.lastInput = scene.time.now;
-        scene.combat.setTarget(m);
+        scene.combat.attackUntilDead(m);
       }
       return m?.def.id ?? null;
     },

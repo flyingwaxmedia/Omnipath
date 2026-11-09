@@ -16,8 +16,6 @@ const TILE = 32;
 export const TILE_MARGIN = 1;
 export const TILE_SPACING = 2;
 
-import { canvasTexAll, glow, groundShadow, mix, outlined, vgrad } from './common';
-const OUTLINE = 'rgba(22,18,30,0.78)';
 // ================================================================== tiles
 
 type Wrap = (f: () => void) => void;
@@ -1522,8 +1520,8 @@ function drawStructures(scene: Phaser.Scene): void {
       // forge bay
       box(b, 12, 86, 46, 36, R.bark[1]);
       box(b, 14, 90, 42, 32, '#160e09');
-      disc(b, 35, 116, 18, 9, '#4a200e');
-      disc(b, 35, 117, 12, 6, '#6e2c12');
+      disc(b, 35, 114, 16, 7, '#4a200e');
+      disc(b, 35, 115, 11, 5, '#6e2c12');
       for (const [tx, ty] of [
         [18, 94],
         [22, 93],
@@ -1555,10 +1553,11 @@ function drawStructures(scene: Phaser.Scene): void {
       box(b, 8, 77, 112, 2, 'rgba(36,24,15,0.4)');
       chimneyPx(b, 92, 8, 14, 34);
       // anvil out front
-      box(b, 30, 120, 10, 5, R.iron[1]);
-      fpoly(b, [23, 114, 45, 114, 45, 117, 41, 118, 41, 120, 29, 120, 29, 118, 25, 117, 21, 115], R.iron[2]);
-      box(b, 24, 114, 21, 1, R.iron[4]);
-      box(b, 24, 115, 21, 1, R.iron[3]);
+      box(b, 54, 120, 10, 5, R.iron[1]);
+      box(b, 52, 124, 14, 1, R.iron[0]);
+      fpoly(b, [47, 114, 69, 114, 69, 117, 65, 118, 65, 120, 53, 120, 53, 118, 49, 117, 45, 115], R.iron[2]);
+      box(b, 48, 114, 21, 1, R.iron[4]);
+      box(b, 48, 115, 21, 1, R.iron[3]);
       // quench barrel
       box(b, 104, 110, 11, 15, R.bark[3]);
       box(b, 104, 110, 2, 15, R.bark[4]);
@@ -1940,122 +1939,166 @@ function drawStructures(scene: Phaser.Scene): void {
     });
   });
 }
-// ================================================================== objects
 
-function flame(c: Ctx, x: number, base: number, h: number): void {
-  poly(c, [x - h * 0.45, base, x - h * 0.3, base - h * 0.55, x - h * 0.05, base - h * 0.4, x, base - h, x + h * 0.25, base - h * 0.5, x + h * 0.4, base - h * 0.6, x + h * 0.45, base], '#e8541c');
-  poly(c, [x - h * 0.3, base, x - h * 0.15, base - h * 0.45, x + h * 0.05, base - h * 0.75, x + h * 0.2, base - h * 0.4, x + h * 0.3, base], '#ff9a2e');
-  poly(c, [x - h * 0.15, base, x, base - h * 0.45, x + h * 0.15, base], '#ffe27a');
+// ================================================================== objects
+// The client anchors (0.5, 1) at the tile's bottom edge - 4px.
+
+const RUNE_STONE = ['#262c36', '#38404c', '#4e5866', '#68737f', '#86919c', '#a8b2bc'];
+const OBSIDIAN = ['#140f1e', '#1e162c', '#2a2040', '#3a2c56', '#4e3c70', '#6a5490'];
+const LILAC = ['#6a4ea8', '#9a7ad8', '#c8b0ff', '#ece0ff'];
+
+/** Layered pixel flame (base width ~ h * 0.8). */
+function flamePx(b: Ctx, x: number, base: number, h: number): void {
+  const F = R.flame;
+  const w = Math.max(2, Math.round(h * 0.42));
+  fpoly(b, [x - w, base, x - w * 0.7, base - h * 0.55, x - w * 0.15, base - h * 0.4, x, base - h, x + w * 0.35, base - h * 0.5, x + w * 0.8, base - h * 0.62, x + w, base], F[1]);
+  fpoly(b, [x - w * 0.65, base, x - w * 0.35, base - h * 0.45, x + w * 0.05, base - h * 0.75, x + w * 0.45, base - h * 0.4, x + w * 0.7, base], F[2]);
+  fpoly(b, [x - w * 0.35, base, x, base - h * 0.45, x + w * 0.35, base], F[3]);
+  px(b, Math.round(x), Math.round(base - h * 0.2), F[4]);
 }
 
 function waystone(lit: boolean): (c: Ctx) => void {
   return (c) => {
-    groundShadow(c, 16, 52, 12, 3.5);
-    if (lit) glow(c, 16, 26, 22, '#6fe8ff', 0.5);
-    const rune = lit ? '#c8fcff' : '#5c6773';
-    outlined(c, 32, 56, OUTLINE, (b) => {
-      poly(b, [4, 53, 7, 46, 25, 46, 28, 53], '#7d776e');
-      rect(b, 7, 46, 18, 2, '#99938a');
-      rect(b, 11, 49, 1, 4, '#635e57');
-      rect(b, 20, 49, 1, 4, '#635e57');
-      poly(b, [9, 48, 8, 14, 11, 6, 16, 3, 21, 6, 24, 14, 23, 48], '#8d99a5');
-      poly(b, [19, 4, 21, 6, 24, 14, 23, 48, 19, 48], '#6c7782');
-      line(b, [10, 44, 9, 15, 12, 8], '#aab6c1', 1, 'butt');
-      // carved compass-star rune over three waymarks
-      poly(b, [15.5, 13, 17, 18, 21.5, 19.5, 17, 21, 15.5, 26, 14, 21, 9.5, 19.5, 14, 18], rune);
-      rect(b, 15, 19, 1, 1, lit ? '#ffffff' : '#46505a');
-      for (const y of [30, 35, 40]) rect(b, 13, y, 5, 2, rune);
+    const S = RUNE_STONE;
+    shadow(c, 16, 53, 13, 3);
+    if (lit) halo(c, 16, 24, 22, '#6fe8ff', 0.42, 4);
+    const rune = lit ? ['#2fb8d8', '#8cf0ff', '#e8ffff'] : [S[1], S[2], S[3]];
+    sprite(c, 32, 56, (b) => {
+      // two-step plinth
+      box(b, 3, 49, 26, 5, S[2]);
+      box(b, 3, 49, 26, 1, S[4]);
+      box(b, 25, 50, 4, 4, S[1]);
+      box(b, 6, 45, 20, 5, S[3]);
+      box(b, 6, 45, 20, 1, S[5]);
+      box(b, 22, 46, 4, 4, S[2]);
+      for (const x of [9, 15, 21]) box(b, x, 50, 1, 3, S[1]);
+      // monolith: lit left face, shaded right face, pointed crown
+      fpoly(b, [8, 46, 8, 13, 11, 6, 16, 2, 21, 6, 24, 13, 24, 46], S[3]);
+      fpoly(b, [17, 3, 21, 6, 24, 13, 24, 46, 19, 46], S[2]);
+      fpoly(b, [22, 13, 24, 13, 24, 46, 22, 46], S[1]);
+      seg(b, 9, 44, 9, 14, S[4]);
+      seg(b, 10, 13, 15, 3, S[5]);
+      box(b, 8, 30, 1, 3, S[2]);
+      box(b, 20, 37, 2, 1, S[1]);
+      // carved waystar in a ring
+      disc(b, 15.5, 19.5, 5.5, 5.5, S[1]);
+      disc(b, 15.5, 19.5, 4.5, 4.5, S[3]);
+      fpoly(b, [15.5, 13, 17, 18, 22, 19.5, 17, 21, 15.5, 26, 14, 21, 9, 19.5, 14, 18], rune[1]);
+      fpoly(b, [15.5, 13, 17, 18, 22, 19.5, 15.5, 19.5], rune[2]);
+      px(b, 15, 19, lit ? '#ffffff' : S[1]);
+      // three waymarks
+      for (const y of [30, 35, 40]) {
+        box(b, 13, y, 6, 2, rune[0]);
+        box(b, 13, y, 6, 1, rune[1]);
+      }
+      // moss at the foot
+      box(b, 4, 48, 5, 1, R.moss[2]);
+      px(b, 5, 47, R.moss[3]);
+      tuft(b, 0, 55);
+      tuft(b, 27, 55);
     });
     if (lit) {
-      glow(c, 15.5, 19.5, 7, '#bffcff', 0.7);
-      rect(c, 15, 19, 1, 1, '#ffffff');
+      halo(c, 15.5, 19.5, 8, '#bffcff', 0.6, 3);
+      px(c, 15, 19, '#ffffff');
       for (const [x, y] of [
-        [5, 14],
-        [27, 22],
-        [6, 34],
-        [26, 8],
-      ]) {
-        rect(c, x, y - 1, 1, 3, '#dffcff');
-        rect(c, x - 1, y, 3, 1, '#dffcff');
-      }
+        [4, 14],
+        [28, 22],
+        [5, 34],
+        [27, 7],
+      ])
+        twinkle(c, x, y, '#dffcff');
     }
   };
 }
 
 function obelisk(c: Ctx): void {
-  groundShadow(c, 18, 70, 14, 4.5, 0.34);
-  glow(c, 18, 44, 18, '#b08cff', 0.28);
-  outlined(c, 36, 76, OUTLINE, (b) => {
-    poly(b, [5, 72, 8, 64, 28, 64, 31, 72], '#3a3150');
-    rect(b, 8, 64, 20, 2, '#52476e');
-    poly(b, [18, 2, 29, 16, 27, 65, 9, 65, 7, 16], '#2b2140');
-    poly(b, [18, 2, 18, 65, 9, 65, 7, 16], '#4a3a70');
-    line(b, [8, 17, 17, 4], '#6a58a0', 1, 'butt');
+  const O = OBSIDIAN;
+  shadow(c, 18, 72, 15, 3.5);
+  halo(c, 17, 40, 18, '#b08cff', 0.26);
+  sprite(c, 36, 76, (b) => {
+    box(b, 4, 66, 28, 7, O[2]);
+    box(b, 4, 66, 28, 1, O[4]);
+    box(b, 27, 67, 5, 6, O[1]);
+    box(b, 7, 62, 22, 5, O[3]);
+    box(b, 7, 62, 22, 1, O[5]);
+    fpoly(b, [9, 63, 10, 15, 18, 3, 26, 15, 27, 63], O[2]);
+    fpoly(b, [18, 3, 26, 15, 27, 63, 19, 63], O[1]);
+    fpoly(b, [10, 15, 18, 3, 18, 15], O[4]);
+    seg(b, 10, 16, 10, 61, O[4]);
+    seg(b, 11, 14, 17, 5, O[5]);
+    box(b, 19, 15, 1, 48, O[3]);
   });
-  const glyphs: number[][] = [
-    [14, 21, 17, 24, 14, 27, 11, 24],
-    [11, 33, 17, 33, 14, 38],
-    [11, 46, 17, 46, 17, 48, 11, 48],
-  ];
-  for (const g of glyphs) {
-    glow(c, 14, g[1] + 2, 6, '#b08cff', 0.6);
-    poly(c, g, '#d7c2ff');
-  }
-  rect(c, 13, 23, 2, 2, '#4a3a70');
-  rect(c, 13, 50, 2, 3, '#b08cff');
+  // glowing glyphs (no outline)
+  const glyph = (pts: number[]) => fpoly(c, pts, LILAC[2]);
+  for (const gy of [22, 34, 47]) halo(c, 14, gy + 2, 6, '#b08cff', 0.55, 2);
+  glyph([14, 20, 17, 23, 14, 26, 11, 23]);
+  px(c, 14, 23, OBSIDIAN[1]);
+  glyph([11, 33, 17, 33, 14, 38]);
+  box(c, 11, 46, 6, 2, LILAC[2]);
+  box(c, 13, 49, 2, 3, LILAC[1]);
+  px(c, 12, 20, LILAC[3]);
 }
 
 function windShrine(c: Ctx): void {
-  groundShadow(c, 20, 59, 16, 4.5, 0.3);
-  outlined(c, 40, 64, OUTLINE, (b) => {
-    poly(b, [6, 60, 8, 52, 32, 52, 34, 60], '#8f9aa2');
-    rect(b, 8, 52, 24, 2, '#b4bec6');
-    rect(b, 13, 14, 14, 39, '#c4ccd3');
-    rect(b, 23, 14, 4, 39, '#9aa4ad');
-    rect(b, 13, 14, 1, 39, '#dfe6ec');
-    // cap with little roof
-    rect(b, 9, 10, 22, 5, '#b4bec6');
-    poly(b, [7, 11, 20, 3, 33, 11], '#3f7f78');
-    poly(b, [20, 3, 33, 11, 20, 11], '#2f6560');
-    // spiral wind glyph
-    b.strokeStyle = '#3fb8a0';
-    b.lineWidth = 1.6;
-    b.beginPath();
-    for (let i = 0; i <= 40; i++) {
-      const t = i / 40;
-      const a = t * Math.PI * 3.2;
+  const S = ['#4c5660', '#66717c', '#86929c', '#a6b0b8', '#c4ccd2', '#e0e6ea'];
+  shadow(c, 20, 60, 16, 3.5);
+  sprite(c, 40, 64, (b) => {
+    box(b, 6, 54, 28, 6, S[2]);
+    box(b, 6, 54, 28, 1, S[4]);
+    box(b, 29, 55, 5, 5, S[1]);
+    box(b, 12, 15, 16, 40, S[3]);
+    box(b, 12, 15, 3, 40, S[5]);
+    box(b, 24, 15, 4, 40, S[2]);
+    box(b, 27, 15, 1, 40, S[1]);
+    // cap + little roof
+    box(b, 9, 11, 22, 5, S[3]);
+    box(b, 9, 11, 22, 1, S[5]);
+    fpoly(b, [6, 12, 20, 3, 34, 12], R.teal[3]);
+    fpoly(b, [20, 3, 34, 12, 20, 12], R.teal[1]);
+    seg(b, 7, 11, 19, 4, R.teal[4]);
+    box(b, 6, 12, 28, 1, R.teal[0]);
+    // spiral wind glyph (plotted)
+    for (let i = 0; i <= 46; i++) {
+      const t = i / 46;
+      const a = t * Math.PI * 3.3;
       const r = 1 + t * 5;
-      const x = 18 + Math.cos(a) * r;
-      const y = 29 + Math.sin(a) * r;
-      if (i) b.lineTo(x, y);
-      else b.moveTo(x, y);
+      px(b, Math.round(19.5 + Math.cos(a) * r), Math.round(29 + Math.sin(a) * r * 0.95), R.teal[3]);
     }
-    b.stroke();
-    line(b, [14, 41, 22, 41], '#3fb8a0', 1.4, 'butt');
-    line(b, [15, 45, 24, 45], '#3fb8a0', 1.4, 'butt');
+    box(b, 14, 41, 11, 1, R.teal[3]);
+    box(b, 15, 45, 11, 1, R.teal[3]);
+    box(b, 14, 42, 11, 1, S[5]);
   });
-  // ribbons + chime streaming in the wind
-  line(c, [31, 12, 35, 16, 33, 21, 38, 26], '#e8f6f2', 2, 'butt');
-  line(c, [29, 13, 32, 20, 29, 26, 33, 31], '#5fd0b8', 2, 'butt');
-  rect(c, 9, 15, 1, 6, '#c8b48c');
-  rect(c, 8, 21, 3, 5, '#d8dee4');
+  // streaming ribbons + a chime
+  brush(c, [31, 13, 35, 17, 33, 22, 38, 27], 2, '#e8f6f2');
+  brush(c, [29, 14, 32, 21, 29, 27, 33, 32], 2, R.teal[4]);
+  box(c, 8, 15, 1, 6, R.cream[1]);
+  box(c, 7, 21, 3, 5, '#d8dee4');
+  px(c, 7, 21, '#ffffff');
 }
 
 function signpost(c: Ctx): void {
-  groundShadow(c, 16, 41, 8, 3);
-  outlined(c, 32, 44, OUTLINE, (b) => {
-    rect(b, 14, 8, 4, 34, '#6b4423');
-    rect(b, 17, 8, 1, 34, '#4e3019');
-    poly(b, [3, 13, 7, 8, 26, 8, 26, 18, 7, 18], '#b07f4e');
-    rect(b, 7, 8, 19, 1, '#cf9c66');
-    rect(b, 8, 12, 14, 1, '#6e4a27');
-    rect(b, 8, 15, 10, 1, '#6e4a27');
-    poly(b, [6, 21, 25, 21, 29, 26, 25, 31, 6, 31], '#a8794a');
-    rect(b, 6, 21, 19, 1, '#c8955e');
-    rect(b, 9, 25, 13, 1, '#5e3e20');
-    rect(b, 9, 28, 9, 1, '#5e3e20');
-    rect(b, 15, 10, 2, 2, '#3a3a40');
-    rect(b, 15, 24, 2, 2, '#3a3a40');
+  shadow(c, 16, 42, 8, 2.5);
+  sprite(c, 32, 44, (b) => {
+    const B = R.bark;
+    box(b, 14, 6, 5, 36, B[3]);
+    box(b, 14, 6, 1, 36, B[4]);
+    box(b, 17, 6, 2, 36, B[1]);
+    box(b, 14, 5, 5, 1, B[4]);
+    // arrow boards
+    fpoly(b, [4, 13, 8, 8, 27, 8, 27, 18, 8, 18], B[4]);
+    box(b, 8, 8, 19, 1, B[5]);
+    box(b, 8, 17, 19, 1, B[2]);
+    box(b, 9, 12, 13, 1, B[1]);
+    box(b, 9, 14, 9, 1, B[1]);
+    fpoly(b, [6, 21, 24, 21, 29, 26, 24, 31, 6, 31], B[3]);
+    box(b, 6, 21, 18, 1, B[4]);
+    box(b, 6, 30, 18, 1, B[1]);
+    box(b, 9, 25, 12, 1, B[1]);
+    box(b, 9, 27, 8, 1, B[1]);
+    box(b, 16, 10, 2, 2, R.iron[2]);
+    box(b, 16, 24, 2, 2, R.iron[2]);
+    tuft(b, 9, 43);
+    tuft(b, 18, 43);
   });
 }
 
@@ -2063,430 +2106,460 @@ function chest(open: boolean): (c: Ctx) => void {
   return (c) => {
     const H = open ? 32 : 28;
     const oy = open ? 4 : 0;
-    groundShadow(c, 16, H - 4, 13, 3);
-    if (open) glow(c, 16, 14 + oy, 14, '#ffd84d', 0.45);
-    outlined(c, 32, H, OUTLINE, (b) => {
-      const wood = '#9a6034';
+    const B = ['#3a2010', '#5a3218', '#7e4824', '#a0602e', '#bc7c40', '#d49a5a'];
+    shadow(c, 16, H - 3, 13, 2.5);
+    if (open) halo(c, 16, 13 + oy, 14, '#ffd84d', 0.45);
+    sprite(c, 32, H, (b) => {
       if (open) {
-        // lid swung back
-        rect(b, 5, 1, 22, 11, shade(wood, -20));
-        rect(b, 5, 1, 22, 2, shade(wood, 6));
-        rect(b, 7, 3, 18, 8, '#4a2c18');
-        rect(b, 5, 6, 22, 1, '#d8a83a');
+        box(b, 5, 1, 22, 11, B[2]);
+        box(b, 5, 1, 22, 1, B[4]);
+        box(b, 7, 3, 18, 8, '#2a160a');
+        box(b, 5, 6, 22, 1, R.gold[2]);
       }
-      // body
-      rect(b, 4, 13 + oy, 24, 12, wood);
-      rect(b, 4, 13 + oy, 24, 1, shade(wood, 18));
-      rect(b, 4, 23 + oy, 24, 2, shade(wood, -30));
-      rect(b, 24, 13 + oy, 4, 12, shade(wood, -16));
-      for (const x of [6, 22]) rect(b, x, 13 + oy, 3, 12, '#d8a83a');
+      box(b, 4, 13 + oy, 24, 12, B[3]);
+      box(b, 4, 13 + oy, 24, 1, B[4]);
+      box(b, 4, 23 + oy, 24, 2, B[1]);
+      box(b, 24, 13 + oy, 4, 12, B[2]);
+      for (let x = 8; x < 24; x += 5) box(b, x, 14 + oy, 1, 9, B[2]);
+      for (const x of [6, 21]) {
+        box(b, x, 13 + oy, 3, 12, R.gold[2]);
+        box(b, x, 13 + oy, 1, 12, R.gold[3]);
+        box(b, x + 2, 13 + oy, 1, 12, R.gold[1]);
+      }
       if (open) {
-        rect(b, 5, 11 + oy, 22, 3, '#3a2214');
+        box(b, 5, 11 + oy, 22, 3, '#2a160a');
         for (let i = 0; i < 7; i++) {
           const x = 7 + i * 3;
-          ellipse(b, x, 11 + oy + (i % 2), 2, 1.5, i % 3 ? '#ffd84d' : '#f2b830');
+          const y = 10 + oy + (i % 2);
+          box(b, x - 1, y, 3, 2, i % 3 ? R.gold[3] : R.gold[2]);
+          px(b, x - 1, y, R.gold[4]);
         }
-        rect(b, 12, 9 + oy, 2, 2, '#9ff0ff');
-        rect(b, 19, 9 + oy, 2, 2, '#ff8fb1');
+        box(b, 12, 8 + oy, 2, 2, '#8ce0f4');
+        px(b, 12, 8 + oy, '#e0fbff');
+        box(b, 19, 8 + oy, 2, 2, PAL.rose);
       } else {
-        // closed lid: rounded top seen from above
-        rect(b, 4, 6, 24, 8, shade(wood, 14));
-        ellipse(b, 16, 6, 12, 3, shade(wood, 24));
-        rect(b, 4, 12, 24, 2, shade(wood, -24));
-        for (const x of [6, 22]) {
-          rect(b, x, 4, 3, 10, '#e8b84a');
-          rect(b, x, 4, 1, 10, '#ffe08a');
+        // domed lid
+        box(b, 4, 6, 24, 8, B[4]);
+        box(b, 5, 5, 22, 1, B[4]);
+        box(b, 7, 4, 18, 1, B[5]);
+        box(b, 4, 6, 24, 1, B[5]);
+        box(b, 4, 12, 24, 2, B[1]);
+        box(b, 24, 6, 4, 6, B[3]);
+        for (const x of [6, 21]) {
+          box(b, x, 4, 3, 10, R.gold[3]);
+          box(b, x, 4, 1, 10, R.gold[4]);
+          box(b, x + 2, 4, 1, 10, R.gold[1]);
         }
-        rect(b, 14, 11, 5, 6, '#d8a83a');
-        rect(b, 16, 13, 1, 2, '#3a2214');
+        box(b, 14, 11, 5, 6, R.gold[2]);
+        box(b, 14, 11, 5, 1, R.gold[4]);
+        box(b, 16, 13, 1, 2, '#2a160a');
       }
     });
     if (open) {
-      rect(c, 10, 11, 1, 1, '#ffffff');
-      rect(c, 21, 13, 1, 1, '#ffffff');
-    } else rect(c, 9, 6, 2, 1, '#fff2c0');
+      twinkle(c, 10, 9, '#fff8d0');
+      px(c, 22, 12, '#ffffff');
+    } else box(c, 9, 6, 2, 1, '#fff2c0');
   };
 }
 
 function statue(c: Ctx): void {
-  groundShadow(c, 20, 63, 16, 4.5, 0.3);
-  outlined(c, 40, 68, OUTLINE, (b) => {
-    const st = '#aaa69e';
-    // pedestal
-    rect(b, 7, 50, 26, 14, shade(st, -24));
-    rect(b, 7, 48, 26, 5, shade(st, 10));
-    rect(b, 7, 48, 26, 1, shade(st, 26));
-    rect(b, 29, 50, 4, 14, shade(st, -40));
-    rect(b, 14, 55, 12, 5, shade(st, -38));
-    rect(b, 15, 56, 10, 1, shade(st, -12));
-    // robed wanderer leaning on a tall staff, hood up
-    poly(b, [12, 48, 14, 26, 20, 20, 26, 26, 28, 48], st);
-    poly(b, [20, 20, 26, 26, 28, 48, 21, 48], shade(st, -22));
-    ellipse(b, 20, 15, 6, 6.5, st);
-    poly(b, [14, 16, 15, 9, 20, 6, 25, 9, 26, 16, 23, 13, 17, 13], shade(st, 14));
-    ellipse(b, 20, 16, 3.5, 3, shade(st, -48));
-    rect(b, 15, 30, 10, 3, shade(st, -12));
-    line(b, [17, 33, 15, 47], shade(st, -16), 1, 'butt');
-    line(b, [23, 33, 25, 47], shade(st, -34), 1, 'butt');
-    rect(b, 29, 4, 3, 45, shade(st, -10));
-    rect(b, 29, 4, 1, 45, shade(st, 16));
-    ellipse(b, 30.5, 4, 3, 3, shade(st, 6));
-    rect(b, 25, 26, 6, 3, st);
+  const S = R.warmStone;
+  shadow(c, 20, 64, 16, 3.5);
+  sprite(c, 40, 68, (b) => {
+    box(b, 6, 50, 28, 14, S[2]);
+    box(b, 6, 48, 28, 4, S[4]);
+    box(b, 6, 48, 28, 1, S[5]);
+    box(b, 29, 51, 5, 13, S[1]);
+    box(b, 13, 55, 13, 5, S[1]);
+    box(b, 14, 56, 11, 1, S[3]);
+    // robed wanderer, hood up, leaning on a tall staff
+    fpoly(b, [11, 48, 13, 27, 20, 20, 27, 27, 29, 48], S[3]);
+    fpoly(b, [20, 20, 27, 27, 29, 48, 21, 48], S[2]);
+    seg(b, 12, 46, 14, 28, S[4]);
+    disc(b, 20, 15, 6, 6.5, S[3]);
+    fpoly(b, [14, 16, 15, 9, 20, 6, 25, 9, 26, 16, 23, 13, 17, 13], S[4]);
+    disc(b, 20, 16, 3.5, 3, S[0]);
+    box(b, 14, 30, 12, 3, S[2]);
+    seg(b, 17, 33, 15, 47, S[1]);
+    seg(b, 23, 33, 25, 47, S[1]);
+    box(b, 29, 4, 3, 45, S[3]);
+    box(b, 29, 4, 1, 45, S[5]);
+    box(b, 31, 4, 1, 45, S[1]);
+    disc(b, 30.5, 4, 3, 3, S[4]);
+    px(b, 29, 3, S[5]);
+    box(b, 25, 26, 6, 3, S[3]);
     // moss + cracks
-    rect(b, 8, 61, 6, 2, '#5a8a46');
-    rect(b, 26, 47, 5, 2, '#5a8a46');
-    line(b, [13, 36, 16, 40, 14, 44], shade(st, -40), 1, 'butt');
+    mossCap(b, 7, 47, 7);
+    box(b, 26, 46, 4, 1, R.moss[2]);
+    seg(b, 13, 36, 16, 40, S[1]);
+    seg(b, 16, 40, 14, 44, S[1]);
+    tuft(b, 3, 67);
+    tuft(b, 31, 67);
   });
 }
 
 function campfire(c: Ctx): void {
-  groundShadow(c, 16, 26, 13, 3.5, 0.25);
-  glow(c, 16, 20, 18, '#ff9a3a', 0.55);
-  outlined(c, 32, 32, OUTLINE, (b) => {
+  shadow(c, 16, 27, 13, 3, 0.25);
+  halo(c, 16, 20, 17, '#ff9a3a', 0.5);
+  sprite(c, 32, 32, (b) => {
     for (let i = 0; i < 9; i++) {
       const a = (i / 9) * Math.PI * 2;
       const x = 16 + Math.cos(a) * 10;
       const y = 24 + Math.sin(a) * 4;
       if (y < 22) continue;
-      ellipse(b, x, y, 3, 2.2, i % 2 ? '#8d887f' : '#a29c90');
-      rect(b, Math.round(x - 1), Math.round(y - 2), 2, 1, '#bdb7ab');
+      disc(b, x, y, 3, 2.2, i % 2 ? R.warmStone[2] : R.warmStone[3]);
+      box(b, Math.round(x - 1), Math.round(y - 2), 2, 1, R.warmStone[5]);
     }
-    line(b, [8, 25, 24, 19], '#6b4423', 3, 'butt');
-    line(b, [24, 25, 8, 19], '#5a3a1e', 3, 'butt');
-    ellipse(b, 8, 25, 1.5, 1.5, '#c89a62');
-    ellipse(b, 24, 25, 1.5, 1.5, '#c89a62');
-    flame(b, 16, 23, 17);
+    brush(b, [8, 25, 24, 19], 3, R.bark[3]);
+    brush(b, [24, 25, 8, 19], 3, R.bark[2]);
+    seg(b, 8, 24, 23, 18, R.bark[4]);
+    disc(b, 8, 25, 1.5, 1.5, R.cream[2]);
+    disc(b, 24, 25, 1.5, 1.5, R.cream[2]);
+    box(b, 12, 21, 8, 2, R.flame[0]);
+    flamePx(b, 16, 23, 17);
   });
-  rect(c, 11, 4, 1, 1, '#ffd27a');
-  rect(c, 21, 2, 1, 1, '#ffb050');
-  rect(c, 18, 6, 1, 1, '#ffe27a');
+  px(c, 11, 4, R.flame[3]);
+  px(c, 21, 2, R.flame[2]);
+  px(c, 18, 6, R.flame[4]);
 }
 
 function drawObjects(scene: Phaser.Scene): void {
   canvasTex(scene, 'obj_waystone', 32, 56, waystone(false));
   canvasTex(scene, 'obj_waystone_lit', 32, 56, waystone(true));
   canvasTex(scene, 'obj_altar', 48, 44, (c) => {
-    groundShadow(c, 24, 39, 21, 4.5);
-    glow(c, 12, 12, 8, '#ffcf6a', 0.4);
-    glow(c, 36, 12, 8, '#ffcf6a', 0.4);
-    outlined(c, 48, 44, OUTLINE, (b) => {
-      const st = '#b8b2a6';
-      rect(b, 8, 24, 32, 15, shade(st, -26));
-      rect(b, 36, 24, 4, 15, shade(st, -42));
-      rect(b, 4, 16, 40, 9, st);
-      rect(b, 4, 16, 40, 1, shade(st, 22));
-      rect(b, 4, 23, 40, 2, shade(st, -34));
-      // cloth runner
-      rect(b, 18, 16, 12, 18, '#6a3a8a');
-      poly(b, [18, 34, 24, 37, 30, 34], '#6a3a8a');
-      rect(b, 18, 16, 12, 1, '#8a5aaa');
-      rect(b, 18, 33, 12, 1, '#d8a83a');
-      poly(b, [24, 24, 26, 27, 24, 30, 22, 27], '#d8a83a');
-      // bowl + candles
-      ellipse(b, 24, 16, 5, 2, '#8a7a5a');
-      ellipse(b, 24, 15.5, 3.5, 1.2, '#ffd27a');
+    shadow(c, 24, 40, 21, 3.5);
+    halo(c, 11, 10, 8, '#ffcf6a', 0.4);
+    halo(c, 37, 10, 8, '#ffcf6a', 0.4);
+    sprite(c, 48, 44, (b) => {
+      const S = R.warmStone;
+      box(b, 8, 24, 32, 15, S[2]);
+      box(b, 8, 24, 3, 15, S[3]);
+      box(b, 36, 24, 4, 15, S[1]);
+      box(b, 6, 37, 36, 3, S[1]);
+      box(b, 6, 37, 36, 1, S[3]);
+      box(b, 4, 16, 40, 9, S[3]);
+      box(b, 4, 16, 40, 1, S[5]);
+      box(b, 4, 17, 40, 1, S[4]);
+      box(b, 4, 23, 40, 2, S[1]);
+      box(b, 40, 17, 4, 6, S[2]);
+      // cloth runner with the waystar
+      box(b, 18, 16, 12, 19, R.violet[2]);
+      fpoly(b, [18, 35, 24, 38, 30, 35], R.violet[2]);
+      box(b, 18, 16, 2, 19, R.violet[3]);
+      box(b, 28, 17, 2, 18, R.violet[1]);
+      box(b, 18, 16, 12, 1, R.violet[4]);
+      box(b, 18, 33, 12, 1, R.gold[2]);
+      waystar(b, 24, 27, 3);
+      // offering bowl
+      box(b, 20, 13, 9, 3, R.gold[1]);
+      box(b, 20, 13, 9, 1, R.gold[3]);
+      box(b, 21, 12, 7, 1, '#ffe08a');
       for (const x of [11, 36]) {
-        rect(b, x - 2, 9, 4, 8, '#f0e8d0');
-        rect(b, x - 2, 9, 1, 8, '#ffffff');
-        rect(b, x, 7, 1, 2, '#3a3a40');
-        flame(b, x + 0.5, 7, 6);
+        box(b, x - 2, 9, 4, 8, R.cream[3]);
+        box(b, x - 2, 9, 1, 8, R.cream[4]);
+        box(b, x + 1, 9, 1, 8, R.cream[1]);
+        px(b, x, 8, R.iron[1]);
+        flamePx(b, x, 8, 6);
       }
     });
   });
-  canvasTexAll(scene, ['obj_wind_shrine', 'shrine'], 40, 64, windShrine);
-  canvasTexAll(scene, ['obj_obelisk', 'obelisk'], 36, 76, obelisk);
-  canvasTexAll(scene, ['obj_signpost', 'signpost'], 32, 44, signpost);
+  texAll(scene, ['obj_wind_shrine', 'shrine'], 40, 64, windShrine);
+  texAll(scene, ['obj_obelisk', 'obelisk'], 36, 76, obelisk);
+  texAll(scene, ['obj_signpost', 'signpost'], 32, 44, signpost);
   canvasTex(scene, 'obj_chest', 32, 28, chest(false));
   canvasTex(scene, 'obj_chest_open', 32, 32, chest(true));
   canvasTex(scene, 'obj_statue', 40, 68, statue);
   canvasTex(scene, 'obj_campfire', 32, 32, campfire);
-  canvasTex(scene, 'bobber', 12, 12, (c) => {
-    ellipse(c, 6, 6, 5, 5, '#ff4040');
-    rect(c, 1, 6, 10, 2, '#ffffff');
-    rect(c, 4, 3, 2, 1, '#ff9a9a');
-  });
+  canvasTex(scene, 'bobber', 12, 12, (c) =>
+    sprite(c, 12, 12, (b) => {
+      disc(b, 6, 6, 4.5, 4.5, R.crimson[2]);
+      box(b, 2, 6, 9, 2, R.cream[4]);
+      box(b, 4, 3, 2, 1, R.crimson[4]);
+      box(b, 6, 1, 1, 2, R.bark[2]);
+    }),
+  );
 }
 
 // ================================================================== gather nodes
 
 function oreRock(c: Ctx): void {
-  groundShadow(c, 17, 25, 14, 4);
-  outlined(c, 34, 30, OUTLINE, (b) => {
-    poly(b, [2, 23, 5, 10, 15, 3, 27, 7, 31, 23, 24, 26, 10, 26], '#5f5750');
-    poly(b, [5, 18, 7, 10, 15, 5, 26, 9, 27, 16, 18, 19], '#857c74');
-    poly(b, [7, 10, 15, 5, 26, 9, 19, 11], '#a39a90');
-    line(b, [9, 13, 13, 16, 17, 14, 22, 17], '#c8902a', 2, 'butt');
-    line(b, [12, 21, 16, 19, 20, 23], '#c8902a', 2, 'butt');
+  const rnd = artRng(keySeed('node_ore'));
+  shadow(c, 17, 26, 15, 3.5);
+  sprite(c, 34, 30, (b) => {
+    rockPx(b, 2, 3, 1, R.warmStone, false, rnd);
+    const vein = (pts: number[]) => {
+      brush(b, pts, 2, R.gold[1]);
+      for (let i = 0; i + 3 < pts.length; i += 2) seg(b, pts[i], pts[i + 1] - 1, pts[i + 2], pts[i + 3] - 1, R.gold[3]);
+    };
+    vein([9, 14, 13, 17, 18, 15, 23, 18]);
+    vein([12, 22, 16, 20, 21, 24]);
     for (const [x, y] of [
-      [12, 12],
+      [12, 10],
       [19, 8],
-      [23, 15],
-      [14, 18],
-      [26, 20],
-      [8, 21],
+      [24, 14],
+      [15, 18],
+      [26, 21],
+      [7, 20],
     ]) {
-      rect(b, x, y, 3, 2, '#f0b43c');
-      rect(b, x, y, 1, 1, '#fff6c0');
+      box(b, x, y, 3, 2, R.gold[3]);
+      px(b, x, y, R.gold[4]);
+      px(b, x + 2, y + 1, R.gold[1]);
     }
   });
+  twinkle(c, 20, 6, '#fff6c0');
 }
 
 function drawNodes(scene: Phaser.Scene): void {
-  canvasTexAll(scene, ['node_ore', 'ore'], 34, 30, oreRock);
+  texAll(scene, ['node_ore', 'ore'], 34, 30, oreRock);
 
+  // Ripple decal on water (centred, no outline): pixel rings, bubbles and a glint.
   canvasTex(scene, 'node_fishing', 36, 24, (c) => {
-    for (const [rx, ry, a] of [
-      [16, 7, 0.35],
-      [11, 5, 0.55],
-      [6, 2.6, 0.8],
-    ] as const) {
-      c.strokeStyle = `rgba(230,246,255,${a})`;
-      c.lineWidth = 1.5;
-      c.beginPath();
-      c.ellipse(18, 13, rx, ry, 0, 0, Math.PI * 2);
-      c.stroke();
-    }
-    c.strokeStyle = 'rgba(30,80,130,0.35)';
-    c.lineWidth = 1;
-    c.beginPath();
-    c.ellipse(18, 14, 11, 5, 0, 0.2, Math.PI - 0.2);
-    c.stroke();
+    const ring = (rx: number, ry: number, col: string) => {
+      for (let a = 0; a < 96; a++) {
+        const t = (a / 96) * Math.PI * 2;
+        px(c, Math.round(18 + Math.cos(t) * rx), Math.round(12 + Math.sin(t) * ry), col);
+      }
+    };
+    ring(16, 8, 'rgba(216,238,246,0.35)');
+    ring(11, 5.5, 'rgba(216,238,246,0.55)');
+    ring(6, 3, 'rgba(232,248,255,0.8)');
     for (const [x, y, r] of [
-      [13, 10, 2],
-      [22, 8, 1.5],
-      [26, 13, 1.2],
+      [13, 10, 1.6],
+      [22, 8, 1.2],
+      [26, 13, 1],
       [17, 5, 1],
     ] as const) {
-      ellipse(c, x, y, r + 0.6, r + 0.6, 'rgba(220,244,255,0.55)');
-      ellipse(c, x, y, r, r, 'rgba(120,190,240,0.6)');
-      rect(c, Math.round(x - r * 0.5), Math.round(y - r * 0.6), 1, 1, '#ffffff');
+      disc(c, x, y, r + 0.8, r + 0.8, 'rgba(216,238,246,0.6)');
+      disc(c, x, y, r, r, 'rgba(74,146,196,0.7)');
+      px(c, Math.round(x - r * 0.5), Math.round(y - r * 0.6), '#ffffff');
     }
   });
 
   canvasTex(scene, 'node_herb', 28, 28, (c) => {
-    groundShadow(c, 14, 24, 10, 2.5);
-    outlined(c, 28, 28, OUTLINE, (b) => {
-      const leaf = (x: number, y: number, ang: number, len: number, col: string) => {
-        b.save();
-        b.translate(x, y);
-        b.rotate(ang);
-        ellipse(b, 0, -len / 2, len * 0.28, len / 2, col);
-        rect(b, 0, -len + 2, 1, len - 2, shade(col, -26));
-        b.restore();
+    shadow(c, 14, 25, 10, 2.5);
+    sprite(c, 28, 28, (b) => {
+      const leaf = (x0: number, y0: number, x1: number, y1: number, w: number, tone: number) => {
+        const dx = x1 - x0;
+        const dy = y1 - y0;
+        const len = Math.hypot(dx, dy);
+        const nx = -dy / len;
+        const ny = dx / len;
+        fpoly(b, [x0, y0, x0 + dx * 0.5 + nx * w, y0 + dy * 0.5 + ny * w, x1, y1, x0 + dx * 0.5 - nx * w, y0 + dy * 0.5 - ny * w], R.leaf[tone]);
+        seg(b, Math.round(x0), Math.round(y0), Math.round(x0 + dx * 0.8), Math.round(y0 + dy * 0.8), R.leaf[tone - 1]);
       };
-      leaf(14, 24, -1.1, 11, '#4f9a3c');
-      leaf(14, 24, 1.1, 11, '#4a9038');
-      leaf(14, 24, -0.55, 13, '#5fae48');
-      leaf(14, 24, 0.55, 13, '#58a442');
-      leaf(14, 24, 0, 14, '#6cbc52');
+      leaf(14, 25, 3, 16, 3, 2);
+      leaf(14, 25, 25, 16, 3, 2);
+      leaf(14, 25, 6, 11, 3, 3);
+      leaf(14, 25, 22, 11, 3, 3);
+      leaf(14, 25, 14, 9, 3, 4);
       for (const [x, y] of [
-        [9, 8],
-        [19, 6],
-        [14, 4],
+        [8, 6],
+        [19, 4],
+        [14, 3],
       ]) {
-        line(b, [14, 18, x, y + 2], '#3f7a30', 1, 'butt');
-        ellipse(b, x, y, 2.2, 2.2, '#f4f4ff');
-        rect(b, x, y, 1, 1, '#9ab8ff');
+        seg(b, 14, 17, x, y + 2, R.leaf[1]);
+        box(b, x - 1, y, 3, 3, R.cream[3]);
+        px(b, x - 1, y, R.cream[4]);
+        px(b, x, y + 2, '#9ab8ff');
       }
     });
   });
 
   canvasTex(scene, 'node_ember_vent', 32, 32, (c) => {
-    groundShadow(c, 16, 27, 14, 4);
-    glow(c, 16, 20, 14, '#ff7a2a', 0.5);
-    outlined(c, 32, 32, OUTLINE, (b) => {
-      poly(b, [2, 27, 6, 20, 12, 16, 20, 16, 26, 20, 30, 27, 22, 29, 10, 29], '#4a3028');
-      poly(b, [6, 20, 12, 16, 20, 16, 26, 20, 18, 21, 12, 21], '#6b4a3a');
-      ellipse(b, 16, 19, 5, 2.2, '#2a120c');
-      ellipse(b, 16, 19, 3.5, 1.4, '#ff8a2a');
-      ellipse(b, 16, 19, 1.8, 0.8, '#ffe27a');
-      line(b, [8, 26, 11, 22, 10, 19], '#ff7a3a', 1, 'butt');
-      line(b, [23, 27, 21, 23, 24, 21], '#ff7a3a', 1, 'butt');
+    shadow(c, 16, 28, 14, 3);
+    halo(c, 16, 20, 14, '#ff7a2a', 0.5);
+    sprite(c, 32, 32, (b) => {
+      const E = ['#2a1a14', '#3e2820', '#56382a', '#6e4a38', '#8a604a'];
+      fpoly(b, [2, 28, 6, 21, 12, 17, 20, 17, 26, 21, 30, 28, 22, 30, 10, 30], E[2]);
+      fpoly(b, [6, 21, 12, 17, 20, 17, 26, 21, 18, 22, 12, 22], E[4]);
+      fpoly(b, [22, 21, 26, 21, 30, 28, 22, 30], E[1]);
+      seg(b, 7, 21, 12, 18, E[4]);
+      disc(b, 16, 20, 5, 2.2, '#200c06');
+      disc(b, 16, 20, 3.5, 1.4, R.flame[2]);
+      box(b, 15, 20, 3, 1, R.flame[4]);
+      seg(b, 8, 27, 11, 23, R.flame[2]);
+      seg(b, 23, 28, 21, 24, R.flame[2]);
+      px(b, 11, 23, R.flame[4]);
     });
-    ellipse(c, 15, 12, 3, 2.4, 'rgba(120,110,105,0.55)');
-    ellipse(c, 18, 7, 4, 3, 'rgba(120,110,105,0.4)');
-    ellipse(c, 15, 2, 4, 2.5, 'rgba(120,110,105,0.25)');
-    rect(c, 20, 10, 1, 1, '#ffb050');
-    rect(c, 12, 6, 1, 1, '#ffd27a');
+    disc(c, 15, 12, 3, 2.4, 'rgba(120,110,105,0.55)');
+    disc(c, 18, 7, 4, 3, 'rgba(120,110,105,0.4)');
+    disc(c, 15, 2, 4, 2, 'rgba(120,110,105,0.25)');
+    px(c, 20, 10, R.flame[3]);
+    px(c, 12, 6, R.flame[4]);
   });
 
   canvasTex(scene, 'node_wind_chime', 28, 52, (c) => {
-    groundShadow(c, 12, 48, 8, 2.5);
-    outlined(c, 28, 52, OUTLINE, (b) => {
-      rect(b, 10, 6, 4, 43, '#7a5230');
-      rect(b, 13, 6, 1, 43, '#5a3a20');
-      rect(b, 4, 6, 22, 3, '#8a6238');
-      rect(b, 4, 6, 22, 1, '#a87a48');
-      poly(b, [9, 6, 12, 1, 15, 6], '#3f7f78');
+    shadow(c, 12, 49, 8, 2.5);
+    sprite(c, 28, 52, (b) => {
+      box(b, 10, 6, 4, 44, R.bark[3]);
+      box(b, 10, 6, 1, 44, R.bark[4]);
+      box(b, 13, 6, 1, 44, R.bark[1]);
+      box(b, 3, 6, 23, 3, R.bark[3]);
+      box(b, 3, 6, 23, 1, R.bark[5]);
+      box(b, 3, 8, 23, 1, R.bark[1]);
+      fpoly(b, [8, 6, 12, 1, 16, 6], R.teal[3]);
+      fpoly(b, [12, 1, 16, 6, 12, 6], R.teal[1]);
       for (const [x, len] of [
-        [6, 9],
+        [5, 9],
         [17, 12],
         [21, 8],
         [25, 11],
       ] as const) {
-        rect(b, x, 9, 1, 3, '#c8b48c');
-        rect(b, x - 1, 12, 3, len, '#cfd8e0');
-        rect(b, x - 1, 12, 1, len, '#ffffff');
+        box(b, x, 9, 1, 3, R.cream[1]);
+        box(b, x - 1, 12, 3, len, R.iron[3]);
+        box(b, x - 1, 12, 1, len, '#e8eef4');
+        box(b, x + 1, 12, 1, len, R.iron[2]);
       }
-      line(b, [8, 9, 7, 20, 9, 26], '#e8f6f2', 2, 'butt');
-      poly(b, [6, 24, 10, 22, 11, 30, 8, 31], '#5fd0b8');
+      brush(b, [8, 9, 7, 20, 9, 26], 2, '#e8f6f2');
+      fpoly(b, [6, 24, 10, 22, 11, 30, 8, 31], R.teal[4]);
+      tuft(b, 7, 51);
     });
-    line(c, [2, 30, 6, 28], 'rgba(255,255,255,0.7)', 1, 'butt');
-    line(c, [1, 36, 6, 34], 'rgba(255,255,255,0.5)', 1, 'butt');
+    box(c, 1, 30, 4, 1, 'rgba(255,255,255,0.7)');
+    box(c, 0, 36, 5, 1, 'rgba(255,255,255,0.5)');
   });
 
   canvasTex(scene, 'node_storm_tree', 44, 64, (c) => {
-    const rnd = mulberry32(311);
-    groundShadow(c, 22, 59, 15, 4.5);
-    glow(c, 22, 22, 22, '#8fd8ff', 0.3);
-    outlined(c, 44, 64, OUTLINE, (b) => {
-      const bark = '#4a4a5c';
-      poly(b, [16, 60, 19, 52, 19, 34, 25, 34, 25, 52, 28, 60], bark);
-      rect(b, 22, 34, 3, 24, shade(bark, -22));
-      line(b, [20, 40, 10, 30, 6, 18], bark, 4);
-      line(b, [24, 36, 34, 26, 38, 14], bark, 4);
-      line(b, [22, 34, 21, 18, 24, 8], bark, 3);
-      line(b, [10, 30, 3, 28], bark, 2);
-      line(b, [34, 26, 41, 26], bark, 2);
-      line(b, [6, 18, 3, 11], bark, 2);
-      line(b, [6, 18, 11, 10], bark, 2);
-      line(b, [38, 14, 35, 6], bark, 2);
-      line(b, [38, 14, 42, 8], bark, 2);
-      line(b, [24, 8, 21, 2], bark, 2);
-      line(b, [24, 8, 28, 3], bark, 2);
-      line(b, [22, 40, 22, 52], shade(bark, 16), 1, 'butt');
-      // sparse slate leaves clinging to the twigs
+    const rnd = artRng(keySeed('node_storm_tree'));
+    shadow(c, 22, 60, 15, 3.5);
+    halo(c, 22, 22, 22, '#8fd8ff', 0.28);
+    sprite(c, 44, 64, (b) => {
+      const B = ['#22222e', '#30303e', '#40404f', '#545466', '#6a6a7e', '#84849a'];
+      fpoly(b, [15, 61, 19, 53, 19, 34, 25, 34, 25, 53, 29, 61], B[3]);
+      box(b, 23, 34, 2, 26, B[1]);
+      box(b, 19, 36, 2, 22, B[4]);
+      brush(b, [20, 40, 10, 30, 6, 18], 3, B[3]);
+      brush(b, [24, 36, 34, 26, 38, 14], 3, B[2]);
+      brush(b, [22, 34, 21, 18, 24, 8], 3, B[3]);
+      brush(b, [10, 30, 3, 28], 2, B[3]);
+      brush(b, [34, 26, 41, 26], 2, B[2]);
+      brush(b, [6, 18, 3, 11], 2, B[3]);
+      brush(b, [6, 18, 11, 10], 2, B[3]);
+      brush(b, [38, 14, 35, 6], 2, B[2]);
+      brush(b, [38, 14, 42, 8], 2, B[2]);
+      brush(b, [24, 8, 21, 2], 2, B[3]);
+      brush(b, [24, 8, 28, 3], 2, B[3]);
+      seg(b, 19, 39, 10, 30, B[5]);
+      seg(b, 21, 33, 20, 18, B[5]);
+      const tips = [
+        [4, 12],
+        [10, 11],
+        [35, 7],
+        [41, 9],
+        [21, 3],
+        [28, 4],
+        [3, 28],
+        [41, 26],
+      ];
       for (let i = 0; i < 22; i++) {
-        const tips = [
-          [4, 12],
-          [10, 11],
-          [35, 7],
-          [41, 9],
-          [21, 3],
-          [28, 4],
-          [3, 28],
-          [41, 26],
-        ];
         const [tx, ty] = tips[i % tips.length];
         const x = Math.round(tx + (rnd() - 0.5) * 7);
         const y = Math.round(ty + (rnd() - 0.5) * 5);
-        rect(b, x, y, 2, 2, rnd() < 0.5 ? '#3f5a6a' : '#55788a');
+        box(b, x, y, 2, 2, rnd() < 0.5 ? '#3f5a6a' : '#5a7c8e');
+        px(b, x, y, '#7a9cae');
       }
     });
-    // crackling lightning through the branches
     const bolt = (pts: number[]) => {
-      line(c, pts, 'rgba(160,230,255,0.55)', 3);
-      line(c, pts, '#ffffff', 1, 'butt');
+      for (let i = 0; i + 3 < pts.length; i += 2) seg(c, pts[i], pts[i + 1], pts[i + 2], pts[i + 3], '#e8faff');
+      for (let i = 0; i + 3 < pts.length; i += 2) seg(c, pts[i] + 1, pts[i + 1], pts[i + 2] + 1, pts[i + 3], 'rgba(140,224,244,0.6)');
     };
     bolt([6, 18, 11, 24, 8, 28, 14, 33]);
     bolt([38, 14, 33, 20, 36, 23, 30, 29]);
     bolt([24, 8, 20, 14, 23, 17]);
-    rect(c, 3, 10, 1, 1, '#dff6ff');
-    rect(c, 41, 20, 1, 1, '#dff6ff');
+    twinkle(c, 3, 10, '#dff6ff');
+    px(c, 41, 20, '#dff6ff');
   });
 
   canvasTex(scene, 'node_shadow_fungus', 28, 30, (c) => {
-    groundShadow(c, 14, 26, 11, 3);
-    glow(c, 14, 20, 14, '#a060ff', 0.45);
-    outlined(c, 28, 30, OUTLINE, (b) => {
-      const sh = (x: number, y: number, rx: number, ry: number, stemH: number) => {
-        rect(b, x - 1, y, 3, stemH, '#c8b8e8');
-        b.fillStyle = '#3a2458';
-        b.beginPath();
-        b.ellipse(x, y, rx, ry, 0, Math.PI, 0);
-        b.fill();
-        ellipse(b, x, y, rx, ry * 0.35, '#b07aff');
-        ellipse(b, x - rx * 0.3, y - ry * 0.55, rx * 0.35, ry * 0.25, '#5a3a8a');
-        rect(b, Math.round(x + rx * 0.2), Math.round(y - ry * 0.6), 1, 1, '#d8b8ff');
-      };
-      sh(18, 16, 6, 5, 10);
-      sh(9, 20, 5, 4, 6);
-      sh(22, 23, 3, 2.5, 3);
+    shadow(c, 14, 27, 11, 2.5);
+    halo(c, 14, 20, 14, '#a060ff', 0.42);
+    const CAP = ['#1e1230', '#2e1c48', '#46306c', '#6a4aa0', '#9a78d8'];
+    const STEM = ['#6a5a8a', '#9888b8', '#c8b8e8', '#e8dcff'];
+    sprite(c, 28, 30, (b) => {
+      shroom(b, 17, 17, 6, 5, 10, CAP, STEM, false);
+      shroom(b, 8, 21, 5, 4, 6, CAP, STEM, false);
+      shroom(b, 22, 24, 3, 2, 3, CAP, STEM, false);
+      for (const [x, y] of [
+        [15, 14],
+        [19, 13],
+        [7, 19],
+        [10, 18],
+      ])
+        px(b, x, y, '#d8b8ff');
     });
     for (const [x, y] of [
       [5, 9],
       [24, 6],
       [13, 4],
     ])
-      rect(c, x, y, 1, 1, '#e0c8ff');
+      px(c, x, y, '#e0c8ff');
+    box(c, 11, 17, 12, 1, 'rgba(176,122,255,0.7)');
   });
 
   canvasTex(scene, 'node_sun_spring', 40, 36, (c) => {
-    groundShadow(c, 20, 31, 18, 4);
-    for (const x of [13, 20, 27]) {
-      const g = c.createLinearGradient(0, 2, 0, 26);
-      g.addColorStop(0, 'rgba(255,230,140,0)');
-      g.addColorStop(1, 'rgba(255,230,140,0.45)');
-      c.fillStyle = g;
-      c.fillRect(x - 2, 2, 4, 24);
-    }
-    glow(c, 20, 24, 16, '#ffd860', 0.45);
-    outlined(c, 40, 36, OUTLINE, (b) => {
-      for (let i = 0; i < 12; i++) {
+    shadow(c, 20, 32, 18, 3);
+    for (const x of [13, 20, 27]) for (let y = 2; y < 26; y += 2) box(c, x - 1, y, 3, 1, `rgba(255,230,140,${0.05 + (y / 26) * 0.4})`);
+    halo(c, 20, 24, 16, '#ffd860', 0.42);
+    sprite(c, 40, 36, (b) => {
+      const S = R.warmStone;
+      const stone = (i: number) => {
         const a = (i / 12) * Math.PI * 2;
         const x = 20 + Math.cos(a) * 15;
         const y = 25 + Math.sin(a) * 6;
-        ellipse(b, x, y, 3.5, 2.6, i % 2 ? '#a39d92' : '#b8b2a6');
-        rect(b, Math.round(x - 1), Math.round(y - 2), 2, 1, '#d0cabe');
-      }
-      ellipse(b, 20, 25, 12, 4.5, '#e8a830');
-      ellipse(b, 20, 24.5, 10, 3.5, '#ffd860');
-      ellipse(b, 17, 24, 4, 1.2, '#fff4b0');
-      for (let i = 6; i < 12; i++) {
-        const a = (i / 12) * Math.PI * 2;
-        if (Math.sin(a) < 0.2) continue;
-        const x = 20 + Math.cos(a) * 15;
-        const y = 25 + Math.sin(a) * 6;
-        ellipse(b, x, y, 3.5, 2.6, i % 2 ? '#a39d92' : '#b8b2a6');
-      }
+        disc(b, x, y, 3.5, 2.6, i % 2 ? S[3] : S[4]);
+        box(b, Math.round(x - 1), Math.round(y - 2), 2, 1, S[5]);
+        box(b, Math.round(x), Math.round(y + 1), 2, 1, S[2]);
+      };
+      for (let i = 0; i < 12; i++) if (Math.sin((i / 12) * Math.PI * 2) <= 0.2) stone(i);
+      disc(b, 20, 25, 12, 4.5, R.gold[1]);
+      disc(b, 20, 24.5, 10, 3.5, R.gold[3]);
+      box(b, 14, 23, 6, 1, R.gold[4]);
+      for (let i = 0; i < 12; i++) if (Math.sin((i / 12) * Math.PI * 2) > 0.2) stone(i);
     });
     for (const [x, y] of [
       [10, 12],
       [30, 9],
       [21, 5],
-    ]) {
-      rect(c, x, y - 1, 1, 3, '#fff4c0');
-      rect(c, x - 1, y, 3, 1, '#fff4c0');
-    }
+    ])
+      twinkle(c, x, y, '#fff4c0');
   });
 
   canvasTex(scene, 'node_frost_crystal', 28, 40, (c) => {
-    groundShadow(c, 14, 36, 11, 3);
-    glow(c, 14, 26, 14, '#c8f0ff', 0.4);
-    outlined(c, 28, 40, OUTLINE, (b) => {
-      ellipse(b, 14, 35, 11, 3, '#eef6ff');
-      const shard = (x: number, base: number, top: number, w: number, lean: number) => {
-        poly(b, [x - w, base, x - w + lean, top + w, x + lean, top, x, base + 1], '#e8f8ff');
-        poly(b, [x, base + 1, x + lean, top, x + w + lean, top + w, x + w, base], '#8cc8e8');
-        line(b, [x - w + 1, base - 2, x - w + 1 + lean, top + w + 1], '#ffffff', 1, 'butt');
-      };
-      shard(8, 34, 18, 3, -3);
-      shard(20, 34, 16, 3, 3);
-      shard(14, 35, 4, 4, 0);
+    shadow(c, 14, 37, 11, 2.5);
+    halo(c, 14, 26, 14, '#c8f0ff', 0.38);
+    const ICE = ['#3a6a8a', '#5a94b8', '#8cc6e6', '#c8ecfa', '#eefaff', '#ffffff'];
+    sprite(c, 28, 40, (b) => {
+      disc(b, 14, 36, 11, 3, SNOW[3]);
+      box(b, 5, 35, 18, 1, SNOW[4]);
+      shard(b, 8, 34, 18, 3, -3, ICE);
+      shard(b, 20, 34, 16, 3, 3, ICE);
+      shard(b, 14, 35, 4, 4, 0, ICE);
     });
-    rect(c, 12, 12, 1, 1, '#ffffff');
-    rect(c, 3, 10, 1, 1, '#e8fbff');
-    rect(c, 25, 14, 1, 1, '#e8fbff');
+    px(c, 13, 9, '#ffffff');
+    px(c, 3, 10, '#e8fbff');
+    px(c, 25, 14, '#e8fbff');
   });
 
   canvasTex(scene, 'node_depleted', 32, 22, (c) => {
-    groundShadow(c, 16, 16, 13, 3.5, 0.2);
-    ellipse(c, 16, 15, 12, 4, '#6e6458');
-    ellipse(c, 16, 14, 10, 3, '#857a6c');
-    for (const [x, y] of [
-      [8, 13],
-      [13, 11],
-      [20, 12],
-      [24, 15],
-      [11, 16],
-      [18, 16],
-    ]) {
-      rect(c, x, y, 3, 2, '#8d887f');
-      rect(c, x, y, 2, 1, '#aaa59c');
-      rect(c, x, y + 2, 3, 1, '#4e4840');
-    }
-    rect(c, 15, 6, 1, 6, '#6b4423');
-    rect(c, 15, 6, 3, 1, '#6b4423');
+    shadow(c, 16, 17, 13, 3, 0.2);
+    sprite(c, 32, 22, (b) => {
+      disc(b, 16, 15, 12, 4, R.dirt[0]);
+      disc(b, 16, 14, 10, 3, R.dirt[1]);
+      box(b, 10, 12, 8, 1, R.dirt[2]);
+      for (const [x, y] of [
+        [8, 13],
+        [13, 11],
+        [20, 12],
+        [24, 15],
+        [11, 16],
+        [18, 16],
+      ]) {
+        box(b, x, y, 3, 2, R.stone[3]);
+        px(b, x, y, R.stone[4]);
+        box(b, x, y + 2, 3, 1, R.stone[1]);
+      }
+      box(b, 15, 5, 1, 7, R.bark[3]);
+      box(b, 15, 5, 3, 1, R.bark[3]);
+    });
   });
 }
 
@@ -2504,195 +2577,202 @@ export const PRISM_SOCKETS: ReadonlyArray<readonly [number, number]> = (() => {
 })();
 
 function drawPortals(scene: Phaser.Scene): void {
-  // White chevrons pointing NORTH (up); the client rotates by facing (e 90°, s 180°, w 270°) and tints.
+  // White chevrons pointing NORTH (up); the client rotates by facing (e 90°, s 180°, w 270°) and tints them.
   canvasTex(scene, 'portal_edge', 32, 32, (c) => {
-    glow(c, 16, 16, 16, '#ffffff', 0.28);
     const chev = (y: number, a: number) => {
-      poly(c, [4, y + 9, 16, y, 28, y + 9, 28, y + 13, 16, y + 4, 4, y + 13], `rgba(0,0,0,${a * 0.25})`);
-      poly(c, [4, y + 8, 16, y - 1, 28, y + 8, 28, y + 12, 16, y + 3, 4, y + 12], `rgba(255,255,255,${a})`);
+      const s = scratch(32, 32);
+      fpoly(s.c, [4, y + 9, 16, y - 2, 28, y + 9, 28, y + 13, 16, y + 3, 4, y + 13], '#ffffff');
+      fpoly(s.c, [16, y + 3, 28, y + 13, 28, y + 10, 16, y], '#c8c8c8');
+      seg(s.c, 5, y + 9, 16, y - 1, '#ffffff');
+      outline(s.c, 32, 32, 'rgba(36,24,15,0.85)');
+      c.globalAlpha = a;
+      c.drawImage(s.el, 0, 0);
+      c.globalAlpha = 1;
     };
-    chev(5, 0.95);
     chev(16, 0.6);
+    chev(5, 1);
   });
 
-  // Dungeon entrance carved into a rock face (origin bottom-centre).
+  // Dungeon entrance carved into a rock face, timber-framed, with two torches (origin bottom-centre).
   canvasTex(scene, 'portal_door', 64, 64, (c) => {
-    groundShadow(c, 32, 58, 30, 5, 0.3);
-    outlined(c, 64, 64, OUTLINE, (b) => {
-      const rock = '#857868';
-      poly(b, [2, 60, 3, 34, 8, 18, 18, 8, 32, 4, 46, 8, 56, 18, 61, 34, 62, 60], shade(rock, -30));
-      poly(b, [4, 40, 9, 20, 19, 10, 32, 6, 45, 10, 55, 20, 60, 40, 48, 30, 32, 26, 16, 30], rock);
-      poly(b, [9, 20, 19, 10, 32, 6, 45, 10, 36, 12, 22, 15], shade(rock, 24));
+    const S = R.warmStone;
+    shadow(c, 32, 60, 30, 4);
+    sprite(c, 64, 64, (b) => {
+      fpoly(b, [2, 61, 3, 34, 8, 18, 18, 8, 32, 4, 46, 8, 56, 18, 61, 34, 62, 61], S[2]);
+      fpoly(b, [3, 40, 8, 20, 18, 10, 32, 6, 46, 10, 56, 20, 61, 40, 48, 30, 32, 26, 16, 30], S[3]);
+      fpoly(b, [8, 20, 18, 10, 32, 6, 46, 10, 36, 13, 22, 15], S[4]);
+      seg(b, 9, 19, 18, 9, S[5]);
+      seg(b, 19, 9, 31, 5, S[5]);
+      fpoly(b, [46, 10, 56, 20, 61, 40, 61, 61, 52, 61, 50, 34], S[1]);
       for (const [x, y, w] of [
-        [8, 44, 8],
-        [50, 40, 9],
-        [12, 30, 6],
+        [6, 46, 8],
+        [50, 42, 9],
+        [10, 31, 6],
         [44, 26, 7],
+        [24, 18, 9],
       ] as const) {
-        rect(b, x, y, w, 1, shade(rock, -50));
-        rect(b, x, y + 1, w, 1, shade(rock, 10));
+        box(b, x, y, w, 1, S[0]);
+        box(b, x, y + 1, w, 1, S[4]);
       }
+      mossCap(b, 22, 7, 10);
       // opening
-      poly(b, [19, 61, 19, 36, 24, 28, 32, 26, 40, 28, 45, 36, 45, 61], '#0e0b0a');
-      poly(b, [21, 61, 21, 38, 25, 31, 32, 29, 32, 61], '#1a1412');
+      fpoly(b, [19, 62, 19, 36, 24, 28, 32, 26, 40, 28, 45, 36, 45, 62], '#0c0807');
+      fpoly(b, [21, 62, 21, 38, 25, 31, 32, 29, 32, 62], '#1a1210');
+      for (let y = 40; y < 62; y += 5) box(b, 22, y, 20, 1, '#241a16');
       // timber frame
-      rect(b, 17, 32, 4, 29, '#6b4423');
-      rect(b, 43, 32, 4, 29, '#5a3a1e');
-      rect(b, 15, 29, 34, 4, '#7a5230');
-      rect(b, 15, 29, 34, 1, '#9a7048');
-      rect(b, 19, 33, 1, 27, '#8a6238');
-      // threshold
-      rect(b, 16, 60, 32, 3, '#6e665c');
+      box(b, 16, 31, 5, 31, R.bark[3]);
+      box(b, 16, 31, 1, 31, R.bark[4]);
+      box(b, 43, 31, 5, 31, R.bark[2]);
+      box(b, 47, 31, 1, 31, R.bark[1]);
+      box(b, 14, 28, 36, 4, R.bark[3]);
+      box(b, 14, 28, 36, 1, R.bark[5]);
+      box(b, 14, 31, 36, 1, R.bark[1]);
+      for (const x of [18, 45]) px(b, x, 30, R.iron[3]);
+      box(b, 15, 61, 34, 3, S[3]);
+      box(b, 15, 61, 34, 1, S[5]);
+      // torch sconces
+      for (const x of [9, 55]) {
+        box(b, x - 1, 38, 3, 8, R.bark[2]);
+        box(b, x - 2, 37, 5, 2, R.iron[2]);
+      }
     });
-    for (const x of [10, 54]) {
-      glow(c, x, 36, 9, '#ffb050', 0.55);
-      rect(c, x - 1, 38, 2, 7, '#5a3a1e');
-      flame(c, x, 38, 7);
+    for (const x of [9, 55]) {
+      halo(c, x, 32, 10, '#ffb050', 0.5);
+      flamePx(c, x, 37, 8);
     }
   });
 
-  // Hole in the floor with steps descending north into darkness.
+  // Hole in the floor with steps descending north into darkness (centred decal).
   canvasTex(scene, 'portal_stairs_down', 32, 32, (c) => {
-    rect(c, 2, 2, 28, 28, '#6e6860');
-    rect(c, 2, 2, 28, 2, '#8d877e');
-    rect(c, 2, 2, 2, 28, '#827c73');
-    rect(c, 28, 2, 2, 28, '#57524b');
-    const steps = 5;
-    for (let i = 0; i < steps; i++) {
-      const y = 25 - i * 4.4;
-      const t = i / (steps - 1);
-      const tread = mix('#9a948a', '#1a1716', t);
-      rect(c, 5, Math.round(y), 22, 4, tread);
-      rect(c, 5, Math.round(y), 22, 1, shade(tread, 18));
-      rect(c, 5, Math.round(y) + 3, 22, 1, shade(tread, -30));
+    const S = R.warmStone;
+    box(c, 2, 2, 28, 28, S[2]);
+    box(c, 2, 2, 28, 2, S[4]);
+    box(c, 2, 2, 2, 28, S[3]);
+    box(c, 28, 2, 2, 28, S[1]);
+    box(c, 2, 28, 28, 2, S[1]);
+    const shades = [S[4], S[3], S[2], S[1], S[0], '#120e0c'];
+    for (let i = 0; i < 6; i++) {
+      const y = 25 - i * 4;
+      box(c, 5, y, 22, 4, shades[i]);
+      box(c, 5, y, 22, 1, shade(shades[i], 18));
+      box(c, 5, y + 3, 22, 1, shade(shades[i], -24));
     }
-    vgrad(c, 5, 4, 22, 6, 'rgba(0,0,0,0.85)', 'rgba(0,0,0,0)');
-    rect(c, 4, 4, 1, 25, '#3a3632');
-    rect(c, 27, 4, 1, 25, '#2a2724');
-    rect(c, 2, 29, 28, 2, '#57524b');
+    box(c, 5, 4, 22, 3, '#0a0807');
+    box(c, 4, 4, 1, 25, S[0]);
+    box(c, 27, 4, 1, 25, '#1a1512');
+    outline(c, 32, 32, OUT);
   });
 
   // Staircase rising north into a lit archway.
   canvasTex(scene, 'portal_stairs_up', 32, 40, (c) => {
-    groundShadow(c, 16, 37, 15, 3, 0.25);
-    glow(c, 16, 8, 14, '#fff2c0', 0.55);
-    outlined(c, 32, 40, OUTLINE, (b) => {
-      // stone surround
-      rect(b, 2, 6, 28, 33, '#6e6860');
-      rect(b, 2, 6, 5, 33, '#8d877e');
-      rect(b, 2, 6, 1, 33, '#a39d92');
-      rect(b, 25, 6, 5, 33, '#57524b');
-      b.fillStyle = '#7d776e';
-      b.beginPath();
-      b.arc(16, 12, 14, Math.PI, 0);
-      b.fill();
-      // lit arch opening
-      b.fillStyle = '#fff2c0';
-      b.beginPath();
-      b.arc(16, 12, 8, Math.PI, 0);
-      b.fill();
-      rect(b, 8, 12, 16, 4, '#ffe6a0');
-      // steps narrowing as they climb
-      const steps = 6;
-      for (let i = 0; i < steps; i++) {
-        const t = i / (steps - 1);
+    const S = R.warmStone;
+    shadow(c, 16, 38, 15, 2.5, 0.25);
+    halo(c, 16, 8, 14, '#fff2c0', 0.5);
+    sprite(c, 32, 40, (b) => {
+      box(b, 2, 12, 28, 27, S[2]);
+      box(b, 2, 12, 5, 27, S[3]);
+      box(b, 2, 12, 1, 27, S[4]);
+      box(b, 25, 12, 5, 27, S[1]);
+      for (let y = 0; y <= 14; y++) {
+        const half = Math.round(Math.sqrt(Math.max(0, 14 * 14 - (14 - y) ** 2)));
+        box(b, 16 - half, y, half * 2, 1, S[3]);
+        if (y < 14) {
+          const ih = Math.round(Math.sqrt(Math.max(0, 9 * 9 - (14 - y) ** 2)));
+          if (ih > 0) box(b, 16 - ih, y, ih * 2, 1, GLASS[4]);
+        }
+      }
+      for (let i = 0; i < 11; i++) {
+        const a = Math.PI + (i / 10) * Math.PI;
+        px(b, Math.round(16 + Math.cos(a) * 11.5), Math.round(14 + Math.sin(a) * 11.5), S[1]);
+      }
+      box(b, 7, 14, 18, 4, GLASS[3]);
+      for (let i = 0; i < 6; i++) {
+        const t = i / 5;
         const y = Math.round(34 - i * 3.6);
         const hw = Math.round(9 - t * 2);
-        const tread = mix('#8a847a', '#d8d0b8', t);
-        rect(b, 16 - hw, y + 1, hw * 2, 3, shade(tread, -40));
-        rect(b, 16 - hw, y - 1, hw * 2, 2, tread);
-        rect(b, 16 - hw, y - 1, hw * 2, 1, shade(tread, 22));
+        const tread = [S[2], S[3], S[3], S[4], S[4], S[5]][i];
+        box(b, 16 - hw, y + 1, hw * 2, 3, S[1]);
+        box(b, 16 - hw, y - 1, hw * 2, 2, tread);
+        box(b, 16 - hw, y - 1, hw * 2, 1, shade(tread, 18));
       }
-      // inner side walls
-      poly(b, [7, 38, 7, 16, 9, 16, 7, 38], '#4a453f');
-      poly(b, [25, 38, 25, 16, 23, 16, 25, 38], '#3a3632');
-      rect(b, 2, 37, 28, 2, '#57524b');
+      box(b, 7, 18, 2, 20, S[1]);
+      box(b, 23, 18, 2, 20, S[0]);
+      box(b, 2, 37, 28, 2, S[1]);
     });
   });
 
-  // Prism Gate: stone arch with 7 empty sockets. The opening is left transparent so the client can
-  // draw its own barrier/portal effect behind or inside it.
+  // Prism Gate: stone arch with 7 empty sockets. The opening stays transparent so the client can draw its own
+  // barrier/portal effect inside it.
   canvasTex(scene, 'gate_prism', PRISM_GATE_SIZE.w, PRISM_GATE_SIZE.h, (c) => {
-    groundShadow(c, 48, 106, 46, 6, 0.32);
-    outlined(c, 96, 112, OUTLINE, (b) => {
-      const st = '#a8a2b4';
-      // plinths
+    const S = ['#3a3648', '#55506a', '#716b88', '#8e88a6', '#aca6c2', '#ccc8de'];
+    shadow(c, 48, 107, 46, 5);
+    sprite(c, 96, 112, (b) => {
       for (const x of [4, 70]) {
-        rect(b, x, 96, 22, 12, shade(st, -30));
-        rect(b, x, 94, 22, 4, shade(st, 6));
-        rect(b, x, 94, 22, 1, shade(st, 24));
+        box(b, x, 96, 22, 12, S[2]);
+        box(b, x, 94, 22, 4, S[4]);
+        box(b, x, 94, 22, 1, S[5]);
+        box(b, x + 18, 96, 4, 12, S[1]);
       }
-      // pillars
       for (const x of [8, 72]) {
-        rect(b, x, 46, 16, 49, st);
-        rect(b, x + 11, 46, 5, 49, shade(st, -28));
-        rect(b, x, 46, 2, 49, shade(st, 18));
-        for (let y = 56; y < 94; y += 10) rect(b, x, y, 16, 1, shade(st, -36));
-        poly(b, [x + 8, 64, x + 11, 70, x + 8, 76, x + 5, 70], '#6a5a8a');
-        poly(b, [x + 8, 66, x + 9.5, 70, x + 8, 74, x + 6.5, 70], '#9a8ac0');
+        box(b, x, 46, 16, 49, S[3]);
+        box(b, x, 46, 2, 49, S[5]);
+        box(b, x + 11, 46, 5, 49, S[2]);
+        box(b, x + 15, 46, 1, 49, S[1]);
+        for (let y = 56; y < 94; y += 10) {
+          box(b, x, y, 16, 1, S[1]);
+          box(b, x, y + 1, 11, 1, S[4]);
+        }
+        fpoly(b, [x + 8, 63, x + 12, 70, x + 8, 77, x + 4, 70], R.violet[1]);
+        fpoly(b, [x + 8, 65, x + 10, 70, x + 8, 75, x + 6, 70], R.violet[3]);
+        px(b, x + 7, 68, R.violet[5]);
       }
-      // arch ring (voussoirs)
+      // voussoir ring (per-pixel polar fill)
       const cx = 48;
       const cy = 48;
-      const R1 = 42;
-      const R0 = 26;
-      b.fillStyle = st;
-      b.beginPath();
-      b.arc(cx, cy, R1, Math.PI, 0);
-      b.lineTo(cx + R0, cy);
-      b.arc(cx, cy, R0, 0, Math.PI, true);
-      b.closePath();
-      b.fill();
-      b.fillStyle = shade(st, 20);
-      b.beginPath();
-      b.arc(cx, cy, R1, Math.PI, Math.PI * 1.5);
-      b.arc(cx, cy, R1 - 3, Math.PI * 1.5, Math.PI, true);
-      b.closePath();
-      b.fill();
-      b.fillStyle = shade(st, -30);
-      b.beginPath();
-      b.arc(cx, cy, R0 + 3, Math.PI, 0);
-      b.arc(cx, cy, R0, 0, Math.PI, true);
-      b.closePath();
-      b.fill();
-      for (let i = 0; i <= 8; i++) {
-        const a = Math.PI + (i * Math.PI) / 8;
-        line(b, [cx + Math.cos(a) * R0, cy + Math.sin(a) * R0, cx + Math.cos(a) * R1, cy + Math.sin(a) * R1], shade(st, -40), 1, 'butt');
-      }
+      for (let y = 4; y <= 48; y++)
+        for (let x = 4; x <= 92; x++) {
+          const dx = x + 0.5 - cx;
+          const dy = y + 0.5 - cy;
+          const r = Math.hypot(dx, dy);
+          if (r < 26 || r > 42 || dy > 0.5) continue;
+          const a = Math.atan2(dy, dx);
+          const seam = Math.abs(((a + Math.PI) / (Math.PI / 9)) % 1) < 0.07;
+          let tone = r > 39.5 ? (dx < 0 ? 5 : 3) : r < 28.5 ? 1 : dx < -8 ? 4 : dx < 10 ? 3 : 2;
+          if (seam) tone = 1;
+          px(b, x, y, S[tone]);
+        }
       // keystone
-      poly(b, [41, 4, 55, 4, 53, 22, 43, 22], shade(st, 10));
-      poly(b, [41, 4, 55, 4, 54, 6, 42, 6], shade(st, 30));
-      poly(b, [48, 9, 51, 13, 48, 17, 45, 13], '#e8e0ff');
+      fpoly(b, [41, 4, 55, 4, 53, 22, 43, 22], S[4]);
+      box(b, 41, 4, 14, 2, S[5]);
+      box(b, 52, 6, 2, 16, S[2]);
+      fpoly(b, [48, 8, 51, 12, 48, 16, 45, 12], '#ece6ff');
+      px(b, 47, 10, '#ffffff');
       // empty sockets
       for (const [x, y] of PRISM_SOCKETS) {
-        ellipse(b, x, y, 5, 5, shade(st, -48));
-        ellipse(b, x, y + 0.5, 4, 4, '#2a2436');
-        ellipse(b, x - 1, y - 1, 1.6, 1.4, '#4a405e');
+        disc(b, x, y, 5, 5, S[1]);
+        disc(b, x, y + 0.5, 4, 4, '#221e2e');
+        box(b, x - 2, y - 2, 2, 1, '#4a405e');
+        box(b, x - 1, y + 3, 3, 1, S[4]);
       }
     });
   });
 
   canvasTex(scene, 'gate_socket', 12, 12, (c) => {
-    glow(c, 6, 6, 6, '#ffffff', 0.5);
-    poly(c, [6, 1, 10, 4, 10, 8, 6, 11, 2, 8, 2, 4], '#c8c8d0');
-    poly(c, [6, 1, 10, 4, 6, 6, 2, 4], '#ffffff');
-    poly(c, [2, 4, 6, 6, 6, 11, 2, 8], '#e6e6ee');
-    poly(c, [10, 4, 10, 8, 6, 11, 6, 6], '#9a9aa6');
-    rect(c, 4, 3, 1, 1, '#ffffff');
+    fpoly(c, [6, 0, 11, 4, 11, 8, 6, 12, 1, 8, 1, 4], '#a8a8b4');
+    fpoly(c, [6, 1, 10, 4, 6, 6, 2, 4], '#ffffff');
+    fpoly(c, [2, 4, 6, 6, 6, 11, 2, 8], '#e6e6ee');
+    fpoly(c, [10, 4, 10, 8, 6, 11, 6, 6], '#9a9aa6');
+    px(c, 4, 3, '#ffffff');
   });
 
   // ---- hidden-portal blockers
   canvasTex(scene, 'hide_shimmer', 40, 48, (c) => {
-    const g = c.createRadialGradient(20, 26, 2, 20, 26, 20);
-    g.addColorStop(0, 'rgba(255,255,255,0.28)');
-    g.addColorStop(1, 'rgba(255,255,255,0)');
-    c.fillStyle = g;
-    c.fillRect(0, 0, 40, 48);
     for (let i = 0; i < 6; i++) {
       const x0 = 8 + i * 5;
-      const pts: number[] = [];
-      for (let y = 6 + (i % 2) * 4; y <= 44 - (i % 3) * 3; y += 2) pts.push(x0 + Math.sin(y * 0.35 + i) * 2, y);
-      line(c, pts, `rgba(255,255,255,${0.25 + (i % 2) * 0.2})`, 1, 'butt');
+      for (let y = 6 + (i % 2) * 4; y <= 44 - (i % 3) * 3; y++) {
+        const x = Math.round(x0 + Math.sin(y * 0.35 + i) * 2);
+        px(c, x, y, `rgba(255,255,255,${0.22 + (i % 2) * 0.2})`);
+      }
     }
     for (const [x, y] of [
       [12, 12],
@@ -2700,123 +2780,107 @@ function drawPortals(scene: Phaser.Scene): void {
       [17, 34],
       [31, 38],
       [8, 28],
-    ]) {
-      rect(c, x, y - 1, 1, 3, 'rgba(255,255,255,0.9)');
-      rect(c, x - 1, y, 3, 1, 'rgba(255,255,255,0.9)');
-    }
+    ])
+      twinkle(c, x, y, 'rgba(255,255,255,0.9)');
   });
 
   canvasTex(scene, 'hide_cracked_rock', 48, 44, (c) => {
-    groundShadow(c, 24, 38, 21, 5);
-    outlined(c, 48, 44, OUTLINE, (b) => {
-      const st = '#8f877c';
-      poly(b, [3, 37, 5, 18, 14, 6, 28, 3, 40, 9, 45, 24, 44, 37, 34, 41, 14, 41], shade(st, -34));
-      poly(b, [6, 30, 8, 18, 15, 9, 28, 6, 38, 11, 41, 22, 36, 29, 20, 32], st);
-      poly(b, [8, 18, 15, 9, 28, 6, 38, 11, 26, 13, 16, 15], shade(st, 22));
+    const rnd = artRng(keySeed('hide_cracked_rock'));
+    shadow(c, 24, 39, 21, 4);
+    sprite(c, 48, 44, (b) => {
+      rockPx(b, 2, 4, 1.45, R.warmStone, true, rnd);
       const crack = (pts: number[]) => {
-        line(b, pts, '#2a241f', 2, 'butt');
-        b.save();
-        b.translate(1, 1);
-        line(b, pts, shade(st, 30), 1, 'butt');
-        b.restore();
+        for (let i = 0; i + 3 < pts.length; i += 2) {
+          seg(b, pts[i], pts[i + 1], pts[i + 2], pts[i + 3], '#1e1814');
+          seg(b, pts[i] + 1, pts[i + 1], pts[i + 2] + 1, pts[i + 3], R.warmStone[5]);
+        }
       };
-      crack([24, 6, 21, 14, 26, 20, 22, 28, 25, 38]);
+      crack([24, 6, 21, 14, 26, 20, 22, 28, 25, 37]);
       crack([21, 14, 13, 18, 10, 26]);
       crack([26, 20, 34, 22, 40, 30]);
       crack([22, 28, 16, 34]);
     });
     for (const [x, y] of [
-      [6, 39],
-      [40, 40],
-      [33, 41],
+      [6, 40],
+      [40, 41],
+      [33, 42],
     ]) {
-      rect(c, x, y, 3, 2, '#7a7268');
-      rect(c, x, y, 2, 1, '#a39b90');
+      box(c, x, y, 3, 2, R.warmStone[2]);
+      box(c, x, y, 2, 1, R.warmStone[4]);
     }
   });
 
   canvasTex(scene, 'hide_brambles', 48, 40, (c) => {
-    const rnd = mulberry32(421);
-    groundShadow(c, 24, 35, 21, 4);
-    outlined(c, 48, 40, OUTLINE, (b) => {
-      ellipse(b, 24, 25, 21, 12, '#2c3a22');
-      for (let i = 0; i < 14; i++) {
-        const x0 = 4 + rnd() * 40;
-        const y0 = 34 - rnd() * 6;
-        const pts = [x0, y0];
-        let x = x0;
-        let y = y0;
+    const rnd = artRng(keySeed('hide_brambles'));
+    shadow(c, 24, 36, 21, 3.5);
+    sprite(c, 48, 40, (b) => {
+      leafMass(b, 24, 25, 21, 12, ['#141e10', '#1e2c18', '#2a3c20', '#3a522a', '#4c6a34', '#6a8a48'], rnd, false, 3.4);
+      for (let i = 0; i < 12; i++) {
+        let x = 4 + rnd() * 40;
+        let y = 35 - rnd() * 6;
+        const pts = [x, y];
         for (let s = 0; s < 4; s++) {
-          x += (rnd() - 0.5) * 14;
-          y -= 4 + rnd() * 5;
-          pts.push(Math.max(2, Math.min(46, x)), Math.max(4, y));
+          x = Math.max(2, Math.min(46, x + (rnd() - 0.5) * 14));
+          y = Math.max(3, y - 4 - rnd() * 5);
+          pts.push(x, y);
         }
-        line(b, pts, i % 2 ? '#5a4a2a' : '#4a5a2a', 2);
+        brush(b, pts, 2, i % 2 ? '#5a4024' : '#4a4a22');
         for (let p = 2; p < pts.length; p += 2) {
-          rect(b, Math.round(pts[p]) + 1, Math.round(pts[p + 1]) - 1, 2, 1, '#c8b890');
-          rect(b, Math.round(pts[p]) - 2, Math.round(pts[p + 1]) + 1, 2, 1, '#c8b890');
+          px(b, Math.round(pts[p]) + 1, Math.round(pts[p + 1]) - 1, R.cream[2]);
+          px(b, Math.round(pts[p]) - 2, Math.round(pts[p + 1]) + 1, R.cream[2]);
         }
-      }
-      for (let i = 0; i < 9; i++) {
-        const x = 6 + rnd() * 36;
-        const y = 10 + rnd() * 22;
-        ellipse(b, x, y, 3, 2, i % 2 ? '#3f6a2e' : '#4f7a36');
       }
       for (const [x, y] of [
         [14, 18],
         [31, 14],
         [36, 26],
+        [20, 28],
       ]) {
-        rect(b, x, y, 2, 2, '#7a2a5a');
-        rect(b, x, y, 1, 1, '#c86aa0');
+        box(b, x, y, 2, 2, '#6a2050');
+        px(b, x, y, '#c86aa0');
       }
     });
   });
 
   canvasTex(scene, 'hide_fog', 64, 48, (c) => {
     for (const [x, y, rx, ry, a] of [
-      [32, 30, 30, 14, 0.25],
-      [20, 26, 16, 11, 0.35],
-      [44, 24, 18, 12, 0.35],
-      [32, 18, 14, 10, 0.4],
-      [14, 34, 12, 7, 0.3],
-      [50, 34, 12, 7, 0.3],
-      [28, 24, 8, 5, 0.35],
+      [32, 30, 30, 13, 0.18],
+      [20, 26, 16, 10, 0.22],
+      [44, 24, 18, 11, 0.22],
+      [32, 18, 14, 9, 0.24],
+      [14, 34, 12, 6, 0.2],
+      [50, 34, 12, 6, 0.2],
+      [28, 23, 8, 5, 0.22],
     ] as const) {
-      const g = c.createRadialGradient(x, y, 0, x, y, rx);
-      g.addColorStop(0, `rgba(236,240,248,${a})`);
-      g.addColorStop(0.7, `rgba(236,240,248,${a * 0.6})`);
-      g.addColorStop(1, 'rgba(236,240,248,0)');
-      c.fillStyle = g;
-      c.beginPath();
-      c.ellipse(x, y, rx, ry, 0, 0, Math.PI * 2);
-      c.fill();
+      disc(c, x, y, rx, ry, `rgba(236,240,248,${a})`);
+      disc(c, x - rx * 0.2, y - ry * 0.25, rx * 0.6, ry * 0.5, `rgba(248,250,255,${a * 0.8})`);
     }
   });
 
   canvasTex(scene, 'hide_glyph', 32, 32, (c) => {
-    const col = 'rgba(200,170,255,0.75)';
-    glow(c, 16, 16, 16, '#b08cff', 0.22);
-    c.strokeStyle = col;
-    c.lineWidth = 1;
-    c.beginPath();
-    c.ellipse(16, 16, 13, 10, 0, 0, Math.PI * 2);
-    c.stroke();
-    c.beginPath();
-    c.ellipse(16, 16, 9, 7, 0, 0, Math.PI * 2);
-    c.stroke();
+    const col = 'rgba(200,170,255,0.8)';
+    const dim = 'rgba(200,170,255,0.35)';
+    halo(c, 16, 16, 16, '#b08cff', 0.2);
+    for (let i = 0; i < 120; i++) {
+      const t = (i / 120) * Math.PI * 2;
+      px(c, Math.round(16 + Math.cos(t) * 13), Math.round(16 + Math.sin(t) * 10), col);
+      if (i % 2) px(c, Math.round(16 + Math.cos(t) * 9), Math.round(16 + Math.sin(t) * 7), dim);
+    }
     for (let i = 0; i < 6; i++) {
       const a = (i / 6) * Math.PI * 2 + 0.3;
-      const x = 16 + Math.cos(a) * 11;
-      const y = 16 + Math.sin(a) * 8.5;
-      rect(c, Math.round(x) - 1, Math.round(y) - 1, 2, 2, col);
+      box(c, Math.round(16 + Math.cos(a) * 11) - 1, Math.round(16 + Math.sin(a) * 8.5) - 1, 2, 2, col);
     }
-    line(c, [16, 10, 20, 18, 12, 18, 16, 10], col, 1, 'butt');
-    rect(c, 15, 15, 2, 2, 'rgba(235,225,255,0.9)');
+    seg(c, 16, 10, 20, 18, col);
+    seg(c, 20, 18, 12, 18, col);
+    seg(c, 12, 18, 16, 10, col);
+    box(c, 15, 15, 2, 2, 'rgba(235,225,255,0.95)');
   });
 }
 
-/** Draw every world texture (tiles, props, structures, objects, nodes, portals). */
+/** Props (trees, rocks, decor props keyed by PropKind). */
+export { drawProps, drawStructures, drawObjects, drawNodes, drawPortals };
+
+/** Draw every world texture (tiles, props, structures, objects, nodes, portals). Idempotent per key. */
 export function drawWorld(scene: Phaser.Scene): void {
   drawTiles(scene);
   drawProps(scene);

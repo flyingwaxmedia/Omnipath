@@ -31,8 +31,10 @@ export interface GameController {
   readonly reg: Registry;
   readonly book: SkillBook;
   stats(): Stats;
-  /** -1 = basic attack. */
+  /** -1 = basic attack (AUTO off: one swing per press). */
   castSlot(i: number): void;
+  /** Attack button held (AUTO off: keep swinging while held). */
+  holdAttack(on: boolean): void;
   assignSlot(i: number, id: string | null): void;
   cooldown(id: string): { remain: number; total: number };
   usable(id: string): { ok: boolean; reason?: string };

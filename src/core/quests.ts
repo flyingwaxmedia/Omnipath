@@ -379,13 +379,17 @@ function objectiveText(reg: Registry, ctx: QuestContext, o: QuestObjective, have
       if (o.monster !== undefined) {
         const name = reg.monster(o.monster)?.name ?? prettify(o.monster);
         noun = many ? pluralName(name) : name;
-      } else if (o.family !== undefined) {
-        const fam = FAMILY_NOUN[o.family][many ? 1 : 0];
-        noun = o.rank !== undefined ? `${o.rank} ${fam}` : fam;
-      } else if (o.rank !== undefined) {
-        noun = RANK_NOUN[o.rank][many ? 1 : 0];
       } else {
-        noun = many ? 'foes' : 'a foe';
+        const fam = o.family !== undefined ? FAMILY_NOUN[o.family][many ? 1 : 0] : undefined;
+        const generic =
+          fam !== undefined
+            ? (o.rank !== undefined ? `${o.rank} ${fam}` : fam)
+            : o.rank !== undefined
+              ? RANK_NOUN[o.rank][many ? 1 : 0]
+              : many
+                ? 'foes'
+                : 'foe';
+        noun = many ? generic : `${/^[aeiou]/.test(generic) ? 'an' : 'a'} ${generic}`;
       }
       return `Defeat ${noun} ${counter}`;
     }

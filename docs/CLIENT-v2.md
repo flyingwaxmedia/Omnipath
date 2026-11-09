@@ -166,8 +166,11 @@ SkillBook flags (`tests/content.test.ts` enforces it), so the client must set ev
 - Death: respawn at `world.savePoint` waystone (else region hub spawn), 50 % HP/SP, lose 5 % EXP.
 
 ### 6.1 AUTO battle (one switch)
-- AUTO is a single on/off switch (the pill beside the attack button; key **A** on desktop). Off: nothing casts by
-  itself. On: **every** equipped skill auto-casts — there are no per-skill marks.
+- AUTO is a single on/off switch (the pill beside the attack button; key **A** on desktop). It covers EVERYTHING,
+  the basic attack included.
+- **AUTO off = fully manual**: tapping a monster selects it and walks you into reach (no swing); the attack button
+  (or Space) swings once per press and keeps swinging while held; skills cast only when their slot is tapped.
+- **AUTO on**: the basic attack swings by itself and **every** equipped skill auto-casts — there are no per-skill marks.
 - On, with no live target: the player walks to the **nearest** monster (monsters already chasing the player first;
   wardens only once engaged; monsters AUTO cannot path to are skipped for 15 s), and the normal engage logic
   auto-attacks it.
@@ -175,8 +178,8 @@ SkillBook flags (`tests/content.test.ts` enforces it), so the client must set ev
   (buffs: target within ~6 tiles and the buff not already running); pure-movement skills (power 0) never auto-fire.
   Cooldowns, the after-cast lock, wind-ups, stuns and SP apply as usual.
 - Manual control wins: a ground tap or an NPC/object/portal tap pauses target hunting until 4 s after the player
-  stops (auto-casting at an existing target continues); tapping a monster just retargets. The 30 s AFK stop is
-  disabled while AUTO is on. Auto casts earn mastery like manual ones (XP still requires real hits).
+  stops (auto-casting at an existing target continues); tapping a monster just retargets. (The v2 30 s AFK stop is
+  gone: manual mode never repeats on its own, and AUTO is an explicit choice.) Auto casts earn mastery like manual ones (XP still requires real hits).
 - Saved as `PlayerSave.autoOn` (default off). Controller: `autoCastOn()`, `setAutoCastOn(on)`.
 
 ## 7. UI (`src/ui/**`)
