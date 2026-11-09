@@ -15,7 +15,7 @@ import { isBlockedPx } from '../../core/world/compile';
 import type { CompiledMap } from '../../core/world/types';
 import type { Monster } from '../entities/Monster';
 import type { Player } from '../entities/Player';
-import { gameBus } from '../events';
+import { gameBus, type Pt, type SkillRef } from '../events';
 import { DEPTH, Y_BIAS, ySort } from '../render/depths';
 
 export interface Cast {
@@ -35,7 +35,29 @@ export interface Cast {
   reprise: boolean;
   /** Arc rider zaps never arc again. */
   arcZap?: boolean;
+  /** Arc rider: where the zap leaves from (hit.from). */
+  arcFrom?: Pt;
+  /** How this copy's blow arrives when not directly (hit.via): an arc zap, a pierce, a returning projectile. */
+  via?: 'arc' | 'pierce' | 'return';
 }
+
+/** The SkillRef of a player cast for bus payloads (castId links its parts; `reprise` marks the reprised copy). */
+export function castRef(cast: Cast): SkillRef {
+  const sk = cast.skill;
+  return { skillId: sk.id, skill: sk, element: sk.element, castId: cast.id, ...(cast.reprise ? { reprise: true } : {}) };
+}
+
+/** Unique projectile ids for projectileSpawn / projectileEnd (player and monster projectiles share the counter). */
+let projectileSeq = 1;
+export function nextProjectileId(): number {
+  return projectileSeq++;
+}
+
+/**
+ * Player cast ids, unique for the whole run (a new SkillSystem is built for every map): run-wide listeners such as
+ * the quest hooks (one 'use' per cast id) must never see a cast id again after a warp.
+ */
+let castSeq = 1;
 
 export interface CombatHost {
   world: Phaser.Scene;
@@ -55,6 +77,8 @@ export interface CombatHost {
 }
 
 interface Projectile {
+  /** projectileSpawn / projectileEnd id. */
+  id: number;
   cast: Cast;
   img: Phaser.GameObjects.Image;
   x: number;
@@ -330,7 +354,6 @@ interface PartOpts {
 
 export class SkillSystem {
   private projectiles: Projectile[] = [];
-  private nextId = 1;
   private pool: Phaser.GameObjects.Image[] = [];
   private live = 0;
   private tether: Phaser.GameObjects.Graphics | null = null;
@@ -339,9 +362,14 @@ export class SkillSystem {
     ensureFxTextures(host.world);
   }
 
-  newCast(skill: SkillDef, rank: number, origin: { x: number; y: number }): Cast {
+  /** Reserves a cast id at wind-up (castStart carries it; the cast that fires later reuses it). */
+  reserveId(): number {
+    return castSeq++;
+  }
+
+  newCast(skill: SkillDef, rank: number, origin: { x: number; y: number }, id?: number): Cast {
     return {
-      id: this.nextId++,
+      id: id ?? castSeq++,
       skill,
       rank,
       origin: { ...origin },
@@ -387,7 +415,7 @@ export class SkillSystem {
         const a = t ? { x: t.x, y: t.y } : { x: p.x + (aim.x - cast.origin.x), y: p.y + (aim.y - cast.origin.y) };
         if (t) p.face(t.x, t.y);
         this.fxGhost(color);
-        this.host.float(p.x, p.y - 66, '↻ Reprise', hex(color), 10);
+        this.host.float(p.x, p.y - 66, 'Reprise', hex(color), 10);
         this.run({ ...cast, origin: { x: p.x, y: p.y }, mult: cast.mult * rep.mult, reprise: true }, a, t);
       });
     }
@@ -407,6 +435,7 @@ export class SkillSystem {
         for (let h = 0; h < hits; h++) {
           scene.time.delayedCall(h * 130, () => {
             const p = this.host.player;
+            gameBus.emit('skillPulse', { ...castRef(cast), owner: 'player', index: h, count: hits, ang, aim, x: p.x, y: p.y });
             this.fxStrike(p.x, p.y - 12, ang, s.arc * DEG, s.range, color, h % 2 === 1, style, skill.element);
             for (const m of this.host.liveMonsters()) {
               const d = Math.hypot(m.x - p.x, m.y - p.y);
@@ -425,6 +454,7 @@ export class SkillSystem {
         for (let i = 0; i < pulses; i++) {
           scene.time.delayedCall(i * 170, () => {
             const p = this.host.player;
+            gameBus.emit('skillPulse', { ...castRef(cast), owner: 'player', index: i, count: pulses, ang, aim, x: p.x, y: p.y });
             this.fxSpin(p.x, p.y - 6, s.radius, color, skill.element);
             for (const m of this.host.liveMonsters()) {
               if (Math.hypot(m.x - p.x, m.y - p.y) <= s.radius + m.radius)
@@ -438,11 +468,13 @@ export class SkillSystem {
       case 'projectile': {
         const count = s.count ?? 1;
         const spread = (s.spread ?? 0) * DEG;
+        // The volley's launch: one pulse for the whole volley.
+        gameBus.emit('skillPulse', { ...castRef(cast), owner: 'player', index: 0, count: 1, ang, aim, x: o.x, y: o.y });
         for (let i = 0; i < count; i++) {
           let a = ang;
           if (s.radial) a = ang + (i / count) * Math.PI * 2;
           else if (count > 1) a = ang - spread / 2 + (spread * i) / (count - 1);
-          this.spawnProjectile(cast, a, s.speed, s.range, s.pierce ?? 0, s.size ?? 12, color);
+          this.spawnProjectile(cast, a, s.speed, s.range, s.pierce ?? 0, s.size ?? 12, color, i, count);
         }
         break;
       }
@@ -455,9 +487,11 @@ export class SkillSystem {
         const cy = o.y + Math.sin(ang) * d;
         const delay = s.delay ?? 200;
         this.fxTelegraph(cx, cy, s.radius, color, delay);
-        gameBus.emit('novaTelegraph', { owner: 'player', skillId: skill.id, skill, element: skill.element, castId: cast.id, x: cx, y: cy, radius: s.radius, delayMs: delay, timing: { start: scene.time.now, at: scene.time.now + delay } });
+        // The nova's release toward its landing point.
+        gameBus.emit('skillPulse', { ...castRef(cast), owner: 'player', index: 0, count: 1, ang, aim: { x: cx, y: cy }, x: o.x, y: o.y });
+        gameBus.emit('novaTelegraph', { ...castRef(cast), owner: 'player', x: cx, y: cy, radius: s.radius, delayMs: delay, timing: { start: scene.time.now, at: scene.time.now + delay } });
         scene.time.delayedCall(delay, () => {
-          gameBus.emit('novaBlast', { owner: 'player', skillId: skill.id, skill, element: skill.element, castId: cast.id, x: cx, y: cy, radius: s.radius, heavy: skill.power >= 2 || skill.tags.includes('heavy') });
+          gameBus.emit('novaBlast', { ...castRef(cast), owner: 'player', x: cx, y: cy, radius: s.radius, heavy: skill.power >= 2 || skill.tags.includes('heavy') });
           this.fxNova(cx, cy, s.radius, color, skill.element, skill.power >= 2 || skill.tags.includes('heavy'));
           for (const m of this.host.liveMonsters()) {
             if (Math.hypot(m.x - cx, m.y - cy) <= s.radius + m.radius) this.host.hit(m, { ...cast, origin: { x: cx, y: cy } });
@@ -535,7 +569,7 @@ export class SkillSystem {
       else scene.time.delayedCall(delay, () => this.fxLightning([from, { x: m.x, y: m.y - 10 }], color));
       scene.time.delayedCall(delay + (knives ? step : 0), () => {
         if (!m.alive) return;
-        gameBus.emit('chainHop', { owner: 'player', skillId: skill.id, skill, element: skill.element, castId: cast.id, from, to, index: i, target: m, knives });
+        gameBus.emit('chainHop', { ...castRef(cast), owner: 'player', from, to, index: i, target: m, knives });
         const roll = this.host.hit(m, cast, Math.pow(0.85, i));
         // Conduct: one extra jump on chain shapes (once per cast).
         if (roll?.combo?.extraJump && !extended) {
@@ -600,7 +634,8 @@ export class SkillSystem {
           if (pr.hitSet.has(m) || !m.alive) continue;
           if (Math.hypot(m.x - pr.x, m.y - pr.y) <= m.radius + pr.size / 2) {
             pr.hitSet.add(m);
-            this.host.hit(m, { ...pr.cast, origin: { x: pr.x - pr.vx * 0.05, y: pr.y - pr.vy * 0.05 } });
+            const via = pr.returning ? 'return' : pr.hitSet.size > 1 ? 'pierce' : undefined;
+            this.host.hit(m, { ...pr.cast, origin: { x: pr.x - pr.vx * 0.05, y: pr.y - pr.vy * 0.05 }, ...(via ? { via } : {}) });
             if (pr.pierce-- <= 0) {
               dead = !this.turnBack(pr);
               break;
@@ -610,7 +645,7 @@ export class SkillSystem {
       }
       if (dead) {
         const sk = pr.cast.skill;
-        gameBus.emit('projectileEnd', { owner: 'player', obj: pr.img, mover: pr, skillId: sk.id, skill: sk, element: sk.element, castId: pr.cast.id, x: pr.x, y: pr.y, reason: pr.returning ? 'caught' : pr.traveled >= pr.range ? 'expire' : isBlockedPx(map, pr.x, pr.y) ? 'wall' : 'hit' });
+        gameBus.emit('projectileEnd', { ...castRef(pr.cast), skillId: sk.id, owner: 'player', obj: pr.img, mover: pr, id: pr.id, x: pr.x, y: pr.y, reason: pr.returning ? 'caught' : pr.traveled >= pr.range ? 'expire' : isBlockedPx(map, pr.x, pr.y) ? 'wall' : 'hit' });
         if (pr.returning) this.fxFlash(p.x, p.y - 20, 12, pr.color);
         else this.fxImpactAt(pr.x, pr.y - 14, pr.cast.skill, pr.color, 4);
         pr.img.destroy();
@@ -714,7 +749,7 @@ export class SkillSystem {
     }
   }
 
-  private spawnProjectile(cast: Cast, a: number, speed: number, range: number, pierce: number, size: number, color: number) {
+  private spawnProjectile(cast: Cast, a: number, speed: number, range: number, pierce: number, size: number, color: number, index = 0, count = 1) {
     const look = this.lookFor(cast.skill, size);
     const plain = look.key === CFX.knife && !cast.skill.element;
     const img = this.host.world.add
@@ -725,6 +760,7 @@ export class SkillSystem {
     img.setBlendMode(look.add ? ADD : NORMAL);
     img.rotation = a;
     const pr: Projectile = {
+      id: nextProjectileId(),
       cast,
       img,
       x: cast.origin.x,
@@ -745,8 +781,7 @@ export class SkillSystem {
       returning: false,
     };
     this.projectiles.push(pr);
-    const sk = cast.skill;
-    gameBus.emit('projectileSpawn', { owner: 'player', obj: img, mover: pr, skillId: sk.id, skill: sk, element: sk.element, castId: cast.id, x: cast.origin.x, y: cast.origin.y, angle: a, speed, range, size });
+    gameBus.emit('projectileSpawn', { ...castRef(cast), owner: 'player', obj: img, mover: pr, id: pr.id, index, count, x: cast.origin.x, y: cast.origin.y, angle: a, speed, range, size });
   }
 
   private dash(cast: Cast, ang: number, distance: number, width: number, spin: boolean, color: number) {
@@ -764,7 +799,7 @@ export class SkillSystem {
     }
     const scene = this.host.world;
     const dur = 170;
-    gameBus.emit('dash', { owner: 'player', skillId: cast.skill.id, skill: cast.skill, element: cast.skill.element, castId: cast.id, from: { x: sx, y: sy }, to: { x: ex, y: ey }, durationMs: dur, width, spin });
+    gameBus.emit('dash', { ...castRef(cast), owner: 'player', from: { x: sx, y: sy }, to: { x: ex, y: ey }, durationMs: dur, width, spin });
     p.path = [];
     p.lockedUntil = scene.time.now + dur + 30;
     for (let i = 0; i < 5; i++) {

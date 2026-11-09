@@ -1,11 +1,13 @@
-// Bag (docs/CLIENT-v2.md §7): coins, materials, consumables (use), relics, weapons (equip / where to buy) and a pointer
-// to the essence pouch. Opened with arg 'sell' from a Waykeeper: materials get a quantity picker and a Sell button
-// (the controller re-checks that a Waykeeper is near).
+// Bag (panels lane; docs/UX-SIMPLE.md): coins, then what you can use (Use), what you gathered (sell prices), relics,
+// books, weapons (Equip; stats behind "Details") and the essence pouch (only once you own one). Opened with arg
+// 'sell' from a Waykeeper: materials get a quantity picker and ONE Sell button each (the controller re-checks that a
+// Waykeeper is near). Words: item names with pixel icons, one short line each, no internals.
 import type { ItemDef, WeaponType } from '../../core/types';
 import { WEAPON_TYPES } from '../../core/types';
 import { WEAPONS } from '../../data/weapons';
 import { $$, esc } from '../util';
-import type { PanelHost } from './common';
+import { oneLine } from '../words';
+import { type PanelHost, detailsHtml, iconHtml, refIconHtml, wireToggles } from './common';
 import { sheet } from './skills';
 
 type Held = { it: ItemDef; id: string; n: number };
@@ -25,14 +27,14 @@ export function renderBag(host: PanelHost, arg?: string): void {
     .filter((x): x is Held => !!x.it);
   const of = (kind: ItemDef['kind']) => held.filter((x) => x.it.kind === kind);
   const row = (x: Held, extra = '', cls = '') =>
-    `<div class="irow ${cls}"><span class="ico">${x.it.icon}<i class="cnt">${x.n}</i></span><span><b>${esc(x.it.name)}</b><small>${esc(x.it.desc)}</small></span>${extra}</div>`;
+    `<div class="irow ${cls}"><span class="ico">${iconHtml(ctrl.iconUrl('item', x.id), x.it.icon)}<i class="cnt">${x.n}</i></span><span><b>${esc(x.it.name)}</b><small>${esc(
+      oneLine(x.it.desc),
+    )}</small></span>${extra}</div>`;
 
-  let worth = 0;
   const mats = of('material')
     .map((x) => {
       const price = x.it.kind === 'material' ? (x.it.price ?? 0) : 0;
-      worth += price * x.n;
-      if (!selling || !price) return row(x, price ? `<span class="price">🪙${price}<small>each</small></span>` : '');
+      if (!selling || !price) return row(x, price ? `<span class="price">🪙${price}</span>` : '');
       const q = Math.min(x.n, Math.max(1, (host.state[qtyKey(x.id)] as number | undefined) ?? 1));
       return row(
         x,
@@ -40,7 +42,7 @@ export function renderBag(host: PanelHost, arg?: string): void {
           <div class="qty"><button class="btn q" data-q="${esc(x.id)}" data-d="-1" ${q <= 1 ? 'disabled' : ''} aria-label="Fewer">−</button><b>${q}</b>
             <button class="btn q" data-q="${esc(x.id)}" data-d="1" ${q >= x.n ? 'disabled' : ''} aria-label="More">+</button>
             <button class="btn q max" data-q="${esc(x.id)}" data-d="max" ${q >= x.n ? 'disabled' : ''}>All</button></div>
-          <button class="btn gold" data-sell="${esc(x.id)}" data-n="${q}">Sell ${q} · 🪙${price * q}</button></div>`,
+          <button class="btn gold" data-sell="${esc(x.id)}" data-n="${q}">Sell · 🪙${price * q}</button></div>`,
         'selling',
       );
     })
@@ -49,51 +51,49 @@ export function renderBag(host: PanelHost, arg?: string): void {
     .map((x) => row(x, `<button class="btn gold" data-use="${esc(x.id)}">Use</button>`))
     .join('');
   const relics = of('relic')
-    .map((x) => row(x, '<span class="chip tier">relic</span>', 'relic'))
+    .map((x) => row(x, '', 'relic'))
     .join('');
   const other = held
     .filter((x) => x.it.kind === 'tome' || x.it.kind === 'shard')
     .map((x) => row(x))
     .join('');
-  const ess = book.ingredients().essences;
+  const ess = ctrl.unlocks().essences ? book.ingredients().essences : [];
   const unowned = WEAPON_TYPES.filter((w) => !p.ownedWeapons.includes(w));
-  const body = `
-    <div class="purse">
-      <div class="coins"><span>🪙</span><b>${p.coins}</b><small>coins</small></div>
-      <div><b>${held.reduce((a, x) => a + x.n, 0)}</b><small>items</small></div>
-      <div><b>${worth}</b><small>materials worth</small></div>
-    </div>
-    ${selling ? '<div class="away sell"><span class="ico">🧭</span><div><b>The Waykeeper buys gathered materials.</b><small>Choose how many, then sell. Draughts, relics and tomes are not for sale.</small></div></div>' : ''}
-    <h3>Materials</h3>${mats || '<p class="sub">Nothing gathered yet. Ore, herbs, fish and stranger things grow on the map.</p>'}
-    ${selling ? '' : `<h3>Consumables</h3>${cons || '<p class="sub">No draughts or seeds. Old chests sometimes hold them.</p>'}`}
-    ${relics ? `<h3>Relics</h3>${relics}<p class="sub">Relics are proof of a warden's fall: the deepest morphs and callings answer to them.</p>` : ''}
-    ${other ? `<h3>Other</h3>${other}` : ''}
-    ${
-      selling
-        ? ''
-        : `<h3>Essences <small>${ess.reduce((a, e) => a + (e.count ?? 0), 0)}</small></h3>
-      ${ess.length ? `<div class="ess-strip">${ess.map((e) => `<span class="echip">${e.icon} ${esc(e.name)} <b>×${e.count}</b></span>`).join('')}</div>` : '<p class="sub">No essences. Monsters drop the essence of what they do.</p>'}
-      <button class="btn wide" data-goto-ess>Essences in 📖 Skills ›</button>
-      <h3>Weapons</h3>
-      <div class="weapons">${p.ownedWeapons
-        .map((w) => {
-          const d = WEAPONS[w];
-          const on = p.weapon === w;
-          return `<div class="wpn ${on ? 'on' : ''}"><span class="ico">${d.icon}</span><span><b>${d.name}</b><small>${esc(d.blurb)}</small>
-            <small>ATK ${d.atk} · MATK ${d.matk} · crit ${d.crit}%</small></span>
-            <button class="btn ${on ? '' : 'gold'}" data-equip="${w}" ${on ? 'disabled' : ''}>${on ? 'Equipped' : 'Equip'}</button></div>`;
-        })
-        .join('')}
-        ${unowned
-          .map((w) => {
-            const d = WEAPONS[w];
-            return `<div class="wpn locked"><span class="ico">${d.icon}</span><span><b>${d.name}</b><small>${esc(d.blurb)}</small>
-              <small>Brann the Smith in Hearthvale sells one for 🪙${d.price}.</small></span></div>`;
-          })
-          .join('')}</div>
-      <p class="sub">Each weapon opens its own morph path. Switching keeps every skill you know.</p>`
-    }`;
-  sheet(host, selling ? '🎒 Bag · Sell' : '🎒 Bag', body);
+  const weapons = `<div class="weapons">${p.ownedWeapons
+    .map((w) => {
+      const d = WEAPONS[w];
+      const on = p.weapon === w;
+      return `<div class="wpn ${on ? 'on' : ''}"><span class="ico">${d.icon}</span><span><b>${d.name}</b><small>${esc(oneLine(d.blurb))}</small>
+        ${detailsHtml(`<small>ATK ${d.atk} · MATK ${d.matk} · Crit ${d.crit}%</small>`)}</span>
+        <button class="btn ${on ? '' : 'gold'}" data-equip="${w}" ${on ? 'disabled' : ''}>${on ? 'Equipped ✓' : 'Equip'}</button></div>`;
+    })
+    .join('')}
+    ${unowned
+      .map((w) => {
+        const d = WEAPONS[w];
+        return `<div class="wpn locked"><span class="ico">${d.icon}</span><span><b>${d.name}</b><small>Brann sells one in Hearthvale · 🪙${d.price}</small></span></div>`;
+      })
+      .join('')}</div>`;
+
+  const body = selling
+    ? `<div class="purse"><div class="coins"><span>🪙</span><b>${p.coins}</b><small>coins</small></div></div>
+      <p class="sub">Pick how many, then sell.</p>
+      ${mats || '<p class="sub">Nothing to sell yet. Gather ore, herbs and fish out in the world.</p>'}`
+    : `<div class="purse"><div class="coins"><span>🪙</span><b>${p.coins}</b><small>coins</small></div></div>
+      ${cons ? `<h3>Use</h3>${cons}` : ''}
+      <h3>Gathered</h3>${mats || '<p class="sub">Nothing yet. Tap ore, herbs and fishing spots to gather.</p>'}
+      ${relics ? `<h3>Treasures</h3>${relics}` : ''}
+      ${other ? `<h3>Books &amp; shards</h3>${other}` : ''}
+      ${
+        ess.length
+          ? `<h3>Essences <small>${ess.reduce((a, e) => a + (e.count ?? 0), 0)}</small></h3>
+        <div class="ess-strip">${ess.map((e) => `<span class="echip">${refIconHtml(ctrl, e.ref, e.icon, 24)} ${esc(e.name)} <b>×${e.count}</b></span>`).join('')}</div>`
+          : ''
+      }
+      <h3>Weapons</h3>${weapons}
+      <p class="sub">Every skill you know works with any weapon.</p>`;
+  sheet(host, selling ? '🎒 Sell' : '🎒 Bag', body, 'bag3');
+  wireToggles(host.modal);
   const after = (r: { ok: boolean; message?: string }) => {
     if (r.message) host.toast(esc(r.message));
     host.render();
@@ -117,8 +117,4 @@ export function renderBag(host: PanelHost, arg?: string): void {
   $$<HTMLButtonElement>(host.modal, '[data-equip]').forEach((b) =>
     b.addEventListener('click', () => after(ctrl.equipWeapon(b.dataset.equip as WeaponType))),
   );
-  host.modal.querySelector('[data-goto-ess]')?.addEventListener('click', () => {
-    host.state['skills.tab'] = 'essences';
-    host.open('skills');
-  });
 }

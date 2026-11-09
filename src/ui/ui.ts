@@ -2,13 +2,14 @@
 // HUD, minimap, dialogs and panels, and owns the shared modal (which panel is open, the discovery-card queue,
 // pausing the world while anything modal is up). Everything the game asks of the DOM goes through here.
 //
-// v3 (docs/INTEGRATION-v3.md §2): owned by the HUD lane. Panels come from three registries — PANELS (panels lane,
+// v3 (docs/INTEGRATION-v3.md §2): owned by the HUD lane. The HUD itself is ./hud.ts (+ ./hud/*); this facade subscribes
+// to ctrl.onChange once and owns the AUTO toasts. Panels come from three registries — PANELS (panels lane,
 // ./panels/index.ts), STARCHART_PANELS (starchart lane, ./starchart/index.ts) and HUD_PANELS (HUD lane, ./picker.ts)
 // — so lanes add panels without editing this file. Player-facing messages for game events: ./announce.ts (panels
 // lane). Opening / closing the modal emits uiOpen / uiClose on the game bus; showing a card emits discovery.
 import { gameBus } from '../game/events';
 import { wireAnnouncements } from './announce';
-import type { GameController, NpcDialogView } from './controller';
+import type { ChangeKind, GameController, NpcDialogView } from './controller';
 import {
   type DialogOption,
   type DiscoveryCard,
@@ -61,8 +62,12 @@ export class UI implements PanelHost {
     this.root = document.createElement('div');
     this.root.id = 'hud-root';
     parent.appendChild(this.root);
-    this.hud = new Hud(this.root, ctrl, (p, a) => this.open(p, a));
-    this.minimap = new Minimap(this.hud.el, ctrl, () => this.open('map'));
+    this.hud = new Hud(this.root, ctrl, {
+      open: (p, a) => this.open(p, a),
+      toggleAuto: () => this.toggleAuto(),
+    });
+    // The minimap docks under the top-right button row (a small collapsible widget; restyled in hud.css).
+    this.minimap = new Minimap(this.hud.mmDock, ctrl, () => this.open('map'));
     this.modal = document.createElement('div');
     this.modal.className = 'modal hidden';
     this.root.appendChild(this.modal);
@@ -74,6 +79,37 @@ export class UI implements PanelHost {
     wireDiscoveryCards(this, ctrl);
     // Logs, toasts, cards and banners for every book / game-bus event (also once).
     wireAnnouncements(this, ctrl);
+    // The change feed (once, run-wide): bar, Pursuits, portrait and stat strip, then the open panel.
+    ctrl.onChange((what) => this.changed(what));
+  }
+
+  private changes = new Set<ChangeKind>();
+  private changeQueued = false;
+
+  /** Coalesces the change feed: one re-render per burst of bus / book events. */
+  private changed(what: ChangeKind): void {
+    this.changes.add(what);
+    if (this.changeQueued) return;
+    this.changeQueued = true;
+    queueMicrotask(() => {
+      this.changeQueued = false;
+      const k = new Set(this.changes);
+      this.changes.clear();
+      if (k.has('bar') || k.has('class') || k.has('skills')) this.hud.renderHotbar();
+      if (k.has('quests') || k.has('skills') || k.has('class')) this.hud.renderPursuits();
+      if (k.has('class')) {
+        this.hud.updatePortrait(true);
+        this.hud.updateStats();
+      }
+      if (this.panel && PANELS[this.panel] && !this.showingDiscovery) this.render();
+    });
+  }
+
+  /** The AUTO switch (one switch for every skill, the basic attack included). */
+  private toggleAuto(): void {
+    const on = !this.ctrl.autoCastOn();
+    this.ctrl.setAutoCastOn(on);
+    this.toast(on ? 'AUTO is on: you fight by yourself.' : 'AUTO is off.');
   }
 
   // ================================================================ HUD passthroughs
@@ -98,6 +134,12 @@ export class UI implements PanelHost {
   mapChanged(): void {
     this.renderHotbar();
     this.minimap.setMap();
+    this.hud.renderZone();
+    this.hud.renderPursuits();
+    this.hud.updateStats();
+    this.hud.updatePortrait();
+    this.hud.updateQuick();
+    this.hud.updateBadges();
     this.hud.updateVitals();
     this.hud.setTarget(null);
     this.hud.setChannel(null);
@@ -113,9 +155,9 @@ export class UI implements PanelHost {
     this.hud.sparkBanner(title, sub);
   }
 
-  /** Big centre banner ("You are now a Pyroblade"). LANE hud: its own look (today the spark banner). */
-  headline(title: string, sub = '', _accent?: string): void {
-    this.hud.sparkBanner(title, sub);
+  /** Big centre banner ("You are now a Pyroblade"): parchment card with the new look and the class emblem. */
+  headline(title: string, sub = '', accent?: string): void {
+    this.hud.headline(title, sub, accent);
   }
 
   /** Talking to an NPC (Interactions): the NPC dialog with its quests (./panels/npc.ts). */
@@ -144,18 +186,12 @@ export class UI implements PanelHost {
     this.hud.toast(msg);
   }
 
+  /**
+   * The skill bar from ctrl.barSlots(): tap = cast; an empty slot of yours → open('picker', slot); hold your slot →
+   * the picker; hold a class slot → open('skill', id) (the class manages those slots).
+   */
   renderHotbar(): void {
-    this.hud.renderHotbar(
-      (i, empty) => {
-        if (empty) this.open('skills');
-        else this.ctrl.castSlot(i);
-      },
-      () => {
-        const on = !this.ctrl.autoCastOn();
-        this.ctrl.setAutoCastOn(on);
-        this.toast(on ? '⟳ AUTO on: hunting the nearest foe' : 'AUTO off');
-      },
-    );
+    this.hud.renderHotbar();
   }
 
   /** Brief glow on the hotbar slot an auto-cast just fired. */
@@ -164,15 +200,18 @@ export class UI implements PanelHost {
   }
 
   /**
-   * CSS px the persistent HUD covers along each screen edge (vitals / minimap / menu row on top, a menu column on the
-   * side, the hotbar at the bottom). The scene widens its camera bounds by these so nothing near a map edge hides
-   * under the HUD.
+   * CSS px the persistent HUD covers along each screen edge (player plate / button row on top, the skill bar and EXP
+   * bar at the bottom). The scene widens its camera bounds by these so nothing near a map edge hides under the HUD.
    */
   safeInsets(): { top: number; right: number; bottom: number; left: number } {
+    // The scene asks right after mapChanged() / on resize: settle the HUD layout first so the rects are final.
+    this.hud.layout();
     const W = window.innerWidth;
     const H = window.innerHeight;
     const out = { top: 0, right: 0, bottom: 0, left: 0 };
-    for (const sel of ['.vitals', '.minimap', '.menu', '.hotbar']) {
+    // The zone plate and the minimap count too: on portrait phones they sit under the button rows, and a portal on
+    // the north border must not hide under them (playtest: mirror_lake#islet).
+    for (const sel of ['.hud-me .me-plate', '.hud-right .menu', '.hud-right .mm-dock', '.hud-centre .zone-banner', '.hotbar .slots', '.expbar']) {
       const el = this.root.querySelector<HTMLElement>(sel);
       if (!el) continue;
       const r = el.getBoundingClientRect();

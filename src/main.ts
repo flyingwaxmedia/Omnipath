@@ -6,6 +6,7 @@ import { gameBus } from './game/events';
 import { createGame } from './game/render/config';
 import { BootScene } from './game/scenes/BootScene';
 import { MapScene } from './game/scenes/MapScene';
+import { wireQuestHooks } from './game/quests';
 import { Session } from './game/session';
 import { showTitle } from './ui/title';
 import { UI } from './ui/ui';
@@ -52,6 +53,8 @@ game.events.once('omnipath:ready', async () => {
   }
   const scene = game.scene.getScene('Map') as MapScene;
   scene.bind(session);
+  // World events → quest counters (kill, gather, visit, talk, use, cast, witness), once per run.
+  wireQuestHooks(session.book);
   // The DOM UI is created once and survives every map restart; the scene instance is its GameController.
   const ui = new UI(uiRoot, scene);
   game.scene.start('Map', { session, ui });
@@ -160,6 +163,69 @@ game.events.once('omnipath:ready', async () => {
       const d = scene.starChartData();
       return { stars: d.stars.length, links: d.links.length, charted: d.charted, total: d.total };
     },
+    // ---------------------------------------------------------------- v3 game lane: classes, bar, quests
+    /** Becomes a class (null = "No class") through the real path; unlocks it first when `force` (QA only). */
+    become: (classId: string | null, force = false) => {
+      if (classId && force && !session.book.state.classes[classId] && reg.classDef(classId)) {
+        session.book.state.classes[classId] = { rank: 1, xp: 0, spent: {} };
+      }
+      const r = scene.becomeClass(classId);
+      ui.refresh();
+      return { ...r, worn: session.book.state.worn, bar: [...session.player.hotbar] };
+    },
+    /** The bar in one line per slot: '1 class whirlwind', '6 own -' (class slots first while a class is worn). */
+    slots: () => scene.barSlots().map((v) => `${v.key} ${v.kind} ${v.skillId ?? '-'}`),
+    /** What the worn class would put in its slots right now (best first). */
+    classPicks: () => (session.book.state.worn ? session.book.classSkills(session.book.state.worn, 8) : []),
+    /** Equips into one of your slots (the real path: refills the class slots after). */
+    equip: (skillId: string, slot?: number) => scene.equipSkill(skillId, slot),
+    /** Accepts a quest at its giver (or `npcId`). */
+    accept: (questId: string, npcId?: string) => {
+      const q = reg.quest(questId);
+      const r = scene.acceptQuest(questId, npcId ?? q?.giver ?? '');
+      ui.refresh();
+      return { ...r, status: session.book.questStatus(questId) };
+    },
+    /** Turns a quest in at its turn-in NPC (or `npcId`); returns the reward card view. */
+    turnIn: (questId: string, npcId?: string) => {
+      const q = reg.quest(questId);
+      const r = scene.turnInQuest(questId, npcId ?? q?.turnIn ?? q?.giver ?? '');
+      ui.refresh();
+      return r;
+    },
+    /** Completes every objective of an active quest (accepting it first): counters filled, deliveries put in the
+     *  bag. `state` objectives stay live. Returns the quest status ('ready' when done). */
+    complete: (questId: string) => {
+      const q = reg.quest(questId);
+      if (!q) return 'unknown';
+      if (!session.book.state.quests?.active[questId]) scene.acceptQuest(questId, q.giver);
+      const a = session.book.state.quests?.active[questId];
+      if (!a) return session.book.questStatus(questId);
+      q.objectives.forEach((o, i) => {
+        if (o.kind === 'deliver') session.addItem(o.item, Math.max(0, o.count - session.count(o.item)));
+        else if (o.kind !== 'state') a.progress[i] = 'count' in o ? o.count : 1;
+      });
+      session.book.refreshQuests();
+      ui.refresh();
+      return session.book.questStatus(questId);
+    },
+    /** An NPC's quests with status, or every quest with status. */
+    questStatus: (npcId?: string) =>
+      session.book.quests(npcId).map((v) => `${v.quest.id} ${v.status}`),
+    /** Simulates talking to an NPC (quest talk objectives) without walking there. */
+    talk: (npcId: string) => {
+      gameBus.emit('talk', { npcId, map: scene.mapId, x: scene.player.x, y: scene.player.y });
+      return session.book.questMarker(npcId);
+    },
+    /** Opens the real dialog of an NPC on this map (role options + its quests), as if the player tapped it. */
+    npc: (npcId: string) => {
+      const v = scene.npcs.find((n) => n.def.id === npcId);
+      if (!v) return false;
+      scene.interactions.act(v);
+      return true;
+    },
+    /** The rest button (sit and recover until you move, cast or are hit). */
+    rest: () => scene.useQuick('rest'),
     /** Counts game-bus events by name until called again with false (sound / VFX / quest hook checks). */
     tapBus: (on = true) => {
       const w = window as unknown as { __busTap?: { counts: Record<string, number>; off: () => void } };

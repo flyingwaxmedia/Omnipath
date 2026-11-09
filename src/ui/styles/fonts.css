@@ -1,0 +1,12 @@
+/* Pixel fonts (render lane; docs/QUALITY-PLAN.md §4, docs/ART-DIRECTION.md §5). The faces themselves are
+   registered by src/game/render/fonts.ts (FontFace API, inline woff2 from @fontsource/pixelify-sans and
+   @fontsource/tiny5, SIL OFL 1.1 — see public/licenses/). Every lane uses these two tokens:
+     var(--font-ui)     Pixelify Sans: titles, buttons, body text (crispest at 11 / 22 px, fine from 14 px up)
+     var(--font-small)  Tiny5: tiny labels and numbers (pixel-exact at 8 / 16 / 24 px)
+   The doubled :root beats base.css's system-font defaults whatever the stylesheet order. */
+:root:root {
+  --font-ui: 'Pixelify Sans', ui-rounded, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-small: 'Tiny5', 'Pixelify Sans', ui-monospace, monospace;
+  --ui-font: var(--font-ui);
+  --ui-font-small: var(--font-small);
+}

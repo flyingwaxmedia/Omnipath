@@ -1,111 +1,72 @@
-// Trainer panel (docs/CLIENT-v2.md §7): opened from NPC dialogs with the NPC id. Each lesson shows a preview of what it
-// grants (technique stats, passive rank step, essence effect, element), a ✓/✗ requirement checklist, the cost with
-// what the bag holds, and a Learn button — all through SkillBook.lessonState / takeLesson (via the controller).
-import type { LessonDef } from '../../core/types';
-import { NPCS } from '../../data/npcs';
-import { $$, esc, shapeText } from '../util';
-import { type PanelHost, reqList } from './common';
-import { elChip, pips, sheet } from './skills';
+// NPC quest list (panels lane; docs/CLIENT-v3.md §4, docs/QUESTS.md): panel 'trainer', arg = NPC id. Trainers no
+// longer sell lessons — what they teach is a quest reward — so this is that NPC's quests: ready ones to complete,
+// new ones to accept, the ones in progress with their lines, and the finished ones. The quest that teaches a lesson
+// keeps `data-lesson="<lessonId>"` on its button (the playtest's old selector).
+import type { NpcQuestView } from '../controller';
+import { $$, esc } from '../util';
+import { type PanelHost, wireToggles } from './common';
+import { QUEST_MARK, hasRewards, objectivesHtml, pxImg, rewardChipsHtml } from './quests';
+import { sheet } from './skills';
 
-function grantHtml(host: PanelHost, l: LessonDef): { kind: string; html: string } {
-  const { reg, book } = host.ctrl;
-  const g = l.grants;
-  if ('skill' in g) {
-    const s = reg.skill(g.skill);
-    if (!s) return { kind: 'Technique', html: esc(g.skill) };
-    return {
-      kind: 'Technique',
-      html: `<div class="gprev"><span class="ico">${s.icon}</span><div><b>${esc(s.name)}</b> ${elChip(reg, s.element)}
-        <small>${esc(s.desc)}</small>
-        <small class="stats">${esc(shapeText(s.shape))}${s.power ? ` · power ${Math.round(s.power * 100)}%` : ''} · ${s.spCost} SP${s.cooldown ? ` · ${(s.cooldown / 1000).toFixed(1)}s` : ''} · ${s.weapons ? s.weapons.join('/') : 'any weapon'}</small></div></div>`,
-    };
-  }
-  if ('passive' in g) {
-    const p = reg.passive(g.passive);
-    const r = book.state.passives[g.passive] ?? 0;
-    if (!p) return { kind: 'Passive', html: esc(g.passive) };
-    return {
-      kind: 'Passive',
-      html: `<div class="gprev"><span class="ico">${p.icon}</span><div><b>${esc(p.name)}</b> ${pips(r, p.maxRank, 'gold')}
-        <small>${esc(p.desc)}</small>
-        <small class="stats">${r >= p.maxRank ? 'Max rank reached' : `Rank ${r} → ${r + 1} of ${p.maxRank}`}</small></div></div>`,
-    };
-  }
-  if ('essence' in g) {
-    const e = reg.essence(g.essence);
-    if (!e) return { kind: 'Essence', html: esc(g.essence) };
-    return {
-      kind: 'Essence',
-      html: `<div class="gprev"><span class="ico">${e.icon}</span><div><b>${esc(e.name)} ×${g.count}</b> <span class="chip">${e.category}</span>
-        <small>${esc(e.desc)}</small>
-        <small class="stats">Shapes ${e.appliesTo.join(', ')} · you hold ×${book.state.essences[e.id] ?? 0}</small></div></div>`,
-    };
-  }
-  const el = reg.element(g.element);
-  return {
-    kind: 'Element',
-    html: `<div class="gprev"><span class="ico">${el?.icon ?? '✦'}</span><div><b>${esc(el?.name ?? g.element)}</b><small>${esc(el?.desc ?? '')}</small></div></div>`,
-  };
-}
+const ORDER: Record<NpcQuestView['status'], number> = { ready: 0, available: 1, active: 2, cooldown: 3, done: 4, locked: 5 };
 
-function costHtml(host: PanelHost, l: LessonDef): string {
-  const { ctrl } = host;
-  const cost = l.cost;
-  if (!cost || (!cost.coins && !Object.keys(cost.items ?? {}).length)) return '<span class="cost free">Free</span>';
-  const parts: string[] = [];
-  if (cost.coins) {
-    const ok = ctrl.session.player.coins >= cost.coins;
-    parts.push(`<span class="${ok ? 'ok' : 'no'}">🪙${cost.coins}</span>`);
+/** One quest of the list; `primary` makes its action the screen's one gold button. */
+function questItem(host: PanelHost, q: NpcQuestView, primary: boolean): string {
+  const lesson = host.ctrl.reg.quest(q.id)?.rewards.lesson;
+  const dl = lesson ? ` data-lesson="${esc(lesson)}"` : '';
+  const rewards = hasRewards(q.rewards) ? `<div class="qrew"><small>Reward</small>${rewardChipsHtml(host.ctrl, q.rewards)}</div>` : '';
+  const head = `<div class="qhead"><span class="qmark m-${q.status}" aria-hidden="true">${QUEST_MARK[q.status]}</span><b>${esc(q.name)}</b>${
+    q.status === 'ready' ? '<span class="qtag ready">Done!</span>' : ''
+  }</div>`;
+  switch (q.status) {
+    case 'available':
+      return `<div class="qitem offer" data-quest="${esc(q.id)}">${head}<p class="qsum">${esc(q.summary)}</p>${rewards}
+        <button class="btn ${primary ? 'gold' : ''} wide" data-accept="${esc(q.id)}"${dl}>Accept</button></div>`;
+    case 'ready':
+      return `<div class="qitem ready" data-quest="${esc(q.id)}">${head}${rewards}
+        <button class="btn ${primary ? 'gold' : ''} wide" data-complete="${esc(q.id)}"${dl}>Complete</button></div>`;
+    case 'active':
+      return `<div class="qitem active" data-quest="${esc(q.id)}">${head}${objectivesHtml(q.objectives)}
+        ${q.dialog ? `<button class="hint-t" data-hint aria-expanded="false">Hint</button><p class="qhint hidden">${esc(q.dialog)}</p>` : ''}</div>`;
+    default:
+      return `<div class="qitem done" data-quest="${esc(q.id)}">${head}<small>${q.status === 'cooldown' ? 'Come back later for more.' : 'Done'}</small></div>`;
   }
-  for (const [id, n] of Object.entries(cost.items ?? {})) {
-    const it = ctrl.reg.item(id);
-    const have = ctrl.session.count(id);
-    parts.push(`<span class="${have >= n ? 'ok' : 'no'}">${it?.icon ?? ''}${n} ${esc(it?.name ?? id)} <small>(${have})</small></span>`);
-  }
-  return `<span class="cost">${parts.join('<i>+</i>')}</span>`;
 }
 
 export function renderTrainer(host: PanelHost, npcId?: string): void {
   const { ctrl } = host;
-  const { book, reg } = ctrl;
-  const npc = NPCS.find((n) => n.id === npcId);
-  const trainer = npc?.trainer ? reg.trainer(npc.trainer) : undefined;
-  if (!npc || !trainer) {
-    sheet(host, '📜 Lessons', '<p class="sub">No one here teaches anything.</p>');
+  const view = npcId ? ctrl.npcQuests(npcId) : null;
+  if (!view || !npcId) {
+    sheet(host, 'Quests', '<p class="sub">Nobody here has a quest for you.</p>');
     return;
   }
-  const p = ctrl.session.player;
-  const wants = [...new Set(trainer.lessons.flatMap((l) => Object.keys(l.cost?.items ?? {})))];
-  const lessons = trainer.lessons.map((l) => ({ l, st: book.lessonState(l.id) }));
-  const open = lessons.filter((x) => !x.st.owned);
-  const done = lessons.filter((x) => x.st.owned);
-  const card = ({ l, st }: (typeof lessons)[number]) => {
-    const reqs = l.requires.map((r) => ({ text: book.describe(r), ok: book.meets(r) }));
-    const can = !st.owned && st.available && st.affordable;
-    const label = !st.available ? 'Locked' : !st.affordable ? "Can't afford" : l.repeatable && book.state.lessons.includes(l.id) ? 'Learn again' : 'Learn';
-    const g = grantHtml(host, l);
-    return `<div class="lesson ${st.available ? '' : 'locked'} ${can ? 'can' : ''}">
-      <div class="lhead"><b>${esc(l.name)}</b><span class="chip">${g.kind}</span>${l.repeatable ? '<span class="chip tier">repeatable</span>' : ''}</div>
-      <small class="blurb">${esc(l.blurb)}</small>
-      ${g.html}
-      ${reqList(reqs)}
-      <div class="lfoot">${costHtml(host, l)}
-        <button class="btn ${can ? 'gold' : ''}" data-lesson="${esc(l.id)}" ${can ? '' : 'disabled'}>${label}</button></div>
-    </div>`;
-  };
+  const quests = [...view.quests].sort((a, b) => ORDER[a.status] - ORDER[b.status]);
+  const firstAction = quests.find((q) => q.status === 'ready' || q.status === 'available')?.id;
+  const open = quests.filter((q) => q.status !== 'done' && q.status !== 'cooldown');
+  const done = quests.filter((q) => q.status === 'done' || q.status === 'cooldown');
+  const teaches = [
+    ...new Map(quests.flatMap((q) => q.rewards.learn.filter((l) => l.kind === 'skill' || l.kind === 'passive')).map((l) => [l.id, l])).values(),
+  ];
   const body = `
-    <div class="tr-head"><span class="portrait">${npc.portrait}</span><div><b>${esc(npc.name)}</b><small>${esc(npc.title)}</small>
-      <div class="purse-mini"><span>🪙 ${p.coins}</span>${wants.map((id) => `<span>${reg.item(id)?.icon ?? ''} ${ctrl.session.count(id)}</span>`).join('')}</div></div></div>
-    <div class="lessons">${open.map(card).join('') || '<p class="sub">You have learned everything taught here.</p>'}</div>
-    ${done.length ? `<h3>Learned <small>${done.length}</small></h3><div class="lessons done">${done
-      .map(({ l }) => `<div class="lesson owned"><div class="lhead"><b>✓ ${esc(l.name)}</b><span class="chip">${grantHtml(host, l).kind}</span></div></div>`)
-      .join('')}</div>` : ''}`;
-  sheet(host, `📜 ${esc(trainer.title)}`, body);
-  $$<HTMLButtonElement>(host.modal, '[data-lesson]').forEach((b) =>
+    <div class="tr-head"><span class="portrait">${view.portrait}</span><div><b>${esc(view.name)}</b><small>${esc(view.title)}</small>
+      ${teaches.length ? `<div class="teaches" aria-label="Teaches">${teaches
+        .slice(0, 8)
+        .map((l) => pxImg(ctrl.iconUrl(l.kind === 'skill' ? 'skill' : 'passive', l.id), 24))
+        .join('')}</div>` : ''}</div></div>
+    <p class="sub">${open.length ? (teaches.length ? 'Help out and learn new skills as a reward.' : 'Help out for a reward.') : 'Nothing new right now. Come back later.'}</p>
+    <div class="qlist">${open.map((q) => questItem(host, q, q.id === firstAction)).join('')}</div>
+    ${done.length ? `<h3>Done <small>${done.length}</small></h3><div class="qlist done">${done.map((q) => questItem(host, q, false)).join('')}</div>` : ''}`;
+  sheet(host, `${esc(view.name)} · Quests`, body, 'npc-quests-sheet');
+  const after = (r: { ok: boolean; message?: string }) => {
+    if (!r.ok && r.message) host.toast(esc(r.message));
+    host.render();
+  };
+  $$<HTMLButtonElement>(host.modal, '[data-accept]').forEach((b) => b.addEventListener('click', () => after(ctrl.acceptQuest(b.dataset.accept!, npcId))));
+  $$<HTMLButtonElement>(host.modal, '[data-complete]').forEach((b) =>
     b.addEventListener('click', () => {
-      const r = ctrl.takeLesson(b.dataset.lesson!);
-      if (r.message) host.toast(esc(r.message));
-      host.render();
+      b.disabled = true;
+      after(ctrl.turnInQuest(b.dataset.complete!, npcId));
     }),
   );
+  wireToggles(host.modal);
 }

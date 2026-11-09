@@ -1,13 +1,13 @@
-// Dialogs, discovery cards and minigames (docs/CLIENT-v2.md §1/§7). Pure renderers into the shared modal element;
-// the UI facade owns modal state (which panel is open, the discovery queue, pausing the world).
-// wireDiscoveryCards() adds cards for the v2 events the scene only toasts or logs (spark, witness / echo, passive,
-// essence, Class Rank milestones, bestiary stars). Spark cards wait until the fight is over.
+// Dialogs, discovery cards and minigames (panels lane; docs/CLIENT-v2.md §1/§7, docs/UX-SIMPLE.md). Pure renderers
+// into the shared modal element; the UI facade owns modal state (which panel is open, the discovery queue, pausing).
+// wireDiscoveryCards() adds the cards for moments the HUD only toasts (sudden insight, a move seen, a Mastery bonus,
+// a first essence, Class Level milestones, Bestiary stars). Sudden-insight cards wait until the fight is over.
+// Words: a kicker, a name, ONE short line, and at most one primary button (docs/UX-SIMPLE.md rules 1, 5, 9).
 import { CLASS, classMaxRank } from '../core/classes';
-import { TAG_PASSIVE } from '../core/passives';
 import type { GameController } from './controller';
 import { SPARK_RUNE } from './hud';
-import { pathOf } from './panels/skills';
 import { $, $$, esc, hex } from './util';
+import { classLevel, effectLine, familyName, oneLine, seen, shapeWord, stars } from './words';
 
 export interface DialogOption {
   label: string;
@@ -28,19 +28,31 @@ export type DiscoveryKind =
   | 'class'
   | 'element'
   | 'mastered'
-  | 'bestiary';
+  | 'bestiary'
+  | 'quest'
+  | 'reward';
 
 export interface DiscoveryCard {
+  /** Emoji / glyph shown when there is no `image`. */
   icon: string;
   kicker: string;
   title: string;
+  /** ONE short line (HTML: may hold <b>/<small>). */
   body: string;
   accent?: string;
   kind?: DiscoveryKind;
-  /** Extra HTML under the body (pips, chips). */
+  /** Extra HTML under the body (reward chips, skill icons, pips). */
   extra?: string;
   /** Secondary button: closes the card, then runs (e.g. opens the panel that explains it). */
   cta?: { label: string; run: () => void };
+  /** Pixel art (data URL) shown instead of `icon`: a skill / element / class icon or an outfit preview. */
+  image?: string;
+  /** Width the image is drawn at (CSS px; whole multiples of the art keep it crisp: 64 for icons). Default 64. */
+  imageSize?: number;
+  /** The card's ONE primary action (e.g. "Become"): closes the card, then runs. `.ok` becomes its "Later". */
+  action?: { label: string; run: () => void };
+  /** Label of `.ok` (default "OK", "Next" while more cards wait, "Later" beside an action). */
+  okLabel?: string;
 }
 
 const KIND_ACCENT: Partial<Record<DiscoveryKind, string>> = {
@@ -52,6 +64,8 @@ const KIND_ACCENT: Partial<Record<DiscoveryKind, string>> = {
   class: '#c9a0ff',
   mastered: '#ffd76a',
   bestiary: '#ffb070',
+  quest: '#e9c46a',
+  reward: '#e9c46a',
 };
 
 function kindOf(card: DiscoveryCard): DiscoveryKind {
@@ -59,9 +73,10 @@ function kindOf(card: DiscoveryCard): DiscoveryKind {
   const k = card.kicker.toUpperCase();
   if (k.includes('ELEMENT')) return 'element';
   if (k.includes('ECHO')) return 'echo';
-  if (k.includes('CLASS') || k.includes('SIGNATURE')) return 'class';
-  if (k.includes('MASTERED')) return 'mastered';
-  if (k.includes('SPARK')) return 'spark';
+  if (k.includes('CLASS')) return 'class';
+  if (k.includes('MASTER') || k.includes('MAX RANK')) return 'mastered';
+  if (k.includes('INSIGHT')) return 'spark';
+  if (k.includes('QUEST')) return 'reward';
   return 'skill';
 }
 
@@ -74,12 +89,13 @@ export function renderDialog(
   options: DialogOption[],
   close: () => void,
 ): void {
+  const gold = options.findIndex((o) => !o.disabled);
   modal.innerHTML = `
-    <div class="dialog">
-      <div class="speaker"><span class="ico">${portrait}</span><b>${esc(speaker)}</b></div>
-      <p>${text}</p>
+    <div class="dialog" role="dialog" aria-label="${esc(speaker)}">
+      <div class="speaker"><span class="ico">${portrait}</span><span class="who"><b>${esc(speaker)}</b></span></div>
+      <p class="say">${text}</p>
       <div class="opts">${options
-        .map((o, i) => `<button class="btn ${i === 0 ? 'gold' : ''}" data-opt="${i}" ${o.disabled ? 'disabled' : ''}>${o.label}</button>`)
+        .map((o, i) => `<button class="btn ${i === gold ? 'gold' : ''}" data-opt="${i}" ${o.disabled ? 'disabled' : ''}>${o.label}</button>`)
         .join('')}</div>
     </div>`;
   $$<HTMLButtonElement>(modal, '[data-opt]').forEach((b) =>
@@ -89,6 +105,16 @@ export function renderDialog(
       o.action?.();
     }),
   );
+}
+
+/** The card's big picture: pixel art when given (crisp, whole-pixel size), else the glyph. */
+function cardArt(card: DiscoveryCard): string {
+  if (card.image) {
+    // Width only: square icons stay square and outfit previews (40×48) keep their shape.
+    const size = card.imageSize ?? 64;
+    return `<img class="px art" src="${card.image}" width="${size}" alt="" draggable="false">`;
+  }
+  return `<span class="glyph">${card.icon}</span>`;
 }
 
 export function renderDiscovery(modal: HTMLElement, card: DiscoveryCard, more: boolean, onOk: () => void): void {
@@ -101,27 +127,34 @@ export function renderDiscovery(modal: HTMLElement, card: DiscoveryCard, more: b
         ? '<span class="halo eye-halo"><i></i><i></i></span>'
         : kind === 'essence'
           ? '<span class="halo orbit"><i></i><i></i><i></i></span>'
-          : kind === 'passive' || kind === 'class' || kind === 'mastered'
+          : kind === 'passive' || kind === 'class' || kind === 'mastered' || kind === 'reward'
             ? '<span class="halo ring"></span>'
             : '';
+  const okLabel = card.okLabel ?? (card.action ? 'Later' : more ? 'Next' : 'OK');
   modal.innerHTML = `
-    <div class="discovery k-${kind}" style="--accent:${accent}" role="dialog" aria-label="${esc(card.title)}">
+    <div class="discovery k-${kind} ${card.image ? 'has-art' : ''}" style="--accent:${accent}" role="dialog" aria-label="${esc(card.title)}">
       <div class="rays"></div>
       <div class="kicker">${card.kicker}</div>
-      <div class="big-ico">${halo}<span class="glyph">${card.icon}</span></div>
+      <div class="big-ico">${halo}${cardArt(card)}</div>
       <h2>${esc(card.title)}</h2>
       <p>${card.body}</p>
       ${card.extra ? `<div class="extra">${card.extra}</div>` : ''}
-      <div class="d-btns">${card.cta ? `<button class="btn cta">${card.cta.label}</button>` : ''}<button class="btn gold ok">${more ? 'Next' : 'Onward'}</button></div>
+      <div class="d-btns">${card.cta ? `<button class="btn cta">${card.cta.label}</button>` : ''}${
+        card.action ? `<button class="btn gold big act">${card.action.label}</button>` : ''
+      }<button class="btn ${card.action ? 'later' : 'gold'} ok">${okLabel}</button></div>
     </div>`;
   $(modal, '.ok').addEventListener('click', onOk);
   modal.querySelector('.cta')?.addEventListener('click', () => {
     onOk();
     card.cta?.run();
   });
+  modal.querySelector('.act')?.addEventListener('click', () => {
+    onOk();
+    card.action?.run();
+  });
 }
 
-// ==================================================================== v2 discovery cards
+// ==================================================================== discovery cards
 
 /** What wireDiscoveryCards needs from the UI facade. */
 export interface DiscoveryHost {
@@ -133,7 +166,7 @@ export interface DiscoveryHost {
 
 /** Client-only book flags remembering which first-time cards were shown (never read by content). */
 const SEEN = { essence: 'card:ess:', classRank: 'card:cr' } as const;
-/** A spark card waits for the fight to end: no monster this close (px) for CALM_TICKS checks in a row… */
+/** A sudden-insight card waits for the fight to end: no monster this close (px) for CALM_TICKS checks in a row… */
 const CALM_RADIUS = 230;
 const CALM_TICK_MS = 700;
 const CALM_TICKS = 3;
@@ -144,9 +177,18 @@ function pipRow(n: number, max: number): string {
   return `<span class="pips violet">${Array.from({ length: max }, (_, i) => `<i class="${i < n ? 'on' : ''}"></i>`).join('')}</span>`;
 }
 
+/** Safe pixel-art lookup (the controller draws lazily; never let a missing texture break a card). */
+function art(ctrl: GameController, kind: Parameters<GameController['iconUrl']>[0], id: string): string | undefined {
+  try {
+    return ctrl.iconUrl(kind, id) || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /**
- * Subscribes discovery cards for the v2 event types to the book, once for the page lifetime (the UI and the book both
- * outlive map restarts; the scene's own subscriptions are per map). Returns an unsubscribe.
+ * Subscribes discovery cards to the book, once for the page lifetime (the UI and the book both outlive map
+ * restarts; the scene's own subscriptions are per map). Returns an unsubscribe.
  */
 export function wireDiscoveryCards(ui: DiscoveryHost, ctrl: GameController): () => void {
   const { book, reg } = ctrl;
@@ -162,23 +204,17 @@ export function wireDiscoveryCards(ui: DiscoveryHost, ctrl: GameController): () 
   };
 
   offs.push(
-    ev.on('spark', ({ from, to, monster }) => {
-      const w = pathOf(reg, to.id);
+    ev.on('spark', ({ from, to }) => {
       deferred.push({
         at: Date.now(),
         card: {
           kind: 'spark',
           icon: to.icon,
-          kicker: '✦ SPARK',
+          image: art(ctrl, 'skill', to.id),
+          kicker: '✦ SUDDEN INSIGHT',
           title: to.name,
-          body: `<b>${esc(from.name)}</b> cracked open mid-fight against the ${esc(monster.name)}. No morph charge spent — the form is yours to keep.<br><small>${esc(to.desc)}</small>`,
-          cta: {
-            label: w ? '🌳 See its path' : '📖 Open it',
-            run: () => {
-              if (w) ui.state[`skills.node:${w}`] = to.id;
-              ui.open('skills', w ? `tree:${w}` : to.id);
-            },
-          },
+          body: `<b>${esc(from.name)}</b> changed mid-fight! ${esc(oneLine(to.desc))}`,
+          cta: { label: 'See it', run: () => ui.open('skill', to.id) },
         },
       });
     }),
@@ -191,22 +227,23 @@ export function wireDiscoveryCards(ui: DiscoveryHost, ctrl: GameController): () 
         ui.discovery({
           kind: 'witness',
           icon: '👁',
-          kicker: 'FIRST WITNESS MARK',
+          image: art(ctrl, 'skill', skill.id),
+          kicker: 'YOU SAW A NEW MOVE',
           title: skill.name,
-          body: `You saw this technique aimed at you, then felled its user. Earn <b>${need}</b> marks and hold a <b>${esc(anchorShape)}</b> skill at rank 3, and it becomes yours — an <b>Echo</b>.`,
+          body: `Defeat monsters that use it. ${seen(marks, need)} — then it is yours.`,
           extra: pipRow(Math.min(marks, need), need),
-          cta: { label: '📜 Echoes', run: openTab('codex', 'echoes') },
+          cta: { label: 'Echoes', run: openTab('codex', 'echoes') },
         });
       } else if (status === 'blocked' && !blockedShown.has(skill.id)) {
         blockedShown.add(skill.id);
         ui.discovery({
           kind: 'echo',
           icon: skill.icon,
-          kicker: 'THE ECHO SLIPS AWAY',
+          image: art(ctrl, 'skill', skill.id),
+          kicker: 'ALMOST LEARNED',
           title: skill.name,
-          body: `You have witnessed it enough, but nothing in you can hold its shape. Raise a <b>${esc(anchorShape)}</b> skill to rank 3 — your marks are kept, and the next kill will anchor it.`,
+          body: `Raise a ${esc(shapeWord(anchorShape))} skill to rank 3 to keep it.`,
           extra: pipRow(Math.min(marks, need), need),
-          cta: { label: '📜 Echoes', run: openTab('codex', 'echoes') },
         });
       }
     }),
@@ -214,39 +251,34 @@ export function wireDiscoveryCards(ui: DiscoveryHost, ctrl: GameController): () 
 
   offs.push(
     ev.on('passive', ({ def, rank, source }) => {
-      if (rank !== 1 || source === 'debug') return;
-      const resonance = source.startsWith('fusion:');
-      const why =
-        source === 'tag'
-          ? `Your <b>${esc(def.tag ?? '')}</b> skills together passed ${TAG_PASSIVE.unlockAt} summed ranks. It grows as they do.`
-          : resonance
-            ? 'Two elements found a harmony inside you. It is always on.'
-            : 'Always on. Train it again for more ranks.';
+      if (rank !== 1 || source === 'debug' || source.startsWith('quest:') || source.startsWith('lesson:')) return;
+      const bond = source.startsWith('fusion:');
       ui.discovery({
         kind: 'passive',
         icon: def.icon,
-        kicker: source === 'tag' ? 'PASSIVE AWAKENED' : resonance ? 'RESONANCE' : 'PASSIVE LEARNED',
+        image: art(ctrl, 'passive', def.id),
+        kicker: source === 'tag' ? 'MASTERY BONUS' : bond ? 'ELEMENT BOND' : 'NEW BONUS',
         title: def.name,
-        body: `${esc(def.desc)}<br><small>${why}</small>`,
-        extra: pipRow(rank, def.maxRank),
-        cta: { label: '📖 Passives', run: openTab('skills', 'passives') },
+        body: `${esc(effectLine(def.desc))}<br><small>Always on. ${stars(rank, def.maxRank)}</small>`,
+        cta: ctrl.unlocks().passives ? { label: 'Passives', run: openTab('skills', 'passives') } : undefined,
       });
     }),
   );
 
   offs.push(
     ev.on('essence', ({ essence, source }) => {
-      if (source === 'debug' || source.startsWith('lesson:')) return;
+      if (source === 'debug' || source.startsWith('lesson:') || source.startsWith('quest:')) return;
       const flag = SEEN.essence + essence.id;
       if (book.flag(flag) > 0) return;
       book.incFlag(flag);
       ui.discovery({
         kind: 'essence',
         icon: essence.icon,
-        kicker: 'ESSENCE FOUND',
+        image: art(ctrl, 'mod', essence.id),
+        kicker: 'NEW ESSENCE',
         title: essence.name,
-        body: `${esc(essence.desc)}<br><small>Shapes ${essence.appliesTo.map(esc).join(', ')} skills. Put it on a <b>⚗️ Fusion Altar</b> with one of them — it is used up only if something is made.</small>`,
-        cta: { label: '📖 Essences', run: openTab('skills', 'essences') },
+        body: `${esc(oneLine(essence.desc))}<br><small>Fuse it into a skill at a Fusion Altar.</small>`,
+        cta: { label: 'Essences', run: openTab('skills', 'essences') },
       });
     }),
   );
@@ -254,66 +286,57 @@ export function wireDiscoveryCards(ui: DiscoveryHost, ctrl: GameController): () 
   offs.push(
     ev.on('classRank', ({ cls, rank }) => {
       const max = classMaxRank(cls);
-      const imprint = cls.imprint ? reg.passive(cls.imprint) : undefined;
+      const keepsake = cls.imprint ? reg.passive(cls.imprint) : undefined;
       const first = book.flag(SEEN.classRank) < 1;
+      const image = art(ctrl, 'cls', cls.id);
       let card: DiscoveryCard | null = null;
       if (rank >= max) {
+        card = { kind: 'class', icon: cls.icon, image, kicker: 'CLASS MASTERED', title: cls.name, body: `${esc(cls.name)} reached its top ${classLevel(rank)}.` };
+      } else if (keepsake && rank === CLASS.imprintAt[cls.tier]) {
         card = {
           kind: 'class',
-          icon: cls.icon,
-          kicker: 'CLASS MASTERED',
-          title: cls.name,
-          body: `Class Rank ${rank} — as high as it goes. Its tree is yours to finish${imprint ? ', and its imprint can travel with you into any other class' : ''}.`,
-        };
-      } else if (imprint && rank === CLASS.imprintAt[cls.tier]) {
-        card = {
-          kind: 'class',
-          icon: imprint.icon,
-          kicker: 'IMPRINT UNLOCKED',
-          title: imprint.name,
-          body: `${esc(cls.name)} reached Class Rank ${rank}. ${esc(imprint.desc)}<br><small>Slot it from 🏛️ Class → Imprints while you wear another class.</small>`,
-          cta: { label: '🏛️ Imprints', run: openTab('classes', 'imprints') },
+          icon: keepsake.icon,
+          image,
+          kicker: 'KEEPSAKE UNLOCKED',
+          title: keepsake.name,
+          body: `Keep this ${esc(cls.name)} bonus even as another class.<br><small>${esc(effectLine(keepsake.desc))}</small>`,
+          cta: { label: 'Keepsakes', run: () => ui.open('classes') },
         };
       } else if (first) {
         card = {
           kind: 'class',
           icon: cls.icon,
-          kicker: `CLASS RANK ${rank}`,
+          image,
+          kicker: classLevel(rank).toUpperCase(),
           title: cls.name,
-          body: `Using skills that fit a class raises its Class Rank. Each rank grants <b>${cls.tier} tree point${cls.tier > 1 ? 's' : ''}</b> to spend in its tree.`,
-          cta: {
-            label: '🏛️ Open the tree',
-            run: book.state.worn === cls.id ? openTab('classes', 'worn') : () => ui.open('classes', `tree:${cls.id}`),
-          },
+          body: 'Use your class skills to level it up. Each level gives a perk point.',
+          cta: cls.tree?.length ? { label: 'Perks', run: () => ui.open('classes', `tree:${cls.id}`) } : undefined,
         };
       }
       if (!card) return;
       if (first) book.incFlag(SEEN.classRank);
-      card.extra = `<span class="cr-pill">CR ${rank} / ${max}</span>`;
+      card.extra = `<span class="cr-pill">${classLevel(rank)} / ${max}</span>`;
       ui.discovery(card);
     }),
   );
 
   offs.push(
-    ev.on('bestiary', ({ monster, stars, starUp, essence }) => {
-      if (!starUp || stars < 2) return;
+    ev.on('bestiary', ({ monster, stars: n, starUp }) => {
+      if (!starUp || n < 2) return;
       const el = monster.element ? reg.element(monster.element) : undefined;
       ui.discovery({
         kind: 'bestiary',
         icon: el?.icon ?? '📕',
-        kicker: `BESTIARY ${'★'.repeat(stars)}`,
+        kicker: `BESTIARY ${'★'.repeat(n)}`,
         title: monster.name,
-        body:
-          stars === 2
-            ? `You know the ${esc(monster.name)} well now: <b>+1% damage against every ${esc(monster.family)}</b>.${essence || !monster.essence ? '' : ' Its essence will not elude you much longer.'}`
-            : 'A hundred felled. <b>+1% max HP</b>, for good.',
+        body: n === 2 ? `You know them well: you hit all ${esc(familyName(monster.family))} a little harder.` : 'A hundred defeated: a little more max HP, for good.',
         accent: el ? hex(el.color) : undefined,
-        cta: { label: '📜 Bestiary', run: openTab('codex', 'bestiary') },
+        cta: { label: 'Bestiary', run: openTab('codex', 'bestiary') },
       });
     }),
   );
 
-  // Spark cards: shown once nothing hostile is near for a few checks (or after a long fight anyway).
+  // Sudden-insight cards: shown once nothing hostile is near for a few checks (or after a long fight anyway).
   const timer = window.setInterval(() => {
     if (!deferred.length || ui.isOpen) {
       calm = 0;
@@ -342,10 +365,10 @@ export function runForge(modal: HTMLElement, done: (good: number) => void): void
   modal.innerHTML = `
     <div class="dialog minigame">
       <div class="speaker"><span class="ico">🔨</span><b>The Forge</b></div>
-      <p>Strike when the marker is in the <b class="hot">glowing zone</b>. Three strikes.</p>
+      <p>Tap Strike when the marker is in the <b class="hot">glow</b>.</p>
       <div class="meter"><div class="zone"></div><div class="marker"></div></div>
       <div class="strikes"><span>·</span><span>·</span><span>·</span></div>
-      <button class="btn gold strike">🔨 Strike!</button>
+      <button class="btn gold big strike">🔨 Strike!</button>
     </div>`;
   const marker = $(modal, '.marker');
   const zone = $(modal, '.meter .zone');
@@ -398,9 +421,9 @@ export function runFishing(modal: HTMLElement, done: (ok: boolean) => void): voi
   modal.innerHTML = `
     <div class="dialog minigame">
       <div class="speaker"><span class="ico">🎣</span><b>Fishing</b></div>
-      <p class="fish-msg">Waiting for a bite...</p>
+      <p class="fish-msg">Wait for a bite…</p>
       <div class="pond"><span class="bob">🔴</span></div>
-      <button class="btn gold reel">Reel in!</button>
+      <button class="btn gold big reel">Reel in!</button>
     </div>`;
   const msg = $(modal, '.fish-msg');
   const bob = $(modal, '.bob');
@@ -425,7 +448,7 @@ export function runFishing(modal: HTMLElement, done: (ok: boolean) => void): voi
     if (biting) finish(true, '🐟 Caught one!');
     else {
       clearTimeout(t1);
-      finish(false, 'Too early — the fish swam off.');
+      finish(false, 'Too early! It swam off.');
     }
   });
 }

@@ -10,8 +10,10 @@ import { NPCS } from '../data/npcs';
 import { WEAPONS } from '../data/weapons';
 import { mapById } from '../data/world';
 import { gameBus } from './events';
+import { classSlotsFor, noteWorn, padBar, refillClassSlots, slotLearned } from './loadout';
 
-export const HOTBAR_SIZE = 6;
+/** Skill-bar slots: 1-5 are class slots while a class is worn, 6-8 are always the player's own (SPEC-v2 §5.1). */
+export const HOTBAR_SIZE = 8;
 const NPC_NAMES = new Map(NPCS.map((n) => [n.id, n.name]));
 export const SAVE_KEY = 'omnipath.save.v2';
 export const SAVE_KEY_V1 = 'omnipath.save.v1';
@@ -27,7 +29,7 @@ export interface PlayerSave {
   hp: number;
   sp: number;
   coins: number;
-  /** 6 slots. */
+  /** HOTBAR_SIZE (8) slots: 0-4 class slots while a class is worn, 5-7 the player's own. Older 6-slot saves are padded. */
   hotbar: (string | null)[];
   /** AUTO battle switch (hunt nearest monster + cast every equipped skill when in reach). */
   autoOn: boolean;
@@ -160,6 +162,8 @@ const nums = (v: unknown): Record<string, number> => {
   return out;
 };
 const weapon = (v: unknown): WeaponType => (WEAPON_TYPES.includes(v as WeaponType) ? (v as WeaponType) : 'sword');
+/** Slots in a saved bar (v2 saves had 6). */
+const barLength = (p: unknown): number => (isRec(p) && Array.isArray(p.hotbar) ? p.hotbar.length : 0);
 
 function readPlayer(raw: unknown): PlayerSave {
   const p = isRec(raw) ? raw : {};
@@ -168,7 +172,6 @@ function readPlayer(raw: unknown): PlayerSave {
     WEAPON_TYPES.includes(x as WeaponType),
   );
   if (!owned.includes(w)) owned.push(w);
-  const hotbar = (Array.isArray(p.hotbar) ? p.hotbar : []).map((x) => (typeof x === 'string' ? x : null));
   return {
     name: str(p.name, 'Wanderer').slice(0, 16) || 'Wanderer',
     weapon: w,
@@ -178,7 +181,7 @@ function readPlayer(raw: unknown): PlayerSave {
     hp: Math.max(1, num(p.hp, 110)),
     sp: Math.max(0, num(p.sp, 40)),
     coins: Math.max(0, Math.floor(num(p.coins, 0))),
-    hotbar: [...hotbar, ...Array<null>(HOTBAR_SIZE).fill(null)].slice(0, HOTBAR_SIZE),
+    hotbar: padBar(p.hotbar, HOTBAR_SIZE),
     autoOn: typeof p.autoOn === 'boolean' ? p.autoOn : false,
     bag: nums(p.bag),
     createdAt: num(p.createdAt, Date.now()),
@@ -206,6 +209,19 @@ function readWorld(raw: unknown): WorldState {
   };
 }
 
+/**
+ * Keeps "No class" across a reload: core's migration (run again by the SkillBook constructor) wears the first
+ * discovered class when none is set (v2 never took a class off), so a save written after SkillBook.unwear()
+ * (`worn: null` with classes) would come back wearing one — and its class slots would overwrite the player's own
+ * picks. The auto-picked class also gets its Keepsake slot back.
+ */
+function keepNoClass(book: SkillBook, raw: unknown): void {
+  if (!isRec(raw) || raw.worn !== null || book.state.worn === null) return;
+  const auto = book.state.worn;
+  if (Array.isArray(raw.imprints) && raw.imprints.includes(auto) && !book.state.imprints.includes(auto)) book.state.imprints.push(auto);
+  book.unwear();
+}
+
 /** v1 save -> v2 (player at the Hearthvale spawn, bag {ore, fish} kept, book migrated). */
 function migrateV1(raw: Raw, reg: Registry): SaveData {
   const p = isRec(raw.player) ? raw.player : {};
@@ -231,7 +247,11 @@ export class Session {
   readonly eliteDeaths = new Map<string, number>();
   /** Runtime only: the welcome-back line was shown this run. */
   greeted = false;
+  /** Runtime only: where the next Sudden insight happens (the struck foe; Combat sets it around trySpark). */
+  sparkAt: { x: number; y: number } | null = null;
   private persisted = false;
+  /** A quest re-check after a bag change is queued. */
+  private questCheck = false;
 
   constructor(
     readonly reg: Registry,
@@ -251,8 +271,19 @@ export class Session {
     this.book.names = { npc: (id) => NPC_NAMES.get(id), map: (id) => mapById(id)?.name };
     // The book lives as long as the session: forward the events the game bus mirrors (docs/INTEGRATION-v3.md §4).
     const ev = this.book.events;
-    ev.on('learned', ({ skill, source }) => gameBus.emit('skillLearned', { skillId: skill.id, skill, element: skill.element, source }));
-    ev.on('spark', ({ from, to }) => gameBus.emit('spark', { from, to }));
+    ev.on('learned', ({ skill, source }) => {
+      // Onto the bar first (class slots / your slots), so 'skillLearned' listeners already see it there.
+      slotLearned(this, skill.id);
+      gameBus.emit('skillLearned', { skillId: skill.id, skill, element: skill.element, source });
+    });
+    // The first class (or one found while wearing none) is worn at once: it fills its class slots.
+    ev.on('classDiscovered', ({ cls, worn }) => {
+      if (!worn) return;
+      refillClassSlots(this, 'class', { rehome: true });
+      noteWorn(this.book);
+      gameBus.emit('classChanged', { classId: cls.id, prev: null, reason: 'discovered' });
+    });
+    ev.on('spark', ({ from, to }) => gameBus.emit('spark', { from, to, ...(this.sparkAt ?? {}) }));
     ev.on('questAccepted', ({ quest }) => gameBus.emit('questChanged', { questId: quest.id, reason: 'accepted' }));
     ev.on('questProgress', ({ quest }) => gameBus.emit('questChanged', { questId: quest.id, reason: 'progress' }));
     ev.on('questReady', ({ quest }) => gameBus.emit('questChanged', { questId: quest.id, reason: 'ready' }));
@@ -289,7 +320,9 @@ export class Session {
         const data = JSON.parse(raw2) as unknown;
         if (isRec(data) && data.v === 2) {
           const s = new Session(reg, readPlayer(data.player), readWorld(data.world), migrateBookState(data.book, reg));
+          keepNoClass(s.book, data.book);
           s.ensureBasic();
+          s.repairBar(barLength(data.player));
           return s;
         }
       }
@@ -300,6 +333,7 @@ export class Session {
           const m = migrateV1(data, reg);
           const s = new Session(reg, m.player, m.world, m.book);
           s.ensureBasic();
+          s.repairBar(barLength(isRec(data.player) ? data.player : {}));
           if (!s.book.flag('intro')) s.book.incFlag('intro');
           s.save();
           return s;
@@ -359,6 +393,7 @@ export class Session {
     const total = this.count(id) + n;
     if (total > 0) this.player.bag[id] = total;
     else delete this.player.bag[id];
+    if (n !== 0) this.bagChanged();
     return Math.max(0, total);
   }
 
@@ -387,17 +422,55 @@ export class Session {
     this.book.level = this.player.level;
   }
 
-  /** Puts a newly learned skill on the first empty hotbar slot (never basics or passive-ish buffs twice). */
+  /**
+   * Puts a newly learned skill on the bar (src/game/loadout.ts): the worn class takes it into a class slot when it
+   * would pick it ('classLearned'), else it drops into the first empty slot of the player's own ('learned').
+   * Weapon basics and monster techniques never go on the bar.
+   */
   autoSlot(id: string): void {
-    if (this.player.hotbar.includes(id)) return;
-    if (Object.values(WEAPONS).some((w) => w.basic === id)) return;
-    const skill = this.reg.skill(id);
-    if (!skill || skill.tags.includes('monster')) return;
-    const i = this.player.hotbar.indexOf(null);
-    if (i >= 0) {
-      this.player.hotbar[i] = id;
-      gameBus.emit('barChanged', { slots: [i] });
+    slotLearned(this, id);
+  }
+
+  /**
+   * After loading: drops skills the book no longer knows, then refreshes the worn class's slots. A bar saved with
+   * fewer slots (v2: 6) had no class slots at all: the class takes its picks from anywhere on it (no class skill is
+   * left in "your" slots beside an empty class slot), and the skills it pushes out of slots 1-5 move into your
+   * empty slots.
+   */
+  repairBar(savedLength: number): void {
+    const bar = this.player.hotbar;
+    const gone: number[] = [];
+    bar.forEach((id, i) => {
+      if (id && !this.book.has(id)) {
+        bar[i] = null;
+        gone.push(i);
+      }
+    });
+    const convert = savedLength > 0 && savedLength < HOTBAR_SIZE;
+    const worn = this.book.state.worn;
+    if (convert && worn) {
+      const n = classSlotsFor(worn, bar.length);
+      const best = new Set(this.book.classSkills(worn, bar.length).slice(0, n));
+      for (let i = n; i < bar.length; i++) {
+        if (bar[i] && best.has(bar[i]!)) {
+          bar[i] = null;
+          gone.push(i);
+        }
+      }
     }
+    if (gone.length) gameBus.emit('barChanged', { slots: [...new Set(gone)], reason: 'load' });
+    refillClassSlots(this, 'load', { stable: true, rehome: convert });
+    noteWorn(this.book);
+  }
+
+  /** Bag changed: re-check quests' live objectives (deliveries) once the current change is done (coalesced). */
+  private bagChanged(): void {
+    if (this.questCheck) return;
+    this.questCheck = true;
+    queueMicrotask(() => {
+      this.questCheck = false;
+      this.book.refreshQuests();
+    });
   }
 
   private ensureBasic(): void {

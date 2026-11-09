@@ -3,12 +3,20 @@
 // The smear is an annulus between R - w(u) and R around the caster, u running tail -> head over the swept arc,
 // w(u) = W sin(PI u^2.2)^0.6 (thin tail, widest near the head, pointed tip). Frames follow the phase grammar:
 // snap -> hero -> hold -> tail eats 40% -> split + sparks -> dotted trace -> dots -> empty (~400 ms).
-import { IDX, type FamilyId, type SlashParams, type Template } from '../types';
+import { IDX, type DirCount, type FamilyId, type SlashParams, type Template } from '../types';
 import { step, type Painter } from '../painter';
 import { mulberry32 } from '../../../core/rng';
 import { Strip, glint, headingOf, mkKey, motifMark, runeMark, seedOf, spark, type TemplateOptions } from './kit';
 
 const D2R = Math.PI / 180;
+/**
+ * Sweeps of this arc or more read as a whirl round the caster (the gap faces away from the aim): they bake 8
+ * headings (3 unique, within 22.5 deg) instead of 16 and skip the heavy contrast frame (a dark full ring round the
+ * player). Their frames are near-full circles, so this keeps the two widest smears (tidal_crescent, crescent_sweep)
+ * inside the busy-fight atlas budget (docs/VFX.md §9). Claw rakes (monster auto-attacks, which hit all round) bake 8.
+ */
+const WIDE_ARC = 240;
+const dirsOf = (p: SlashParams): DirCount => (p.form === 'chop' ? 1 : p.arc >= WIDE_ARC || p.rakes === 3 ? 8 : 16);
 
 function usesMotif(p: SlashParams, motif: FamilyId): boolean {
   return p.tier >= 2 || motif === 'wind' || motif === 'shadow';
@@ -55,7 +63,7 @@ function arcFrames(prm: SlashParams, motif: FamilyId, u: number, opts: TemplateO
   const R = prm.r;
   const pad = 8;
   const S = new Strip(2 * (R + pad) + 1, 2 * (R + pad) + 1, R + pad, R + pad, seedOf(key, u), opts, { orphans: true, glowFrom: 'hot' });
-  const heading = headingOf(u, 16);
+  const heading = headingOf(u, dirsOf(prm));
   const A = Math.min(360, prm.arc) * D2R;
   const sense = prm.sense;
   const a0 = (-A / 2) * sense,
@@ -165,7 +173,7 @@ function arcFrames(prm: SlashParams, motif: FamilyId, u: number, opts: TemplateO
     }, kind, heading);
   };
 
-  if (heavy) frame(33, 'contrast');
+  if (heavy && prm.arc < WIDE_ARC) frame(33, 'contrast');
   frame(33, 'snap');
   frame(33, 'hero');
   frame(50, 'hold');
@@ -186,7 +194,7 @@ function rakeFrames(prm: SlashParams, motif: FamilyId, u: number, opts: Template
   const R = prm.r;
   const pad = 6;
   const S = new Strip(2 * (R + pad) + 1, 2 * (R + pad) + 1, R + pad, R + pad, seedOf(key, u), opts, { orphans: true, glowFrom: 'hot' });
-  const heading = headingOf(u, 16);
+  const heading = headingOf(u, dirsOf(prm));
   const A = Math.min(300, prm.arc) * D2R * 0.8;
   const a0 = (-A / 2) * prm.sense,
     a1 = (A / 2) * prm.sense;
@@ -259,7 +267,7 @@ function chopFrames(prm: SlashParams, motif: FamilyId, opts: TemplateOptions): S
 export const slash: Template<'slash'> = {
   id: 'slash',
   use: () => 'once',
-  dirs: (p) => (p.form === 'chop' ? 1 : 16),
+  dirs: dirsOf,
   key: keyOf,
   frames(p, motif, u, opts) {
     const S = p.form === 'chop' ? chopFrames(p, motif, opts) : p.rakes === 3 ? rakeFrames(p, motif, u, opts) : arcFrames(p, motif, u, opts);

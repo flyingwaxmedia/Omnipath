@@ -320,23 +320,27 @@ export class Painter {
     ink: number | ((q: number, deg: number, fx: number, fy: number) => number),
     a = 1,
     arc?: readonly [number, number],
+    /** Per-angle radius offset in px (jagged rims). */
+    roff?: (deg: number) => number,
   ): void {
     if (rx <= 0 || ry <= 0 || bw <= 0) return;
-    const ex = rx + EPS,
-      ey = ry + EPS;
-    const ex2 = ex * ex,
-      ey2 = ey * ey;
-    this.fill(cx - rx - 1, cy - ry - 1, cx + rx + 1, cy + ry + 1, (lx, ly, fx, fy) => {
+    const pad = roff ? 2 : 1;
+    this.fill(cx - rx - pad, cy - ry - pad, cx + rx + pad, cy + ry + pad, (lx, ly, fx, fy) => {
       const dx = lx - cx,
         dy = ly - cy;
+      const deg = (Math.atan2(dy, dx) * 180) / Math.PI;
+      if (arc && !inArc(deg, arc[0], arc[1])) return 0;
+      const o = roff ? roff(deg) : 0;
+      const ex = rx + o + EPS,
+        ey = ry + o * (ry / rx) + EPS;
+      const ex2 = ex * ex,
+        ey2 = ey * ey;
       const F = (dx * dx) / ex2 + (dy * dy) / ey2 - 1;
       if (F > 0.0001) return 0;
       const g = 2 * Math.sqrt((dx * dx) / (ex2 * ex2) + (dy * dy) / (ey2 * ey2));
       if (g < 1e-9) return 0;
       const depth = -F / g;
       if (depth >= bw) return 0;
-      const deg = (Math.atan2(dy, dx) * 180) / Math.PI;
-      if (arc && !inArc(deg, arc[0], arc[1])) return 0;
       return typeof ink === 'number' ? ink : ink(Math.floor(depth), deg, fx, fy);
     }, a);
   }
@@ -486,6 +490,34 @@ export class Painter {
     }, a);
   }
 
+  /**
+   * Metaball field (each ball adds 0.18 r^2 / d^2, so a lone ball's edge sits at d = r) mapped to indices by `map`
+   * (default: quantize()). Used for explosions, goo, gas and clouds.
+   */
+  metaballs(balls: readonly Ball[], map?: (v: number, fx: number, fy: number) => number, a = 1): void {
+    if (!balls.length) return;
+    let minX = Infinity,
+      minY = Infinity,
+      maxX = -Infinity,
+      maxY = -Infinity;
+    for (const b of balls) {
+      minX = Math.min(minX, b.x - b.r * 1.5);
+      maxX = Math.max(maxX, b.x + b.r * 1.5);
+      minY = Math.min(minY, b.y - b.r * 1.5);
+      maxY = Math.max(maxY, b.y + b.r * 1.5);
+    }
+    const m = map ?? ((v: number, fx: number, fy: number) => quantize(v, this, fx, fy));
+    this.fill(minX, minY, maxX, maxY, (lx, ly, fx, fy) => {
+      let v = 0;
+      for (const b of balls) {
+        const dx = lx - b.x,
+          dy = ly - b.y;
+        v += (0.18 * b.r * b.r) / (dx * dx + dy * dy + 0.25);
+      }
+      return m(v, fx, fy);
+    }, a);
+  }
+
   // ---------------------------------------------------------------- glow
 
   /** Explicit glow disc at a local point (levels max -> 0). */
@@ -593,6 +625,30 @@ export class Painter {
   frame(ms: number, kind: FrameKind = 'normal'): PFrame {
     return { w: this.w, h: this.h, ox: this.ox, oy: this.oy, body: this.body, glow: this.glow, ms, kind };
   }
+}
+
+export interface Ball {
+  x: number;
+  y: number;
+  r: number;
+}
+
+/**
+ * quantize(field) (docs/VFX.md §4): < 0.18 clear · 0.18-0.28 R1 at 50 % Bayer · 0.28-0.45 R1 · 0.45-0.65 R2 ·
+ * 0.65-0.85 R3 · 0.85-1.3 R4 · above R5. `shift` steps the result darker (cooling).
+ */
+export function quantize(v: number, p: Painter, fx: number, fy: number, shift = 0): number {
+  let i: number;
+  if (v < 0.18) return 0;
+  if (v < 0.28) {
+    if (!p.pass(fx, fy, 0.5)) return 0;
+    i = IDX.R1;
+  } else if (v < 0.45) i = IDX.R1;
+  else if (v < 0.65) i = IDX.R2;
+  else if (v < 0.85) i = IDX.R3;
+  else if (v < 1.3) i = IDX.R4;
+  else i = IDX.R5;
+  return Math.max(IDX.R0, i - shift);
 }
 
 /** Flat points of a star polygon. */

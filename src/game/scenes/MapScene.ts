@@ -51,6 +51,7 @@ import { type Stage, buildStage, type Insets } from '../render/stage';
 import { WorldText, type WorldLabel, worldLabel } from '../render/text';
 import { PRISM_GATE_SIZE, PRISM_SOCKETS } from '../textures';
 import * as views from '../views';
+import { transformStep } from '../steps';
 import { START_MAP, Session, type Stats, computeStats } from '../session';
 import { Combat } from '../systems/Combat';
 import { Interactions, type NodeView, type NpcView, type ObjectView, type PortalView } from '../systems/Interactions';
@@ -230,18 +231,14 @@ export class MapScene extends Phaser.Scene implements GameController {
 
     if (!this.book.flag('intro')) {
       this.book.incFlag('intro');
-      const w = WEAPONS[s.player.weapon];
-      const basic = this.reg.skill(w.basic)!;
+      // Three short lines (docs/UX-SIMPLE.md rule 9): how to move, how to fight, where to go.
       this.time.delayedCall(350, () =>
         this.ui.dialog(
           'Mirelle, Waykeeper',
           '🧭',
-          `Welcome to Hearthvale, ${esc(s.player.name)}. You carry ${/^[aeiou]/i.test(w.name) ? 'an' : 'a'} <b>${w.name}</b> and know only <b>${basic.name}</b>.<br><br>
-          Tap the ground to walk. Tap a monster to face it, then press ⚔ to strike (hold to keep swinging) — or switch
-          <b>AUTO</b> on and you will hunt and fight on your own. Every strike trains <b>${basic.name}</b>.
-          Master it and it will <b>morph</b> into something new.<br><br>
-          Elements hide in ordinary work: Brann's forge, the lake, the quarry, the hills. Find them, then <b>fuse</b> them at the altar.
-          Touch the waystone here so the vale remembers you.`,
+          `Welcome to Hearthvale, <b>${esc(s.player.name)}</b>!<br><br>
+          Tap the ground to walk. Tap a monster, then the big attack button — or turn on <b>AUTO</b> and fight by yourself.<br><br>
+          Anyone with a gold <b>!</b> over their head has a job for you.`,
           [{ label: 'Begin' }],
         ),
       );
@@ -405,7 +402,7 @@ export class MapScene extends Phaser.Scene implements GameController {
     const dest = mapById(p.to.map);
     const band = dest ? bandText(dest) : '';
     let text = p.label ?? `To ${dest?.name ?? '???'}${band ? ` (${band})` : ''}`;
-    if (p.gate && !v.open) text = `🔒 ${text}`;
+    if (p.gate && !v.open) text = `Locked: ${text}`;
     let lx = cx;
     let ly = y0 - 4;
     let ox = 0.5;
@@ -561,7 +558,7 @@ export class MapScene extends Phaser.Scene implements GameController {
     markFog(world, this.mapId, this.cm, this.player.x, this.player.y);
     const band = bandText(this.def);
     this.ui.banner(this.def.name, band || (this.def.safety === 'safe' ? 'Safe haven' : ''));
-    if (first) this.ui.log(`🗺️ Discovered <b>${esc(this.def.name)}</b>.`, 'info');
+    if (first) this.ui.log(`🗺️ New place: <b>${esc(this.def.name)}</b>`, 'info');
     gameBus.emit('mapEnter', { map: this.mapId, first, x: this.player.x, y: this.player.y });
   }
 
@@ -577,10 +574,10 @@ export class MapScene extends Phaser.Scene implements GameController {
     const add = (off: () => void) => this.disposers.push(off);
     add(
       ev.on('learned', ({ skill }) => {
-        this.session.autoSlot(skill.id);
+        // The bar placement itself (class slots / your slots) runs run-wide in the Session (src/game/loadout.ts).
         if (!this.book.flag('tip_autocast') && this.session.player.hotbar.includes(skill.id)) {
           this.book.incFlag('tip_autocast');
-          this.time.delayedCall(1200, () => ui.log('💡 Tip: tap <b>AUTO</b> to auto-battle — you hunt the nearest foe and cast every equipped skill when it is in reach.', 'info'));
+          this.time.delayedCall(1200, () => ui.log('Tip: turn <b>AUTO</b> on and you fight by yourself, skills and all.', 'info'));
         }
         this.combat.invalidateSparks();
         this.hotbarDirty = true;
@@ -595,15 +592,16 @@ export class MapScene extends Phaser.Scene implements GameController {
     );
     add(
       ev.on('rankUp', ({ skill, rank }) => {
-        // LANE game: in-world text cannot draw emoji (bitmap pixel font) — drop skill.icon, e.g. "Slash ★3".
-        this.floatText(this.player.x, this.player.y - 50, `${skill.icon} ${skill.name} R${rank}`, '#9fe0ff', 13);
+        // In-world text is the bitmap pixel font: no emoji ("Slash ★3").
+        this.floatText(this.player.x, this.player.y - 50, `${skill.name} ★${rank}`, '#9fe0ff', 13);
         this.hotbarDirty = true;
       }),
     );
     add(ev.on('charge', () => (this.hotbarDirty = true)));
     add(
-      ev.on('classDiscovered', ({ cls, worn }) => {
-        if (worn) gameBus.emit('classChanged', { classId: cls.id, prev: null, reason: 'discovered' });
+      ev.on('classDiscovered', () => {
+        // Discovered-and-worn: the Session refills the class slots and emits classChanged (run-wide).
+        this.hotbarDirty = true;
         ui.updateVitals();
       }),
     );
@@ -695,8 +693,8 @@ export class MapScene extends Phaser.Scene implements GameController {
     if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA')) return;
     if (e.key === 'a' || e.key === 'A') {
       this.setAutoCastOn(!this.autoCastOn());
-      this.ui.toast(this.autoCastOn() ? '⟳ AUTO on: hunting the nearest foe' : 'AUTO off');
-    } else if (e.key >= '1' && e.key <= String(this.session.player.hotbar.length)) this.castSlot(Number(e.key) - 1);
+      this.ui.toast(this.autoCastOn() ? 'AUTO on' : 'AUTO off');
+    } else if (/^[1-9]$/.test(e.key) && Number(e.key) <= this.session.player.hotbar.length) this.castSlot(Number(e.key) - 1);
     else if (e.key === ' ') {
       this.castSlot(-1);
       this.holdAttack(true);
@@ -982,15 +980,16 @@ export class MapScene extends Phaser.Scene implements GameController {
     this.save();
   }
 
-  assignSlot(i: number, id: string | null): void {
+  assignSlot(i: number, id: string | null, reason: 'assign' | 'clear' = id ? 'assign' : 'clear'): void {
     const bar = this.session.player.hotbar;
     if (i < 0 || i >= bar.length) return;
     const moved = id ? bar.indexOf(id) : -1;
     if (moved >= 0) bar[moved] = null;
     bar[i] = id;
-    gameBus.emit('barChanged', { slots: moved >= 0 && moved !== i ? [moved, i] : [i] });
-    this.ui.renderHotbar();
+    gameBus.emit('barChanged', { slots: moved >= 0 && moved !== i ? [moved, i] : [i], reason, ...(id ? { skillId: id } : {}) });
+    // Save first: a failing redraw must not lose the change.
     this.save();
+    this.ui.renderHotbar();
   }
 
   cooldown(id: string): { remain: number; total: number } {
@@ -1021,7 +1020,7 @@ export class MapScene extends Phaser.Scene implements GameController {
 
   morph(from: string, to: string): void {
     const res = this.book.morph(from, to);
-    if (!res.ok) this.ui.toast(esc(res.message));
+    if (!res.ok) this.ui.toast(esc(transformStep(this.reg, this.book, from) ?? 'Not ready to transform yet.'));
     this.save();
     this.ui.refresh();
   }
@@ -1032,21 +1031,24 @@ export class MapScene extends Phaser.Scene implements GameController {
   }
 
   fuse(a: string, b: string): FuseResult {
-    if (!this.atAltar()) return { ok: false, reason: 'requirement', message: 'Fusion only takes at an altar.' };
+    if (!this.atAltar()) return { ok: false, reason: 'requirement', message: 'Fuse at an altar.' };
     const res = this.book.fuse(a, b);
     this.save();
     this.hotbarDirty = true;
     return res;
   }
 
+  /** v2 name of becomeClass: the same path (any time; class slots refilled; headline + outfit via classChanged). */
   wearClass(id: string): Outcome {
-    if (!this.isSafe()) return { ok: false, message: 'You can only change classes in a safe town.' };
-    const prev = this.book.state.worn;
-    const r = this.book.wear(id);
-    if (r.ok && this.book.state.worn !== prev) gameBus.emit('classChanged', { classId: this.book.state.worn, prev, reason: 'wear' });
+    return views.becomeClass(this, id);
+  }
+
+  /** After the worn class changed (views.becomeClass): stats, bar and save follow. */
+  afterClassChange(): void {
     this.clampVitals();
+    // Save first: a failing redraw must not lose the class change.
     this.save();
-    return r;
+    this.ui.renderHotbar();
   }
 
   buyClassNode(classId: string, nodeId: string): Outcome {
@@ -1057,7 +1059,7 @@ export class MapScene extends Phaser.Scene implements GameController {
   }
 
   respecClass(classId: string): Outcome {
-    if (!this.isSafe()) return { ok: false, message: 'Respec only in a safe town.' };
+    if (!this.isSafe()) return { ok: false, message: 'Reset class points in a town.' };
     const r = this.book.respec(classId);
     this.clampVitals();
     this.save();

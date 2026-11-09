@@ -739,12 +739,15 @@ describe('quest playthroughs (SkillBook)', () => {
     expect(book.quests('hale').filter((v) => v.status === 'available').map((v) => v.quest.id)).not.toContain('hale_footwork');
   });
 
-  it('a lesson bought at the trainer credits its quest instead of being taught twice', () => {
+  it('every lesson is questOnly: trainers never sell it, its quest teaches it', () => {
+    const lessons = GAME_DATA.trainers.flatMap((t) => t.lessons);
+    expect(lessons.filter((l) => l.questOnly !== true).map((l) => l.id)).toEqual([]);
     const { book } = newBook();
     book.inv = { count: () => 0, coins: () => 999, spend: () => true };
-    expect(book.takeLesson('hale_rising_kick').ok).toBe(true);
-    expect(book.questStatus('hale_first_drill')).toBe('done');
-    expect(book.questStatus('hale_whole_body')).toBe('available');
+    expect(book.takeLesson('hale_rising_kick')).toEqual({ ok: false, message: `Learned through ${QUEST_BY_ID.get('hale_first_drill')!.name}` });
+    expect(book.has('rising_kick')).toBe(false);
+    expect(book.lessonState('hale_rising_kick')).toMatchObject({ questOnly: true, quest: 'hale_first_drill' });
+    expect(book.questStatus('hale_first_drill')).toBe('available');
   });
 
   it("Thin the Pack needs ten Emberkits besides the Alpha", () => {

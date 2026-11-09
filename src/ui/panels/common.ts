@@ -85,3 +85,49 @@ export function armTwice(btn: HTMLButtonElement, armedText: string, action: () =
     }, 4100);
   });
 }
+
+/**
+ * Small "Details" / "Hint" toggles (docs/UX-SIMPLE.md rule 7: closed by default): a `[data-hint]` or `[data-more]`
+ * button shows / hides the element right after it.
+ */
+export function wireToggles(root: ParentNode): void {
+  $$<HTMLButtonElement>(root, '[data-hint], [data-more]').forEach((b) =>
+    b.addEventListener('click', () => {
+      const box = b.nextElementSibling as HTMLElement | null;
+      if (!box) return;
+      const hidden = box.classList.toggle('hidden');
+      b.setAttribute('aria-expanded', String(!hidden));
+      b.classList.toggle('open', !hidden);
+    }),
+  );
+}
+
+/** "Details" toggle markup: a small button and its closed box (wire with wireToggles). */
+export function detailsHtml(inner: string, label = 'Details'): string {
+  if (!inner.trim()) return '';
+  return `<div class="more"><button class="hint-t" data-more aria-expanded="false">${label}</button><div class="more-b hidden">${inner}</div></div>`;
+}
+
+/** A crisp pixel icon from a data URL (32 px art at `size` CSS px); falls back to the emoji glyph. */
+export function iconHtml(src: string, fallback = '', size = 32): string {
+  return src
+    ? `<img class="px" src="${src}" width="${size}" height="${size}" alt="" draggable="false">`
+    : fallback
+      ? `<span class="glyph" aria-hidden="true">${fallback}</span>`
+      : '';
+}
+
+/** Pixel icon of an ingredient ref ('skill:<id>', 'el:<id>', 'mod:<id>'), else the emoji fallback. */
+export function refIconHtml(ctrl: GameController, ref: string, fallback: string, size = 32): string {
+  const i = ref.indexOf(':');
+  const kind = ref.slice(0, i);
+  const id = ref.slice(i + 1);
+  const k = kind === 'skill' ? 'skill' : kind === 'el' ? 'el' : kind === 'mod' ? 'mod' : null;
+  let src = '';
+  try {
+    src = k ? ctrl.iconUrl(k, id) : '';
+  } catch {
+    src = '';
+  }
+  return iconHtml(src, fallback, size);
+}

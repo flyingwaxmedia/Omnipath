@@ -10,7 +10,7 @@ import { hashSeed } from '../../core/rng';
 import type { BuffStat, ElementId, SkillDef, SkillShape, StatusKind } from '../../core/types';
 import { GAME_DATA } from '../../data';
 import { elementStatus, familyOf, lookOf, mayGlow, type FamilyLook, type Overlay } from './families';
-import { cellFor, piece, reink, tag, vsync, type Ink } from './pieces';
+import { aftermathR, cellFor, piece, reink, tag, vsync, type Ink } from './pieces';
 import { SIGNATURES } from './signatures';
 import {
   ANCHOR_DY,
@@ -127,6 +127,8 @@ export function hitGeometry(skill: SkillDef, owner: VfxOwner): HitGeometry {
 /** Statuses a hit applies: Combat.hit for players (element, own, knockback rider), MonsterSkills.statusesOf for monsters. */
 export function statusesFor(skill: SkillDef, owner: VfxOwner): StatusKind[] {
   const out: StatusKind[] = [];
+  // Buffs and zero-power skills (quickstep) never call Combat.hit.
+  if (skill.shape.kind === 'buff' || skill.power <= 0) return out;
   const add = (k: StatusKind | undefined): void => {
     if (k && !out.includes(k) && !(owner === 'monster' && k === 'smite')) out.push(k);
   };
@@ -396,8 +398,10 @@ function strikePieces(c: Ctx, style: StrikeStyle, ph: Phases): void {
   const r = reachBucket(sh.range);
   const arc = arcBucket(sh.arc);
   const anchor = at('caster', c.monster ? ANCHOR_DY.strike : ANCHOR_DY.swing);
+  // A monster's strike reaches range + its own radius (MonsterSkills): the runtime re-buckets the smear from the cone.
+  const smearTags: readonly PieceTag[] = ['hero', ...c.geoTags];
   const slash = (rr: number, aa: number, extra: Partial<{ form: 'arc' | 'chop'; rune: boolean; sense: 1 | -1; weight: VfxWeight }> = {}, along?: number): VfxPiece =>
-    piece('slash', { r: rr, arc: aa, rakes: 1, form: 'arc', weight: c.weight, tier: c.tier, sense: 1, rune: false, ...extra }, c.ink, { anchor: along === undefined ? anchor : { ...anchor, along: round(along) }, tags: ['hero'] });
+    piece('slash', { r: rr, arc: aa, rakes: 1, form: 'arc', weight: c.weight, tier: c.tier, sense: 1, rune: false, ...extra }, c.ink, { anchor: along === undefined ? anchor : { ...anchor, along: round(along) }, tags: smearTags });
   const edge = (radius: number, spread: number): VfxPiece[] =>
     c.accent !== 'steel' || c.tier >= 2 ? overlay(c.acc, c.accLook.strike, anchor, { pattern: 'rim', count: Math.min(8, 3 + c.tier), radius, spreadDeg: spread }, 33) : [];
   switch (style) {
@@ -424,7 +428,7 @@ function strikePieces(c: Ctx, style: StrikeStyle, ph: Phases): void {
       );
       break;
     case 'thrust':
-      push(ph, 'cast', piece('thrust', { len: r, weight: c.weight, tier: c.tier, slit: c.has('stealth') }, c.ink, { anchor, tags: ['hero'] }));
+      push(ph, 'cast', piece('thrust', { len: r, weight: c.weight, tier: c.tier, slit: c.has('stealth') }, c.ink, { anchor, tags: smearTags }));
       if (c.has('toxin')) push(ph, 'cast', piece('motes', { kind: 'droplet', size: 1 }, utilInk(c, 'toxin'), { anchor: { ...anchor, along: round(sh.range) }, place: { pattern: 'fall', count: 2 }, delayMs: 50 }));
       if (c.accent !== 'steel' && c.accent !== 'toxin') push(ph, 'cast', ...overlay(c.acc, c.accLook.strike, { ...anchor, along: round(sh.range) }, { pattern: 'burst', count: 3, spreadDeg: 40 }, 33));
       break;
@@ -435,6 +439,8 @@ function strikePieces(c: Ctx, style: StrikeStyle, ph: Phases): void {
         'cast',
         piece('burst', { cls: 'ki', size: isHeavy(c.weight) ? 'l' : 'm' }, c.ink, { anchor: tip }),
         piece('motes', { kind: 'line', size: 2 }, c.ink, { anchor: tip, place: { pattern: 'burst', count: 3, spreadDeg: 30 } }),
+        // Ki ripple: a double ring at the palm / heel (spirit language), 3 px apart.
+        piece('ring', { r: 16, r0: 4, aspect: 1, thick: 1, style: 'double', ink: 'lit', anim: 'expand', ms: 167 }, c.ink, { anchor: tip, delayMs: 17 }),
       );
       if (c.root.status === 'knockback' || c.root.riders?.knockback) push(ph, 'cast', slash(40, 90, { sense: -1 }, sh.range * 0.5));
       if (c.accent !== 'steel') push(ph, 'cast', ...overlay(c.acc, c.accLook.strike, tip, { pattern: 'burst', count: 4, spreadDeg: 60 }, 33));
@@ -449,7 +455,8 @@ function strikePieces(c: Ctx, style: StrikeStyle, ph: Phases): void {
   if ((sh.hits ?? 1) > 1 && style !== 'cone') {
     push(ph, 'cast', piece('burst', { cls: 'glint', size: 's' }, c.acc, { anchor: { ...anchor, along: round(sh.range) }, delayMs: 33, tags: ['lastHit'] }));
   }
-  if (isHeavy(c.weight) && style !== 'cone') {
+  // Ground impact for blows that are heavy by nature (heavy / execute tags, the heavy essence), not merely strong.
+  if ((c.has('heavy') || c.has('execute') || c.mods.has('heavy')) && style !== 'cone') {
     const tip = { to: 'caster' as const, dy: 0, along: round(sh.range * 0.6) };
     push(
       ph,
@@ -465,12 +472,15 @@ function spinPieces(c: Ctx, style: SpinStyle, ph: Phases): void {
   const sh = c.skill.shape as Extract<SkillShape, { kind: 'spin' }>;
   const R = sh.radius;
   const anchor = at('caster', 0);
-  const ring = (p: Partial<Extract<VfxPiece, { component: 'ring' }>['params']>, opts: Parameters<typeof piece>[3] = {}) =>
-    piece('ring', { r: R, aspect: c.aspect, thick: 2, style: 'solid', ink: 'lit', anim: 'expand', r0: round(R * 0.3), ms: 200, ...p }, c.ink, { anchor, tags: c.geoTags, ...opts });
+  const ring = (p: Partial<Extract<VfxPiece, { component: 'ring' }>['params']>, opts: Parameters<typeof piece>[3] = {}) => {
+    const params = { r: R, aspect: c.aspect, thick: 2, style: 'solid', ink: 'lit', anim: 'expand', r0: round(R * 0.3), ms: 200, ...p } as Extract<VfxPiece, { component: 'ring' }>['params'];
+    if (params.anim === 'sweep') delete (params as { r0?: number }).r0;
+    return piece('ring', params, c.ink, { anchor, tags: c.geoTags, ...opts });
+  };
   const famStyle = c.look.ring === 'dashed' ? 'solid' : c.look.ring;
   switch (style) {
     case 'blades':
-      push(ph, 'cast', ring({ r0: undefined, thick: isHeavy(c.weight) ? 4 : 3, ink: 'hot', anim: 'sweep', heads: c.has('pierce') ? 3 : 2, ms: 117 }, { tags: [...c.geoTags, 'hero'] }));
+      push(ph, 'cast', ring({ thick: isHeavy(c.weight) ? 4 : 3, ink: 'hot', anim: 'sweep', heads: c.has('pierce') ? 3 : 2, ms: 117 }, { tags: [...c.geoTags, 'hero'] }));
       break;
     case 'ring':
       push(ph, 'cast', ring({ style: famStyle }), ring({ r: round(R * 0.7), r0: round(R * 0.15), thick: 1, ms: 167 }, { delayMs: 33 }));
@@ -491,7 +501,7 @@ function spinPieces(c: Ctx, style: SpinStyle, ph: Phases): void {
       push(ph, 'cast', ring({ style: 'double' }));
       break;
   }
-  if (style !== 'vortex' && style !== 'halo') {
+  if (style !== 'vortex' && style !== 'halo' && style !== 'wail') {
     push(ph, 'cast', ...overlay(c.acc, c.accLook.spin, anchor, { pattern: 'orbit', count: clamp(round(R / 10), 4, VFX_BUDGET.perEvent.spinPulseMotes), radius: R }));
   }
   // Floor band (0 -> R over 300 ms, ink mid -> dim); it flares on the first and last pulse only.
@@ -579,22 +589,26 @@ function novaPieces(c: Ctx, carrier: Extract<Carrier, { kind: 'nova' }>, ph: Pha
     unit === 'sky-bolt' ? (R < 100 ? 1 : R < 150 ? 2 : 3) : unit === 'light-pillar' ? 1 : Math.min(14, round(clamp(round((Math.PI * R * asp * R) / 1400), 3, 14) * (c.mods.has('expanse') ? 1.3 : 1)));
   const scale = R < 90 ? 's' : R < 140 ? 'm' : 'l';
   const heavy = isHeavy(c.weight);
+  const core = coreC(R);
+  // Inner shock rings that would end under the core (r <= c + 8) are hidden by it: they are skipped.
+  const shock = (k: number, k0: number, ms: number): VfxPiece[] =>
+    round(R * k) > core + 8 ? [piece('ring', { r: round(R * k), r0: round(R * k0), aspect: asp, thick: 2, style: 'solid', ink: 'hot', anim: 'expand', ms }, c.ink, { anchor: aim, layer: 'ground' })] : [];
   push(
     ph,
     'area',
-    piece('nova', { core: carrier.core, c: coreC(R), heavy }, c.ink, { anchor: aim, tags: ['hero'] }),
+    piece('nova', { core: carrier.core, c: core, heavy }, c.ink, { anchor: aim, tags: ['hero'] }),
     piece('erupt', { unit, scale }, c.acc, { anchor: aim, place: unit === 'light-pillar' ? { pattern: 'single', count: 1 } : { pattern: 'poisson', count, radius: R, aspect: asp, spacing: 18, wave: true } }),
     piece('ring', { r: R, r0: round(R * 0.45), aspect: asp, thick: 3, style: c.look.ring === 'dashed' ? 'solid' : c.look.ring, ink: 'lit', anim: 'expand', ms: 333 }, c.ink, { anchor: aim, layer: 'ground' }),
-    piece('ring', { r: round(R * 0.6), r0: round(R * 0.3), aspect: asp, thick: 2, style: 'solid', ink: 'hot', anim: 'expand', ms: 217 }, c.ink, { anchor: aim, layer: 'ground' }),
+    ...shock(0.6, 0.3, 217),
   );
-  if (heavy) push(ph, 'area', piece('ring', { r: round(R * 0.35), r0: round(R * 0.15), aspect: asp, thick: 2, style: 'solid', ink: 'hot', anim: 'expand', ms: 150 }, c.ink, { anchor: aim, layer: 'ground' }));
+  if (heavy) push(ph, 'area', ...shock(0.35, 0.15, 150));
   if (c.mods.has('expanse')) push(ph, 'area', piece('ring', { r: R + 4, r0: R, aspect: asp, thick: 1, style: 'solid', ink: 'dim', anim: 'expand', ms: 333 }, c.ink, { anchor: aim, layer: 'ground' }));
   const decal = c.accLook.decal;
   if (decal) {
     push(
       ph,
       'area',
-      piece('decal', { kind: decal, r: decalR(R), aspect: asp, density: 0.5, shape: 'disc' }, c.acc, {
+      piece('decal', { kind: decal, r: aftermathR(R), aspect: asp, density: 0.5, shape: 'disc' }, c.acc, {
         anchor: aim,
         layer: 'ground',
         blend: decal === 'scorch' || decal === 'ink' ? 'multiply' : 'normal',
@@ -613,7 +627,8 @@ function novaPieces(c: Ctx, carrier: Extract<Carrier, { kind: 'nova' }>, ph: Pha
       piece('decal', { kind: 'fill', r: decalR(R), aspect: 1, density: 0.125, shape: 'disc' }, c.ink, { anchor: aim, layer: 'preview', lifeMs: delay }),
     );
     if (delay > 117) push(ph, 'telegraph', piece('ring', { r: R, aspect: 1, thick: 2, style: 'solid', ink: 'hot', anim: 'static', ms: 117 }, c.ink, { anchor: aim, layer: 'preview', delayMs: delay - 117, lifeMs: 117 }));
-    if (c.has('arcane')) push(ph, 'telegraph', piece('sigil', { r: sigilR(Math.min(48, R / 2)), points: 6, glyphs: 8, anim: 'draw' }, c.ink, { anchor: aim, layer: 'preview', lifeMs: delay }));
+    // A centre marker (the rim shows the area): r <= 32 keeps big staff novas inside the atlas budget.
+    if (c.has('arcane')) push(ph, 'telegraph', piece('sigil', { r: sigilR(Math.min(32, R / 2)), points: 6, glyphs: 8, anim: 'draw' }, c.ink, { anchor: aim, layer: 'preview', lifeMs: delay }));
   }
 }
 
@@ -654,7 +669,12 @@ function buffPieces(c: Ctx, motif: AuraMotif, ph: Phases): void {
   const feet = at('caster', 0);
   const aura = (phase: 'activate' | 'loop' | 'break', opts: Parameters<typeof piece>[3] = {}) =>
     piece('aura', { motif, phase, activation, body: 'M', halo: false }, c.ink, { anchor: feet, tags: c.monster ? ['geometryFromEvent'] : [], ...opts });
-  push(ph, 'cast', aura('activate'));
+  push(
+    ph,
+    'cast',
+    aura('activate'),
+    piece('motes', { kind: c.accLook.trail.mote ?? 'mote', size: 1 }, c.acc, { anchor: at('caster', ANCHOR_DY.chest), place: { pattern: 'rise', count: 8, radius: 18, aspect: ZONE_ASPECT } }),
+  );
   switch (activation) {
     case 'pillar':
       push(ph, 'cast', piece('erupt', { unit: 'light-pillar', scale: 'm' }, c.ink, { anchor: feet, place: { pattern: 'single', count: 1 } }));
@@ -771,7 +791,11 @@ export function statusPip(kind: StatusKind, source: FamilyId, owner: VfxOwner): 
   return piece('status', { kind, unit: 'pip', body: 'S' }, { ramp: p.ramp, motif: p.motif, lut: p.lut }, { anchor: at('body', -40), lifeMs: GROUND_TRUTH.statusMs[kind] });
 }
 
-function riderFx(c: Ctx, merge: Root['merge'], variety: number): RiderFx {
+/**
+ * Rider pieces outside the main phases. Knockback is not here: it is a status (Combat.applyStatus emits
+ * statusApplied for it), so phases.status draws it once. A merge's accent is added after the signature patch.
+ */
+function riderFx(c: Ctx, variety: number): RiderFx {
   const rd = c.skill.riders ?? {};
   const out: RiderFx = {};
   const body = at('body', 0);
@@ -802,8 +826,6 @@ function riderFx(c: Ctx, merge: Root['merge'], variety: number): RiderFx {
       arrive: [piece('burst', { cls: 'glint', size: 's' }, utilInk(c, 'heal'), { anchor: at('caster', ANCHOR_DY.chest), delayMs: 400 })],
     };
   }
-  const kb = statusesFor(c.skill, c.owner).includes('knockback');
-  if (kb) out.knockback = { push: statusPieces('knockback', c.accent, 'M', c.owner) };
   const sh = c.skill.shape;
   if (sh.kind === 'projectile' && (sh.pierce ?? 0) > 0) {
     out.pierce = {
@@ -813,7 +835,6 @@ function riderFx(c: Ctx, merge: Root['merge'], variety: number): RiderFx {
       ],
     };
   }
-  if (merge) out.merge = mergeFx(c, merge, variety);
   return out;
 }
 
@@ -833,35 +854,45 @@ export function mergeAccent(raw: SkillDef, primary: SkillDef): MergeAccent {
   return 'none';
 }
 
-function mergeFx(c: Ctx, merge: NonNullable<Root['merge']>, variety: number): NonNullable<RiderFx['merge']> {
-  const accent = mergeAccent(merge.raw, c.root);
-  const family = c.echo ?? c.family;
-  const ink = inkOf(family, c.lut);
-  const look = lookOf(family);
-  const caster = at('caster', ANCHOR_DY.hand);
-  const echoMotes = (): VfxPiece[] => (look.trail.mote ? [piece('motes', { kind: look.trail.mote, size: 1 }, ink, { anchor: caster, place: { pattern: 'burst', count: 4 } })] : []);
+/**
+ * The merge accent (docs/VFX.md §7.3), applied to the FINISHED recipe (after the signature patch), so it always
+ * matches the carrier the player sees. What the secondary parent added wears the echo family, and is drawn once:
+ * - extra: riders.merge.pieces = the carrier piece of the extra swing / pulse / shot / hop (it replaces the plain one
+ *   on the final swing, pulse, shot or hop)
+ * - radial: riders.merge.pieces = an echo muzzle ring after the plain one
+ * - spinDash: the dash's spin band; knockback: the knockback status pieces; arc: the arc rider zap
+ * - none: only the echo overlays already on the cast and impact phases
+ */
+function withMergeAccent(r: VfxRecipe, accent: MergeAccent): VfxRecipe {
+  const family = r.echo ?? r.family;
+  const lut: LutVariant = r.owner === 'monster' ? 'monster' : 'base';
+  const echoInk = inkOf(family, lut);
+  const echoed = (p: VfxPiece): VfxPiece => tag(reink(p, echoInk), 'echo');
   let pieces: VfxPiece[] = [];
+  let out = r;
   switch (accent) {
     case 'extra':
-      // The extra swing / pulse / shot / hop wears the echo family: build() re-inks the carrier piece (mergeExtra).
+      pieces = mergeExtra(r.phases, r.carrier, family, lut);
       break;
     case 'radial':
-      pieces = [piece('ring', { r: 28, r0: 12, aspect: 1, thick: 2, style: 'solid', ink: 'lit', anim: 'expand', ms: 200 }, ink, { anchor: caster }), ...echoMotes()];
+      if (r.echo) pieces = [piece('ring', { r: 28, r0: 12, aspect: 1, thick: 2, style: 'solid', ink: 'lit', anim: 'expand', ms: 200 }, echoInk, { anchor: at('caster', ANCHOR_DY.hand), delayMs: 33 })];
       break;
     case 'spinDash':
-      pieces = [piece('ring', { r: Math.max(8, round((c.geometry as Extract<HitGeometry, { kind: 'lane' }>).width / 2)), aspect: c.aspect, thick: 3, style: 'solid', ink: 'hot', anim: 'sweep', heads: 2, ms: 117 }, ink, { anchor: at('path', 0), place: { pattern: 'path', staggerMs: 67 } })];
+      if (r.echo) out = { ...r, phases: { ...r.phases, area: (r.phases.area ?? []).map((p) => (p.component === 'ring' && p.params.anim === 'sweep' && p.anchor.to === 'path' ? echoed(p) : p)) } };
       break;
     case 'knockback':
-      pieces = [...statusPieces('knockback', family, 'M', c.owner)];
+      if (r.echo) {
+        const status = r.statuses.flatMap((k) => (k === 'knockback' ? statusPieces(k, family, 'M', r.owner).map((p) => tag(p, 'echo')) : statusPieces(k, r.imbue ?? r.family, 'M', r.owner)));
+        out = { ...r, phases: { ...r.phases, status } };
+      }
       break;
     case 'arc':
-      pieces = [arcZap(ink, variety)];
+      if (r.echo && r.riders.arc) out = { ...r, riders: { ...r.riders, arc: { zap: r.riders.arc.zap.map(echoed) } } };
       break;
     case 'none':
-      pieces = echoMotes();
       break;
   }
-  return { accent, family, pieces: pieces.map((p) => tag(p, 'echo')) };
+  return { ...out, riders: { ...out.riders, merge: { accent, family, pieces: pieces.map((p) => tag(p, 'echo')) } } };
 }
 
 // ------------------------------------------------------------------ owner monster (docs/VFX.md §6.5)
@@ -884,9 +915,13 @@ function tellPieces(c: Ctx): VfxPiece[] {
     case 'spin': {
       const r = sh.radius;
       const anchor = at(sh.kind === 'nova' ? 'aim' : 'caster', 0);
-      const fill = (density: 0.125 | 0.25 | 0.5, delayMs: number, ink: Ink = DANGER): VfxPiece =>
-        piece('decal', { kind: 'fill', r: decalR(r), aspect: ZONE_ASPECT, density, shape: 'disc' }, ink, { anchor, layer: 'tell', delayMs, lifeMs: T - delayMs, tags: geo });
-      out.push(fill(0.125, 0), fill(0.25, round(T * 0.33)), fill(0.5, round(T * 0.66)), fill(0.25, 0, famInk), ...marching(r, ZONE_ASPECT, anchor), lock(anchor), edge(anchor));
+      // The danger fill steps 12.5 -> 25 -> 50 % and each step replaces the last (stacked ordered fills with different
+      // Bayer origins would union into a plaid); the family hint stays a faint 12.5 % under it.
+      const fill = (density: 0.125 | 0.25 | 0.5, delayMs: number, untilMs: number, ink: Ink = DANGER): VfxPiece =>
+        piece('decal', { kind: 'fill', r: decalR(r), aspect: ZONE_ASPECT, density, shape: 'disc' }, ink, { anchor, layer: 'tell', delayMs, lifeMs: untilMs - delayMs, tags: geo });
+      const t1 = round(T * 0.33),
+        t2 = round(T * 0.66);
+      out.push(fill(0.125, 0, t1), fill(0.25, t1, t2), fill(0.5, t2, T), fill(0.125, 0, T, famInk), ...marching(r, ZONE_ASPECT, anchor), lock(anchor), edge(anchor));
       break;
     }
     case 'strike': {
@@ -962,6 +997,7 @@ const JUICE: Readonly<Record<VfxWeight, VfxJuice>> = {
 };
 
 function juiceOf(c: Ctx): VfxJuice {
+  if (c.skill.shape.kind === 'buff' || c.skill.power <= 0) return { ...JUICE.light };
   const j = { ...JUICE[c.weight] };
   if (c.monster) return { ...j, trauma: 0, flash: j.flash === 'none' ? 'none' : 'local' };
   if (c.weight === 'ultimate' && c.skill.shape.kind === 'nova') j.flash = 'screen';
@@ -1060,7 +1096,9 @@ function build(skill: SkillDef, owner: VfxOwner, lookup: (id: string) => SkillDe
       buffPieces(c, carrier.motif, ph);
       break;
   }
-  if (carrier.kind !== 'buff') push(ph, 'impact', ...impactPhase(c, carrier));
+  // Only skills that can hit get impact pieces (buffs and zero-power / zero-width dashes like quickstep never do).
+  const hits = carrier.kind !== 'buff' && skill.power > 0 && !(skill.shape.kind === 'dash' && skill.shape.width <= 0);
+  if (hits) push(ph, 'impact', ...impactPhase(c, carrier));
   if (c.mods.has('haste') && carrier.kind !== 'dash') push(ph, 'cast', piece('motes', { kind: 'line', size: 2 }, c.ink, { anchor: at('caster', 0), place: { pattern: 'burst', count: 4, spreadDeg: 30 } }));
   if (c.mods.has('expanse') && carrier.kind === 'spin') {
     const R = (skill.shape as Extract<SkillShape, { kind: 'spin' }>).radius;
@@ -1077,10 +1115,7 @@ function build(skill: SkillDef, owner: VfxOwner, lookup: (id: string) => SkillDe
     push(ph, 'charge', ...chargePieces(c, carrier));
   }
   const statuses = statusesFor(skill, owner);
-  for (const k of statuses) push(ph, 'status', ...statusPieces(k, accent, 'M', owner));
-
-  const riders = riderFx(c, merge, variety);
-  if (riders.merge?.accent === 'extra') riders.merge = { ...riders.merge, pieces: mergeExtra(ph, carrier, riders.merge.family, lut) };
+  const riders = riderFx(c, variety);
 
   let recipe: VfxRecipe = {
     version: VFX_VERSION,
@@ -1104,16 +1139,28 @@ function build(skill: SkillDef, owner: VfxOwner, lookup: (id: string) => SkillDe
     variety,
   };
   const sig = SIGNATURES[rootId];
-  if (sig) recipe = { ...sig.patch(recipe, skill), signature: rootId };
+  if (sig) {
+    recipe = { ...sig.patch(recipe, skill), signature: rootId };
+    // A patch may change the palette family (matter -> energy body): the merge echo follows it.
+    if (echoFam && echoFam !== recipe.family) recipe = { ...recipe, echo: echoFam };
+    else if (recipe.echo) {
+      const { echo: _echo, ...rest } = recipe;
+      void _echo;
+      recipe = rest;
+    }
+  }
+  // Statuses and the merge accent read the FINISHED palette and carrier (a signature may swap the body or repaint).
+  const src = recipe.imbue ?? recipe.family;
+  const status = statuses.flatMap((k) => statusPieces(k, src, 'M', owner));
+  if (status.length) recipe = { ...recipe, phases: { ...recipe.phases, status } };
+  if (merge) recipe = withMergeAccent(recipe, mergeAccent(merge.raw, root));
   return recipe;
 }
 
 /** The merge 'extra' accent: the main carrier piece of the extra swing / pulse / shot / hop in the echo family. */
-function mergeExtra(ph: Phases, car: Carrier, family: FamilyId, lut: LutVariant): VfxPiece[] {
-  const main = car.kind === 'projectile' || car.kind === 'chain' ? ph.body : ph.cast;
-  const first = main?.[0];
-  if (!first) return [];
-  return [tag(reink(first, inkOf(family, lut)), 'echo', 'lastHit')];
+function mergeExtra(phases: VfxRecipe['phases'], car: Carrier, family: FamilyId, lut: LutVariant): VfxPiece[] {
+  const main = (car.kind === 'projectile' || car.kind === 'chain' ? phases.body : phases.cast)?.find((p) => !(p.tags ?? []).includes('echo'));
+  return main ? [reink(tag(main, 'lastHit'), inkOf(family, lut))] : [];
 }
 
 // ------------------------------------------------------------------ impact selection (docs/VFX.md §6.3)
@@ -1233,12 +1280,16 @@ export function comboPieces(combo: ComboId, body: BodySize): readonly VfxPiece[]
 
 const BODY_W: Readonly<Record<BodySize, number>> = { S: 20, M: 24, L: 40, W: 60 };
 
-/** Death pop: nova blast one bucket below the body (killer family) + hide-colour chips + puff (§8.2). */
+/**
+ * Death pop: a nova blast in the killer's family (c24 for S / M bodies, c40 heavy for L / W) + hide-colour chips +
+ * puff (§8.2). Wardens share the elite blast (a c56 pop per killer family would not fit the busy-fight atlas set);
+ * their size reads from 8 chips and the r10 puff.
+ */
 export function deathPieces(body: BodySize, killer: FamilyId, owner: VfxOwner): readonly VfxPiece[] {
   const fam: FamilyId = killer === 'danger' ? 'steel' : killer;
   // `owner` is the side that died; a player death was dealt by a monster (its LUT).
   const lut: LutVariant = owner === 'player' ? 'monster' : 'base';
-  const c: 24 | 40 | 56 = body === 'W' ? 56 : body === 'L' ? 40 : 24;
+  const c: 24 | 40 = body === 'W' || body === 'L' ? 40 : 24;
   const feet = at('body', 0);
   const mid = at('body', -round(BODYTOP[body] / 2));
   return [

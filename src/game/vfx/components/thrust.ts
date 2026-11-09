@@ -35,7 +35,7 @@ export const thrust: Template<'thrust'> = {
       });
     const cut = (p: Painter, sign: 1 | -1, ink: (q: number) => number, broken = false) => {
       const d = h * 0.7071;
-      p.stroke(tx - d, -sign * d, tx + d, sign * d, (t) => (broken && Math.floor(t * 5) % 2 === 1 ? 0 : 3 * Math.sin(Math.PI * t) ** 0.6), (_t, q) => ink(q), 1.2 * sign);
+      p.stroke(tx - d, -sign * d, tx + d, sign * d, (t) => (broken && Math.floor(t * 5) % 2 === 1 ? 0 : 3 * Math.sin(Math.PI * t) ** 0.6), (_t, q) => ink(q), 0.6 * sign);
     };
     const echo = (p: Painter) => {
       if (prm.tier >= 1) p.line(x0 + (x1 - x0) * 0.35, -3, x1 - 3, -3, IDX.R2);

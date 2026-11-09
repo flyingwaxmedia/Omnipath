@@ -1122,3 +1122,28 @@
     justify-content: flex-start;
   }
 }
+
+/* ================================================================== v3 (panels lane): the map adopts the wood theme
+   (docs/ART-DIRECTION.md §2): parchment-dark cells, bronze edges; colours of routes / gates stay as they were. */
+
+.mapsheet .tabs {
+  background: var(--p-fill, #2c2016);
+}
+
+.rcell {
+  background:
+    linear-gradient(180deg, transparent 30%, rgba(20, 14, 8, 0.55)),
+    linear-gradient(var(--tint, rgba(255, 255, 255, 0.05)), var(--tint, rgba(255, 255, 255, 0.05))),
+    #2f3a2a;
+  border-color: rgba(233, 196, 106, 0.28);
+}
+
+.rcell.seen {
+  background: #241b12;
+  border-color: rgba(242, 230, 201, 0.22);
+}
+
+.rpop {
+  background: linear-gradient(#3a2a1c, #241910);
+  border-color: rgba(176, 128, 58, 0.6);
+}

@@ -1,6 +1,6 @@
 // GameController v3 views (game lane; docs/INTEGRATION-v3.md §5). MapScene delegates every v3 controller method
 // here in one line, so the scene stays a thin host. Everything returned is plain data in plain words
-// (docs/UX-SIMPLE.md): ids only as keys. Spots the game lane still has to finish are marked `// LANE game:`.
+// (docs/UX-SIMPLE.md): ids only as keys. The one-step wording lives in ./steps.ts, the bar rules in ./loadout.ts.
 import { CLASS_SLOTS, barEligible, canBuyNode, classMaxRank, classXpToNext } from '../core/classes';
 import type { QuestView } from '../core/skillbook';
 import type { ElementId, QuestDef, QuestReward, Requirement } from '../core/types';
@@ -30,8 +30,11 @@ import type {
   ZoneView,
 } from '../ui/controller';
 import { bandText, shapeText } from '../ui/util';
+import { article, seen } from '../ui/words';
 import { classColor } from './art/icons';
 import { gameBus } from './events';
+import { classSlotsFor, noteWorn, refillClassSlots, wornFlag } from './loadout';
+import { classGoal, elementStep, firstStep, learnStep, transformStep } from './steps';
 import type { MapScene } from './scenes/MapScene';
 import { cellExplored, compiled, fogBits, fogDims, FOG_CELL } from './world/runtime';
 import { COLL } from '../core/world/types';
@@ -123,12 +126,18 @@ export function equipSkill(s: MapScene, skillId: string, slot?: number): Outcome
   }
   if (target < first || target >= bar.length) return { ok: false, message: 'Your class fills that slot.' };
   s.assignSlot(target, skillId);
+  // Taken out of a class slot? The class fills the gap with its next pick.
+  if (refillClassSlots(s.session, 'assign', { stable: true }).length) s.save();
   return { ok: true, message: `Equipped ${sk.name}.` };
 }
 
 export function clearSlot(s: MapScene, slot: number): void {
   if (slot < classSlotCount(s) || slot >= s.session.player.hotbar.length) return;
-  s.assignSlot(slot, null);
+  const id = s.session.player.hotbar[slot];
+  if (!id) return;
+  s.assignSlot(slot, null, 'clear');
+  // A class skill freed from your slot goes back to the class when it would pick it.
+  if (refillClassSlots(s.session, 'assign', { stable: true }).length) s.save();
 }
 
 export function slotPicker(s: MapScene, slot: number): SlotPickerView {
@@ -154,14 +163,13 @@ function elementCard(s: MapScene, id: string): SkillCardView {
   const known = !!el && s.book.hasElement(el.id);
   const base = { id, kind: 'element' as const, rank: 0, maxRank: 0, progress: 0, cooldown: 0, sp: 0, transformReady: false, details: [] };
   if (!el) return { ...base, name: '?', line: 'An unknown element.', known: false, action: { kind: 'none' } };
-  // LANE game: the one way to find an unknown element in plain words ("Forge at Brann's anvil.", "Fuse fire and water.").
   return {
     ...base,
     name: known ? el.name : '?',
     line: known ? firstSentence(el.desc) : 'An element you have not found yet.',
     element: el.id,
     known,
-    action: known ? { kind: 'none' } : { kind: 'step', text: 'Not found yet.' },
+    action: known ? { kind: 'none' } : { kind: 'step', text: elementStep(s.reg, el.id) },
   };
 }
 
@@ -182,20 +190,15 @@ export function skillCard(s: MapScene, id: string): SkillCardView {
   const ready = known && book.canMorph(id);
   let action: SkillCardAction;
   let next: string | undefined;
-  if (!known) action = { kind: 'step', text: 'Not learned yet.' }; // LANE game: the one way to learn it (quest / transform / fusion / echo)
+  if (!known) action = { kind: 'step', text: learnStep(s.reg, book, id) };
   else if (ready) {
     const to = opts.find((o) => o.available && !o.owned && o.skill)!;
     action = { kind: 'transform', to: to.morph.to, toName: to.skill!.name };
   } else if (slot >= 0) action = { kind: 'equipped', slot, ...(slot < classSlotCount(s) && worn ? { byClass: worn.name } : {}) };
   else if (barEligible(sk)) action = { kind: 'equip' };
   else action = { kind: 'step', text: 'Your weapon swings this by itself.' };
-  if (known && !ready) {
-    // The one next step toward a transform: the first unmet requirement of the nearest branch.
-    const open = opts.filter((o) => !o.owned);
-    const near = open.find((o) => o.requirements.some((r) => !r.ok));
-    const miss = near?.requirements.find((r) => !r.ok);
-    if (miss) next = `${miss.text} to transform.`; // LANE game: friendly wording per requirement type ("Reach rank 10 to transform.")
-  }
+  // The one next step toward a transform ("Reach rank 10 to transform.").
+  if (known && !ready) next = transformStep(s.reg, book, id) ?? undefined;
   const w = WEAPONS[s.session.player.weapon];
   const spCost = s.combat ? s.combat.spCost(sk) : sk.spCost;
   const el = sk.element ? s.reg.element(sk.element) : undefined;
@@ -247,21 +250,9 @@ function classCard(s: MapScene, id: string): ClassCardView | null {
   return card;
 }
 
-/** ONE hint line for a locked class: the riddle until close, then the first unmet goal. */
+/** ONE hint line for a locked class: the riddle until close, then the first unmet goal (src/game/steps.ts). */
 function classHint(s: MapScene, id: string): string {
-  const cls = s.reg.classDef(id)!;
-  const v = s.book.classProgress(cls);
-  if (v.codex !== 'near') return cls.hint;
-  // LANE game: plain words for every goal kind ("Learn 1 more fire skill.", "Reach Class Level 6 as Spellblade.").
-  const clause = v.clauses.find((c) => c.have < c.clause.count);
-  if (clause) {
-    const more = clause.clause.count - clause.have;
-    return `Learn ${more} more ${clause.clause.tags.join(' ')} skill${more === 1 ? '' : 's'}.`;
-  }
-  const parent = v.parents?.find((p) => p.have < p.need);
-  if (parent) return `Reach Class Level ${parent.need} as ${s.reg.classDef(parent.id)?.name ?? 'its parent'}.`;
-  const req = v.requires?.find((r) => !r.ok);
-  return req ? `${req.text}.` : cls.hint;
+  return classGoal(s.reg, s.book, id);
 }
 
 export function classCards(s: MapScene): ClassScreenView {
@@ -279,17 +270,51 @@ export function classCards(s: MapScene): ClassScreenView {
     .sort((a, b) => b.v.progress - a.v.progress)
     .map(({ c }) => cards.find((x) => x.id === c.id)!)
     .filter(Boolean);
-  // LANE game: SPEC-v2 §5.1 v3.1 — becoming a class works any time (block it only mid-fight / while dead, with a
-  // one-line changeHint such as "Finish the fight first."); becomeClass / wearClass must follow the same rule.
-  const canChange = s.isSafe();
-  return { current, unlocked, locked, canChange, ...(canChange ? {} : { changeHint: 'Change class in a town.' }) };
+  // SPEC-v2 §5.1 v3.1: becoming a class works any time, anywhere — only a fight or being knocked out blocks it.
+  const block = classChangeBlock(s);
+  return { current, unlocked, locked, canChange: !block, ...(block ? { changeHint: block } : {}) };
 }
 
+/** Why the class cannot change right now (one line), or null: only mid-fight or while knocked out. */
+export function classChangeBlock(s: MapScene): string | null {
+  if (s.combat?.dead) return 'Not while you are down.';
+  if (s.inCombat()) return 'Finish the fight first.';
+  return null;
+}
+
+/**
+ * Becomes a class (or "No class" with null) — the ONE path for becomeClass and wearClass. Becoming a class refills
+ * the 5 class slots with its best known skills (your own slots stay as they are) and emits classChanged (the
+ * "You are now a Pyroblade" headline, the outfit change). "No class" turns the class slots into your own slots,
+ * keeping their skills.
+ */
 export function becomeClass(s: MapScene, id: string | null): Outcome {
-  // LANE game: "No class" needs SkillBook.unwear(); refill the class slots with book.classSkills(id, CLASS_SLOTS),
-  // banner "You are now a Pyroblade" (via gameBus classChanged → src/ui/announce.ts) and the outfit change.
-  if (id === null) return { ok: false, message: 'Pick a class to become.' };
-  return s.wearClass(id);
+  const block = classChangeBlock(s);
+  if (block) return { ok: false, message: block };
+  const book = s.book;
+  const prev = book.state.worn;
+  if (id === null) {
+    if (prev === null) return { ok: true, message: 'You have no class.' };
+    book.unwear();
+    s.afterClassChange();
+    // A class that became discoverable just now is worn at once (the book's own rule): its discovery path ran.
+    const now = book.state.worn ? s.reg.classDef(book.state.worn) : undefined;
+    if (now) return { ok: true, message: `You are now ${article(now.name)}.` };
+    gameBus.emit('barChanged', { slots: [...Array(classSlotsFor(prev, s.session.player.hotbar.length)).keys()], reason: 'class' });
+    gameBus.emit('classChanged', { classId: null, prev, reason: 'wear' });
+    return { ok: true, message: `No class: all ${s.session.player.hotbar.length} slots are yours.` };
+  }
+  const cls = s.reg.classDef(id);
+  if (!cls || !book.state.classes[id]) return { ok: false, message: 'You have not unlocked that class yet.' };
+  if (prev === id) return { ok: true, message: `You are already ${article(cls.name)}.` };
+  const r = book.wear(id);
+  if (!r.ok) return r;
+  // From "no class" the front slots held your own picks: any the class pushes out move to your empty slots.
+  refillClassSlots(s.session, 'class', { rehome: prev === null });
+  noteWorn(book);
+  gameBus.emit('classChanged', { classId: id, prev, reason: 'wear' });
+  s.afterClassChange();
+  return { ok: true, message: `You are now ${article(cls.name)}.` };
 }
 
 export function wornClass(s: MapScene): WornClassView | null {
@@ -433,17 +458,44 @@ export function pursuits(s: MapScene): PursuitView[] {
       open: { panel: 'codex', arg: `quests:${t.quest.id}` },
     });
   }
-  // Goals (at most 2): a transform that is ready, then the nearest class.
-  // LANE game: echo witness goal ("Seen 2/3"), the next transform's one step, smarter picks.
+  // Goals (at most 2), most exciting first: a transform ready now, an echo being learned ("Seen 2/3"), the nearest
+  // class, then the next transform's one step.
+  const book = s.book;
   const goals: PursuitView[] = [];
-  const morph = s.book.known().find((sk) => s.book.canMorph(sk.id));
+  const known = book.known();
+  const morph = known.find((sk) => book.canMorph(sk.id));
   if (morph) goals.push({ key: `goal:transform:${morph.id}`, kind: 'goal', title: morph.name, line: 'Ready to transform ✨', icon: { kind: 'skill', id: morph.id }, open: { panel: 'skill', arg: morph.id } });
+  const echo = Object.entries(book.state.witness)
+    .filter(([id, marks]) => marks > 0 && !book.has(id) && !!s.reg.skill(id))
+    .map(([id, marks]) => ({ id, marks, need: s.reg.techniqueSources(id).find((t) => t.technique.echo)?.technique.echo?.marks ?? 0 }))
+    .filter((e) => e.need > 0)
+    .sort((a, b) => b.marks / b.need - a.marks / a.need)[0];
+  if (echo) {
+    goals.push({
+      key: `goal:echo:${echo.id}`,
+      kind: 'goal',
+      title: s.reg.skill(echo.id)!.name,
+      line: seen(echo.marks, echo.need),
+      progress: Math.min(1, echo.marks / echo.need),
+      icon: { kind: 'skill', id: echo.id },
+      open: { panel: 'skill', arg: echo.id },
+    });
+  }
   const near = s.reg.classes
-    .filter((c) => !c.hidden && !s.book.state.classes[c.id])
-    .map((c) => ({ c, v: s.book.classProgress(c) }))
+    .filter((c) => !c.hidden && !book.state.classes[c.id])
+    .map((c) => ({ c, v: book.classProgress(c) }))
     .filter(({ v }) => v.codex === 'near')
     .sort((a, b) => b.v.progress - a.v.progress)[0];
   if (near) goals.push({ key: `goal:class:${near.c.id}`, kind: 'goal', title: near.c.name, line: classHint(s, near.c.id), progress: near.v.progress, icon: { kind: 'cls', id: near.c.id }, open: { panel: 'classes', arg: near.c.id } });
+  if (goals.length < 2) {
+    // The skill closest to its next transform (highest rank share among those with a form left to take).
+    const next = known
+      .filter((sk) => barEligible(sk) && book.morphOptions(sk.id).some((o) => !o.owned))
+      .map((sk) => ({ sk, step: transformStep(s.reg, book, sk.id), share: book.rank(sk.id) / Math.max(1, sk.maxRank) }))
+      .filter((x): x is { sk: typeof x.sk; step: string; share: number } => !!x.step)
+      .sort((a, b) => b.share - a.share)[0];
+    if (next) goals.push({ key: `goal:next:${next.sk.id}`, kind: 'goal', title: next.sk.name, line: next.step, progress: next.share, icon: { kind: 'skill', id: next.sk.id }, open: { panel: 'skill', arg: next.sk.id } });
+  }
   return [...out, ...goals.slice(0, 2)];
 }
 
@@ -522,7 +574,7 @@ export function quickSlots(s: MapScene): QuickSlotsView {
 }
 
 export function useQuick(s: MapScene, kind: 'heal' | 'recall' | 'potion' | 'rest'): Outcome {
-  if (kind === 'rest') return { ok: false, message: 'Find a campfire to rest.' }; // LANE game: sit and recover (regen boost until moved)
+  if (kind === 'rest') return s.combat.rest();
   const slot = quickSlots(s)[kind];
   if (!slot || slot.count <= 0) return { ok: false, message: 'You have none.' };
   const r = s.useItem(slot.itemId);
@@ -565,9 +617,8 @@ export function badges(s: MapScene): MenuBadgesView {
   const worn = st.worn ? s.reg.classDef(st.worn) : undefined;
   const prog = worn ? st.classes[worn.id] : undefined;
   const node = !!worn && !!prog && (worn.tree ?? []).some((n) => canBuyNode(worn, prog, n.id).ok);
-  // LANE game: "unlocked but never worn" needs a seen-marker per class (e.g. a 'seen_class:<id>' flag set by the
-  // Class screen); today: a class is unlocked and none is worn.
-  const unworn = !st.worn && Object.keys(st.classes).length > 0;
+  // A class unlocked but never worn (flag `worn_class:<id>`, set whenever a class is worn — loadout.noteWorn).
+  const unworn = Object.keys(st.classes).some((id) => book.flag(wornFlag(id)) < 1);
   return {
     skills: book.known().some((sk) => book.canMorph(sk.id)),
     classes: node || unworn,
@@ -585,8 +636,7 @@ export function firstTime(s: MapScene, key: string): boolean {
   return true;
 }
 
-/** First unmet requirement text of a list ('' when all are met). */
+/** First unmet requirement of a list as one plain sentence ('' when all are met). */
 export function firstUnmet(s: MapScene, reqs: readonly Requirement[]): string {
-  const r = reqs.find((x) => !s.book.meets(x));
-  return r ? s.book.describe(r) : '';
+  return firstStep(s.reg, s.book, reqs);
 }

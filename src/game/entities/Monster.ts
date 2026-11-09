@@ -1,8 +1,13 @@
+// A monster's body in the world (actors lane): an animated sprite (MONSTER_ANIMS — walk frames while it moves, a slow
+// idle otherwise), shadow, elite / warden aura, HP bar and a name plate in the bitmap pixel font. Game systems drive
+// it through the members below (position, timers, statuses, stepToward, moveTo, flash, sync, reset…).
 import Phaser from 'phaser';
 import type { BuffStat, ElementDef, MonsterDef, StatusKind } from '../../core/types';
 import { isBlockedPx } from '../../core/world/compile';
 import type { CompiledMap } from '../../core/world/types';
 import { DEPTH, ySort } from '../render/depths';
+import { type WorldLabel, worldLabel } from '../render/text';
+import { HOVER_MONSTERS, monsterAnimKey, monsterAnimRate } from './rules';
 
 export interface Dot {
   until: number;
@@ -44,10 +49,13 @@ export const freshStatus = (): StatusState => ({
 /** Warden enrage (HP < 50 %): moves and swings faster. Technique tempo lives in MonsterSkills. */
 export const ENRAGE = { at: 0.5, speed: 1.15, attackDelay: 0.85 } as const;
 
+/** Space kept between the HP bar and the name plate for the target chevron (art px). */
+export const CHEVRON_ROOM = 11;
+
 let nextUid = 1;
 
 export class Monster {
-  readonly sprite: Phaser.GameObjects.Image;
+  readonly sprite: Phaser.GameObjects.Sprite;
   readonly shadow: Phaser.GameObjects.Image;
   readonly bar: Phaser.GameObjects.Graphics;
   /** Elites and wardens: soft coloured ring under the body (red pulse once a warden is enraged). */
@@ -90,9 +98,20 @@ export class Monster {
   /** Chase waypoints around walls (A*), refreshed at `chaseAt`. Empty = straight line. */
   chase: { x: number; y: number }[] = [];
   chaseAt = 0;
+  /** Moved since the last sync (walk frames play while true). */
+  moving = false;
+  /** A chevron is shown over this monster (entities/actors.ts): the name plate makes room above the HP bar. */
+  chevron = false;
   private bob = Math.random() * Math.PI * 2;
   private flashUntil = 0;
-  private _label: Phaser.GameObjects.Text | null = null;
+  private _label: WorldLabel | null = null;
+  private lastX: number;
+  private lastY: number;
+  private stillFor = 0;
+  /** Texture of frame 0 (its 2-frame loop is `<tex>_anim`). */
+  readonly texture: string;
+  private readonly hover: boolean;
+  private readonly animKey: string | null;
   readonly baseScale: number;
 
   constructor(
@@ -112,7 +131,14 @@ export class Monster {
     const big = def.rank === 'warden' ? 2.6 : def.rank === 'elite' ? 1.6 : 1;
     this.shadow = scene.add.image(this.x, this.y, 'shadow').setScale(big * this.baseScale * 0.8 + 0.2).setDepth(DEPTH.SHADOW);
     this.aura = def.rank !== 'common' ? scene.add.graphics().setBlendMode(Phaser.BlendModes.ADD).setDepth(DEPTH.AURA) : null;
-    this.sprite = scene.add.image(this.x, this.y, tex).setOrigin(0.5, 0.9);
+    this.texture = tex;
+    this.hover = HOVER_MONSTERS.has(tex);
+    this.lastX = this.x;
+    this.lastY = this.y;
+    this.sprite = scene.add.sprite(this.x, this.y, tex).setOrigin(0.5, 0.9);
+    this.animKey = scene.anims.exists(monsterAnimKey(tex)) ? monsterAnimKey(tex) : null;
+    // Start on a random frame so a crowd never moves in lockstep.
+    if (this.animKey) this.sprite.play({ key: this.animKey, startFrame: Math.random() < 0.5 ? 0 : 1 });
     this.bar = scene.add.graphics().setDepth(DEPTH.HP_BAR);
     // Name labels are created lazily (only targeted monsters and wardens show one): up to 60 monsters per map.
     if (this.warden) this.label.setVisible(true);
@@ -120,26 +146,23 @@ export class Monster {
     this.sync(0);
   }
 
-  /** Name plate (created on first use). */
-  get label(): Phaser.GameObjects.Text {
+  /** Name plate in the bitmap pixel font (created on first use: only targeted monsters and wardens show one). */
+  get label(): WorldLabel {
     if (!this._label) {
       const e = this.element;
-      const warden = this.warden;
-      this._label = this.scene.add
-        .text(this.x, this.y, `${this.def.name} Lv${this.def.level}`, {
-          fontFamily: 'system-ui, sans-serif',
-          fontSize: warden ? '13px' : '10px',
-          fontStyle: warden || this.elite ? 'bold' : 'normal',
-          color: e ? `#${e.color.toString(16).padStart(6, '0')}` : '#ffffff',
-          stroke: '#000',
-          strokeThickness: 3,
-        })
-        .setOrigin(0.5, 1)
-        .setResolution(2)
-        .setDepth(DEPTH.NAME_TAG)
-        .setVisible(false);
+      const color = e ? `#${e.color.toString(16).padStart(6, '0')}` : this.warden ? '#ffd0c0' : '#ffffff';
+      this._label = worldLabel(this.scene, this.x, this.y, `${this.def.name}  Lv ${this.def.level}`, {
+        color,
+        size: this.warden ? 13 : 10,
+        bold: this.warden || this.elite,
+      }).setVisible(false);
     }
     return this._label;
+  }
+
+  /** Top of the body (world y) — where the HP bar sits; plates and chevrons go above it. */
+  get top(): number {
+    return this.y - this.sprite.displayHeight * 0.9 - 4;
   }
 
   get radius(): number {
@@ -235,17 +258,28 @@ export class Monster {
 
   sync(dt: number): void {
     const now = this.scene.time.now;
+    const step = Math.hypot(this.x - this.lastX, this.y - this.lastY);
+    this.lastX = this.x;
+    this.lastY = this.y;
+    // Moving = covering ground at a walking pace (knockback slides and separation nudges count too, briefly).
+    if (dt > 0 && step / dt > 8) {
+      this.moving = true;
+      this.stillFor = 0;
+    } else if ((this.stillFor += dt) > 0.12) this.moving = false;
     this.bob += dt * (this.stunned ? 0 : this.enraged ? 9 : 6);
-    const squash = 1 + Math.sin(this.bob) * 0.05;
+    // The frames carry the motion now: only a faint breath on walkers, none on flyers.
+    const squash = this.hover || this.moving ? 1 : 1 + Math.sin(this.bob) * 0.02;
     const swell = 1 + this.charge * 0.08;
     const scale = this.baseScale;
     this.sprite.setPosition(this.x, this.y);
-    this.sprite.setScale(scale * this.facing * (1 / squash) * swell, scale * squash * swell);
+    this.sprite.setFlipX(this.facing < 0);
+    this.sprite.setScale(scale * (1 / squash) * swell, scale * squash * swell);
     this.shadow.setPosition(this.x, this.y + 1);
     this.sprite.setDepth(ySort(this.y));
+    this.syncAnim();
     if (this.aura) this.drawAura(now);
-    const top = this.y - this.sprite.displayHeight * 0.9 - 4;
-    if (this._label?.visible) this._label.setPosition(this.x, top - 6);
+    const top = this.top;
+    if (this._label?.visible) this._label.setPosition(Math.round(this.x), Math.round(top - 3 - (this.chevron ? CHEVRON_ROOM : 0)));
     const g = this.bar;
     g.clear();
     if (this.hp < this.maxHp || this.warden) {
@@ -262,6 +296,19 @@ export class Monster {
         g.fillStyle(0xfff3a0, 0.95).fillCircle(this.x + Math.cos(a) * r, top - 6 + Math.sin(a) * r * 0.3, 2.2);
       }
     }
+  }
+
+  /** Walk frames while moving (faster while chasing), a slow idle otherwise; frozen while stunned. */
+  private syncAnim(): void {
+    const a = this.sprite.anims;
+    if (!this.animKey) return;
+    if (this.stunned) {
+      if (a.isPlaying) a.pause();
+      return;
+    }
+    if (a.isPaused) a.resume();
+    if (!a.isPlaying) this.sprite.play(this.animKey);
+    a.timeScale = monsterAnimRate({ moving: this.moving, chasing: this.provoked, enraged: this.enraged, hover: this.hover });
   }
 
   private drawAura(now: number): void {
@@ -291,6 +338,11 @@ export class Monster {
 
   setVisible(v: boolean): void {
     this.sprite.setVisible(v);
+    if (v) {
+      this.lastX = this.x;
+      this.lastY = this.y;
+      this.moving = false;
+    } else if (this.sprite.anims.isPlaying) this.sprite.anims.pause(); // dead / not here: no frames to step (sync resumes)
     this.shadow.setVisible(v);
     this.bar.setVisible(v);
     this.aura?.setVisible(v);

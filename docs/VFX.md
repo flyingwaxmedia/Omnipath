@@ -206,6 +206,83 @@ Elements must stay distinguishable in grayscale by shape. `ElementDef.glyph` is 
   dissolve (`progress + (1−u)·0.4`) makes tails dissolve first.
 - Cost target: ≤ 0.5 ms per 48² frame.
 
+### 4.1 Package P as built (reading rules for R and the runtime step)
+
+Files: `painter.ts` (index-map painter, `quantize`, `midpoint`), `dither.ts` (Bayer 4×4, hash dissolve, crescent
+eraser), `glow.ts` (emissive dilation, glow discs, matter rim), `ramps.ts` (`RAMPS`, `lut`, `fit`, `NO_GLOW`),
+`glyphs.ts`, `components/*.ts` (17 templates + `kit.ts` + `index.ts` with `TEMPLATES`, `outlineAllowed`),
+`bake.ts` (`indexFrames`, `bakePiece`, `bakePhase`, `pieceKey`), `grid.ts` (the §11.1 QA grid). Tests:
+`tests/vfx-painter.test.ts` (also covers the vfx-bake checks) and `tests/vfx-palette.test.ts`. Sheets:
+`node scripts/vfx-sheets.mjs [outDir]` (defaults to the OS temp dir). No change to `types.ts` was needed.
+
+- **Anchor halves.** `bake.ts` passes `piece.anchor.half` to the template. Ring (whole) and aura pieces with
+  `half: 'back'` bake only what lies above the anchor row (far arc, orbiting units with sin < 0, the ward's upper half);
+  `'front'` bakes the rest; no `half` bakes everything. The geometry key gains `|hback` / `|hfront`. Other components
+  ignore `half` (the runtime only sets their depth).
+- **Ring pieces (r > 64).** The tile set is a 10 px band chunk per unique direction, and `u` indexes the chunk's
+  **outward normal** angle (u · 22.5°). The runtime picks a chunk with `pickDir(normalAngle, 16)`, not the tangent
+  angle: normals mirror correctly under flipX / flipY, tangents would put the bright rim on the inside. Dash and gap
+  patterns are placement (hide 2 of 5 / every 4th chunk). Ring `arc` is baked in screen degrees; for aim-relative
+  arcs (§6.8) the runtime adds the event angle before baking the `geometryFromEvent` piece.
+- **Frames.** Templates crop each frame to its content (+3 px). The bake trims again, so an `RgbaFrame`'s `ox/oy` is
+  the anchor inside the trimmed frame (it may lie outside it) and the runtime draws at anchor − (ox, oy). Empty frames
+  are 0×0. A frame identical to the previous one reuses its `data` buffer (same reference), so the atlas can store it
+  once (decal and sigil holds).
+- **Uses.** `motes` strips are `'pieces'`: frame k is an age step (frame = ⌊age / life · n⌋). `tell` chevron / arrow /
+  bead / edge are `'pieces'`; lock and fizzle are one-shots. Decal `fill` and `shadow`, ring `march` / `static`,
+  sigil `static`, aura loops, orbs, missiles and status loops are `'loop'`; everything else is `'once'`.
+- **Decals.** `shape: 'line'` follows §6.8: `r` is half the length and the anchor is the midpoint (16 dirs).
+  Aftermath kinds hold, then dissolve 50 → 25 → 12.5 % at 100 ms; `frost` rises 12.5 → 50 % first; `pool` cools over
+  1.5 s; `rift` opens and closes over 4 frames each.
+- **Sigil.** `draw` ends with a 200 ms hold and a 2-frame dissolve. For a longer hold, R adds a `static` sigil piece.
+- **Grey outcomes.** Burst `resist`, `immune` and `fizzle` and tell `fizzle` are drawn in R1–R3 only; R gives them
+  `ramp: 'smoke'` to read grey.
+- **WHITE.** Only on declared hero frames of one-shots, starting within the first 30 % of the strip; loops never use
+  it (orb highlights are R5). `heroFrames` is empty unless the LUT is `base` (shift / monster / reduceFlash map WHITE
+  to R5). The zap peaks on its first frame (white), then shows the re-seeded shape.
+- **Reduce flash.** Contrast and blank frames are dropped and their time is added to the neighbouring frame (totals
+  stay within ±2 ms after re-snapping to `VSYNC_MS`).
+- **Glow.** Templates dilate R5 + WHITE (orbs, sigils: R4 too). Ramps in `NO_GLOW` (earth, wind, stealth, toxin,
+  danger, smoke, dust, blood) bake 0×0 glow twins, except missiles, whose glow twin is the imbue rim (shown by the
+  runtime only when the body carries an element).
+- **Outline (#24180f).** Allowed only where `outlineAllowed(piece)` says: missiles, chip motes, blunt and star bursts,
+  matter erupt units, freeze crystal / icicle / pip status units, dashed rings, danger tells and the edge badge, orbit
+  shards, earth / magma family marks (chips, crust) in magic sparks and tier-2 smears, and the rocks and metal chips
+  of earth / steel blast cores. The biome keyline option allows it anywhere.
+- **Orphans.** A lone pixel has no non-clear 8-neighbour. Slash, thrust, orb, missile, burst, nova and erupt remove
+  them outside the last two non-empty frames. Dissolves use ordered Bayer (with a radial bias for nova cores) or
+  crescent erosion; the hash dissolve is kept for crack decals only, so nothing turns into salt-and-pepper noise.
+- **Bolts.** The canvas is the path box plus the displacement margin, capped at 512 px (the largest pooled texture).
+- **Seeds.** Every strip is seeded by `hashSeed('vfx', geometryKey, u)`; bolts additionally use `params.seed` for the
+  two path shapes. Bake order never changes output (tested by hash in shuffled order).
+- **Measured (Node, this container).** Boot set (75 pieces: motes, puffs, danger ring pieces, steel bursts, tells)
+  20 ms; 0.17–0.26 ms per 48² orb frame; slash r56 (5 dirs) 17 ms; heavy blast core c56 16 ms; decal r176 35 ms;
+  slash r128 at 360° 170 ms (the worst case; it is also 1.7 Mpx, so bake it lazily). All 1,555 distinct pieces of
+  the current authored recipes (player and monster) bake without error in about 6 s and 26 Mpx in total.
+
+### 4.2 Sheet review pass (QA loop over the contact sheets)
+
+The §11.2 sheets were reviewed at device scale against §2, §3.3 and ART-DIRECTION. What changed, and why:
+- **Nova cores read the motif** (geometry key gains `v=<style>`; `coreStyle(core, motif)` in `components/nova.ts`).
+  `blast` was one fireball shared by fire, magma, earth, ice and steel; it now has fire (fireball + rising tongues +
+  embers), magma (dark crust lumps with glowing cracks, S0-rimmed, falling drips), earth (no white, no glow: a ground
+  shock, outlined rocks on arcs, a dust dome lit from the top-left), ice (faceted crystal flash, flying shards, frost
+  ring), steel (spark spray in the warm accent, outlined chips, a thin ground ring) and a plain energy style for the
+  other families and death pops. The hold frame is an irregular two-layer flash instead of a flat 8-point clip-art
+  star. `ripple` has water (droplets + splash column), wind (spiral streaks, no white, no fill) and spirit (ki double
+  rings exactly 3 px apart); `sky` has a storm style (cloud cap + slanted rain); `radiant` (holy) adds a vertical beam
+  and a cross flare over a round core before its rings.
+- **Bolts** use two-scale midpoint displacement (sharp kinks every ~L/8, then ±1 px roughness) with the wander
+  bounded on long hops (`off0 = jag · min(L, 48 + 0.3 L)`), and thinner ink: a 3 px band with a 1 px hot core, forks one
+  step thinner and dimmer than the trunk. Before, a 180 px hop read as a wavy worm 5 px thick.
+- **Magic hit sparks** open on a white-hot core with a 4-point flare (R5 for wind) instead of a 3 px plus.
+- **Puffs** have a lobed silhouette (base + two top lobes) with one lit cap and a base shadow crescent, so smoke and
+  dust read as soft volume, not balls; `smoke` leaves the flame hot (R4, R3) and cools through the S ramp (fire: grey
+  smoke, magma: crust). Gas puffs, spore puffs and cloud cores use a solid 1 px accent rim instead of a 50 % dithered
+  halo (mush on grass).
+- **Erupt units:** `rock-spike` is a broken, notched basalt spire (S ramp, stratum line, ochre catch-light) instead of
+  an orange cone; `smoke-sheet` is a low cumulus bank instead of flat striped capsules.
+- **Monster zone tells:** sequential danger fills and a 12.5 % family hint (§6.5).
 ## 5. Components (17)
 
 Frame times are `VSYNC_MS` values. "Key params" are the bake params in `types.ts` (`ComponentParams`). Runtime
@@ -448,8 +525,9 @@ Imbue and echo overlays add their spokes and motes.
 - **Telegraph by shape** (exact geometry from `monsterTelegraph.tell`, pieces tagged `neverGoverned` and
   `geometryFromEvent`):
   - nova / spin → zone:
-    - danger fill decal at 12.5% → 25% at 33% → 50% at 66%
-    - a family fill growing to the rim in 8 steps
+    - danger fill decal at 12.5% → 25% at 33% → 50% at 66%; each step replaces the previous one (stacked ordered
+      fills with different Bayer origins union into a plaid)
+    - a faint family fill (12.5%) under it for the whole tell
     - a ring `dashed` thick 2 + #fff8f0 line + keyline, marching every 2 ticks (doubled speed in the last 25%, R5 in
       the last 15%)
     - one lock flash on the final tick
@@ -533,6 +611,34 @@ Each patch uses only §5 components. A test fails on an unknown id or a non-root
 | tremor_stomp | nova blast heavy + an extra outer ring + cracks; monster owner (warden) trauma 0.5 |
 | mon_magma_glob | missile glob lobbed on a `move` `arc` over the delay; release burst blunt + decal pool |
 | mon_rift_lunge | dash dive + decal `rift` at both ends (opening and closing over 4 frames) |
+
+### 6.8 Package R as built (reading rules for P and the runtime step)
+
+Files: `families.ts` (familyOf + each family's motif language as data), `pieces.ts` (constructors, `nominalMs`,
+`pieceProblems`, `recipePieces`), `recipe.ts`, `signatures.ts`. Test: `tests/vfx-recipes.test.ts`. No change to
+`types.ts` was needed.
+
+- **Carrier vs overlay.** Carrier geometry (ring styles, cores, bodies, buckets) reads the **root** family, so an
+  infusion never changes a bake key. Motes, trails, units, decals and impact spokes read the accent family
+  (`imbue ?? family`).
+- **Angles.** A ring `arc` on a `geometryFromEvent` piece (cone rims, strike previews) is relative to the aim:
+  0° is the aim direction. The runtime places it at the event's angle.
+- **Anchors.** `body` anchors use the mover's drawn position, which is already at y − 14, so their `dy` is 0.
+  `hop` anchors start at the hop's `from` point. A decal with `shape: 'line'` has `r` = half its length and is
+  anchored at its midpoint (`along`).
+- **Pulses.** Every swing or pulse re-plays the cast phase. The runtime flips `slash.sense` on odd indices. A
+  multi-hit cast also plays its `lastHit` pieces on the final swing, and a merge's `extra` accent
+  (`riders.merge.pieces`) on its final swing, pulse, shot or hop.
+- **What never hits.** Buffs and zero-power skills (quickstep) have no impact phase, no statuses and light juice.
+- **Strike ground impact** (ring shock + cracks + chips) needs the `heavy` or `execute` tag or the heavy essence.
+  Power alone is not enough, so a heavy backstab stays a stab.
+- **Echo techniques** keep their player silhouette when a monster casts them: no cell bump and no halo. They get only
+  the monster LUT, the tells and the quota (§6.5). The hit-test aspect (0.65 zones) still applies.
+- **Merges.** `spinDash` is the one accent that changes the carrier (dash mode `spin`, §7.3). Every other merge keeps
+  the primary parent's carrier. A nova's `unit` follows the accent family.
+- **Timings.** Charge pieces span exactly `castMs`. A player nova rim spans the delay. Monster tells span
+  `monsterTellMs` (the tell plus the wind-up). Cast, impact and area pieces end within the skill's cooldown (or the
+  weapon delay). Status loops live for Combat's durations, and aura loops for the buff duration.
 
 ## 7. Variants
 
@@ -798,9 +904,9 @@ Graphics objects leave the VFX path entirely; only debug overlays keep them.
 | `src/game/vfx/recipe.ts` | R | types, families, signatures, core/compose, data |
 | `src/game/vfx/signatures.ts` | R | types, pieces |
 | `src/game/vfx/pieces.ts` (piece constructors; optional) | R | types |
-| `scripts/vfx-sheets.mjs` | P | P files (bundled with esbuild) |
+| `scripts/vfx-sheets.mjs` | P (+ joint skill sheets) | P + R files and data (bundled with esbuild) |
 | `tests/vfx-painter.test.ts`, `tests/vfx-bake.test.ts`, `tests/vfx-palette.test.ts` | P | P files |
-| `tests/vfx-recipe.test.ts` | R | R files |
+| `tests/vfx-recipes.test.ts` | R | R files |
 | `tests/vfx-pipeline.test.ts`, `tests/vfx-guard.test.ts` | joint (written after both land) | P + R |
 | `src/game/vfx/runtime/**` (bus bridge, atlas, pools, StatusFx, TelegraphFx, juice rig, gallery scene) | later wiring step (Phaser side) | P + R + Phaser + events.ts |
 
@@ -863,7 +969,7 @@ Each test file pins its module to the contract at compile time, for example `con
 - **P** is done when every component bakes the §11.1 grid and passes `vfx-painter`, `vfx-bake` and `vfx-palette`. The
   grid is each value of each bucketed param with the other params at defaults, every enum value, × 3 motifs.
   `scripts/vfx-sheets.mjs` must also write the contact sheets (§11.2).
-- **R** is done when `vfx-recipe` passes over all authored skills, techniques, infusions, legal essence sets, merges
+- **R** is done when `vfx-recipes` passes over all authored skills, techniques, infusions, legal essence sets, merges
   and auto-attacks, and all 40 signatures apply.
 - **Joint** is done when `vfx-pipeline` bakes every distinct piece of every authored recipe (player and monster) and
   the worst loadout fits in 4 pages. `npx tsc --noEmit` must be clean for `src/game/vfx/**` and `tests/vfx*`.
@@ -872,7 +978,7 @@ Each test file pins its module to the contract at compile time, for example `con
 
 ### 11.1 Headless tests (vitest)
 
-- **vfx-recipe (R)**
+- **vfx-recipes (R)**
   - Coverage: deriveVfx succeeds and has ≥ 1 cast or body piece for:
     - every authored skill
     - every MonsterDef technique (owner monster)
@@ -912,10 +1018,26 @@ Each test file pins its module to the contract at compile time, for example `con
 
 ### 11.2 Contact sheets and gallery
 
-- `scripts/vfx-sheets.mjs`: bundles the Phaser-free modules with esbuild, bakes every template × family (and every
-  authored recipe at cast, peak, mid and end), and writes PNG sheets plus grayscale copies with Node's zlib (no
-  dependency). Output goes to a temp dir outside the repo. Sheets are reviewed at device scale (1 art px = 3 device
-  px), not only at 2×.
+- `node scripts/vfx-sheets.mjs <outDir> [--scale=3] [--only=family:fire,skills:sword] [--compare [--fams=…]]`: bundles
+  the Phaser-free modules with esbuild (installed with vite; no new dependency), bakes **every authored recipe**
+  (player skills, techniques as player and monster) and writes PNG sheets plus grayscale copies with Node's zlib.
+  Output goes outside the repo. Bake errors are listed in `index.txt` and fail the run.
+  - `family-<id>.png` (17): each component's frames for that family (unique direction 0), aligned on the anchor, once
+    over mid grass #5f8a3a and once over a dark dungeon floor #1e1a24, with frame times (hero frames in yellow) and
+    glow twins added at the biome gain.
+  - `skills-<group>[-<page>].png`: the sword, dagger and staff trees, The Heart (every element infused into the three
+    weapon basics), monster techniques (owner monster), monster auto-attacks and the other constellations, 14 skills
+    per page. Each row is one skill, labelled, with three composited moments (CAST: telegraph / charge / wind-up;
+    PEAK: the carrier's hero frame; HIT: impact + statuses + aftermath) on grass and on the dungeon floor, around a
+    stand-in actor of the player's size. Placement patterns, ring chunk sets, moves, afterimages and blend modes are
+    approximated the way the runtime will place them; the real runtime remains the reference.
+  - `--compare` adds `compare-<component>.png`: one component across every family (a review aid).
+  - Review at device scale (1 art px = 3 device px), not only at 2×.
+- `tests/vfx-pipeline.test.ts` (joint, art-rule lint): every distinct piece of every authored recipe, technique,
+  element infusion, auto-attack, status, impact variant, combo, death pop and extra bakes, and every baked pixel is
+  in its own ramp + LUT palette, alpha is 0 or 255, never pure black, #24180f only where `outlineAllowed()` says
+  (or where the ramp owns that colour: magma and danger S0), glow twins are white (none for no-glow ramps), one-shots
+  end empty, frame times are `VSYNC_MS`, and no player piece shows a danger-ramp colour.
 - Gallery scene (runtime step, `?vfx=gallery`):
   - biome strips: meadow, road, cave, crypt, frost, ember
   - caster + target dummies; a variant builder (base + element + essences + merge partner through the Registry)

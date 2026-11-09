@@ -1,0 +1,104 @@
+/* Render lane (docs/QUALITY-PLAN.md §1): the game canvas is a low-resolution backbuffer in ART pixels, upscaled by
+   an integer number of device pixels per art pixel. render/config.ts sets its CSS size (art px × k / dpr); these
+   rules keep the upscale crisp (nearest neighbour) and crop the < 1 art px overflow at the right / bottom edge.
+   base.css keeps only `#game canvas { display: block }`. */
+#game {
+  overflow: hidden;
+  background: #16261a;
+}
+
+#game canvas {
+  image-rendering: -webkit-optimize-contrast;
+  image-rendering: crisp-edges;
+  image-rendering: pixelated;
+  -ms-interpolation-mode: nearest-neighbor;
+  max-width: none;
+  max-height: none;
+  touch-action: none;
+}
+
+/* ---------------------------------------------------------------- boot splash (index.html / render/splash.ts) */
+#boot {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 22px;
+  background:
+    radial-gradient(ellipse at 50% 42%, rgba(233, 196, 106, 0.1), rgba(0, 0, 0, 0) 60%),
+    #16120c;
+  color: #f2e6c9;
+  transition: opacity 0.28s ease-out;
+  pointer-events: auto;
+}
+
+#boot.done {
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* The title is 48 × 11 art px: whole multiples only (5×, 6×, 8×) so every pixel is the same size. */
+#boot .boot-title {
+  display: block;
+  image-rendering: pixelated;
+  shape-rendering: crispEdges;
+  width: 240px;
+  height: 55px;
+}
+
+#boot .boot-bar {
+  position: relative;
+  width: 240px;
+  height: 14px;
+  box-sizing: border-box;
+  border: 2px solid #24180f;
+  outline: 2px solid #7a5430;
+  background: #2a1d12;
+  box-shadow: inset 0 2px 0 rgba(0, 0, 0, 0.35);
+}
+
+#boot .boot-bar > i {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 0%;
+  background: linear-gradient(#f4d47a, #e9c46a 50%, #c0923a);
+  box-shadow: inset 0 -2px 0 rgba(122, 90, 34, 0.6);
+  transition: width 0.12s linear;
+}
+
+#boot .boot-note {
+  font: 14px var(--font-ui, monospace);
+  color: #b9a98a;
+  letter-spacing: 0.04em;
+  min-height: 1.2em;
+}
+
+@media (min-width: 340px) {
+  #boot .boot-title,
+  #boot .boot-bar {
+    width: 288px;
+  }
+  #boot .boot-title {
+    height: 66px;
+  }
+}
+
+@media (min-width: 600px) and (min-height: 480px) {
+  #boot .boot-title,
+  #boot .boot-bar {
+    width: 384px;
+  }
+  #boot .boot-title {
+    height: 88px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #boot,
+  #boot .boot-bar > i {
+    transition: none;
+  }
+}

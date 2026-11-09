@@ -1,0 +1,1082 @@
+/* Star Chart + the simple skill card (starchart lane; docs/CLIENT-v3.md §3, docs/UX-SIMPLE.md §3).
+   Every rule is scoped under .sheet.starchart (the full-screen chart: tabs, sky, chips, card, list pages) or
+   .sheet.skcard-sheet (the card on its own sheet: ui.open('skill', id)). Palette: ART-DIRECTION §2 UI frame + text.
+   Imported from src/ui/panels/starchart.ts. */
+
+.sheet.starchart,
+.sheet.skcard-sheet {
+  --sc-ink: #f2e6c9;
+  --sc-mute: #b9a98a;
+  --sc-gold: #e9c46a;
+  --sc-bronze: #b0803a;
+  --sc-bevel: #7a5430;
+  --sc-wood: #4a3220;
+  --sc-dark: #24180f;
+  --sc-night: #05081a;
+  --sc-px: var(--ui-px, 1px);
+  font-family: var(--font-ui);
+  color: var(--sc-ink);
+}
+
+/* ------------------------------------------------------------------ the full-screen sheet */
+
+.modal:has(> .sheet.starchart) {
+  align-items: stretch;
+  justify-content: stretch;
+  background: var(--sc-night, #05081a);
+  animation: none;
+}
+
+.sheet.starchart {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  max-height: none;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  background: var(--sc-night);
+  animation: sc-in 0.22s ease-out;
+  user-select: none;
+  -webkit-user-select: none;
+  overflow: hidden;
+}
+
+.sheet.starchart.stay {
+  animation: none;
+}
+
+@keyframes sc-in {
+  from {
+    opacity: 0;
+  }
+}
+
+.sheet.starchart > header {
+  position: relative;
+  z-index: 5;
+  box-sizing: border-box;
+  min-height: 56px;
+  padding: calc(6px + var(--safe-t)) calc(8px + var(--safe-r)) 6px calc(14px + var(--safe-l));
+  background: linear-gradient(#3a2716, var(--sc-dark));
+  border-bottom: 2px solid var(--sc-bevel);
+  box-shadow:
+    0 2px 0 #120c07,
+    0 8px 20px rgba(0, 0, 0, 0.45);
+}
+
+.sheet.starchart h2 {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 2px 12px;
+  margin: 0;
+  font-size: 20px;
+  font-weight: 400;
+  letter-spacing: 0.02em;
+  color: var(--sc-ink);
+  text-shadow: 1px 1px 0 #120c07;
+}
+
+.sheet.starchart .sc-count {
+  font-size: 13px;
+  color: var(--sc-mute);
+  white-space: nowrap;
+}
+
+.sheet.starchart .sc-count b {
+  color: var(--sc-gold);
+  font-weight: 400;
+}
+
+.sheet.starchart > header .x,
+.sheet.skcard-sheet > header .x {
+  width: 44px;
+  height: 44px;
+  flex: 0 0 44px;
+  border-radius: 6px;
+  background: linear-gradient(#5a3d22, #3a2716);
+  border: 2px solid var(--sc-dark);
+  box-shadow: inset 0 1px 0 rgba(233, 196, 106, 0.35);
+  color: var(--sc-ink);
+  font-size: 16px;
+}
+
+.sheet.starchart .sheet-body {
+  position: static;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  padding: 0;
+  overflow: hidden;
+  touch-action: auto;
+}
+
+/* ------------------------------------------------------------------ tabs */
+
+.sheet.starchart .sc-tabs-row {
+  position: relative;
+  z-index: 4;
+  padding: 6px calc(10px + var(--safe-r)) 6px calc(10px + var(--safe-l));
+  background: #1c130c;
+  border-bottom: 1px solid #120c07;
+}
+
+.sheet.starchart .sc-tabs-row .tabs {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 6px;
+  margin: 0;
+}
+
+.sheet.starchart .sc-tabs-row .tab {
+  flex: 1 1 0;
+  min-width: 0;
+  max-width: 150px;
+  min-height: 44px;
+  padding: 0 10px;
+  border-radius: 6px;
+  border: 2px solid var(--sc-dark);
+  background: linear-gradient(#3a2716, #2a1c12);
+  box-shadow: inset 0 1px 0 rgba(176, 128, 58, 0.35);
+  color: var(--sc-mute);
+  font: 15px var(--font-ui);
+  white-space: nowrap;
+}
+
+.sheet.starchart .sc-tabs-row .tab.on {
+  color: #ffe6a0;
+  background: linear-gradient(#6b4a29, #4a3220);
+  border-color: var(--sc-bronze);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 230, 160, 0.45),
+    0 0 10px rgba(233, 196, 106, 0.2);
+}
+
+/* Wide screens and landscape phones: the tabs sit in the title bar, the sky gets the height. */
+@media (min-width: 700px), (max-height: 500px) {
+  .sheet.starchart .sc-tabs-row {
+    position: absolute;
+    top: calc(6px + var(--safe-t));
+    right: calc(60px + var(--safe-r));
+    z-index: 6;
+    padding: 0;
+    background: none;
+    border: 0;
+  }
+
+  .sheet.starchart .sc-tabs-row .tab {
+    flex: 0 0 auto;
+    min-width: 78px;
+    max-width: none;
+  }
+
+  .sheet.starchart h2 {
+    max-width: calc(100% - 420px);
+  }
+}
+
+@media (max-height: 500px) and (max-width: 760px) {
+  .sheet.starchart .sc-tabs-row .tab {
+    min-width: 64px;
+    padding: 0 8px;
+    font-size: 14px;
+  }
+
+  .sheet.starchart h2 {
+    max-width: calc(100% - 340px);
+    font-size: 18px;
+  }
+}
+
+/* ------------------------------------------------------------------ the sky stage */
+
+.sheet.starchart .sc-stage {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--sc-night);
+}
+
+.sheet.starchart .sc-sky {
+  position: absolute;
+  inset: 0;
+}
+
+.sheet.starchart .sc-canvas {
+  display: block;
+  touch-action: none;
+  cursor: grab;
+}
+
+.sheet.starchart .sc-canvas:active {
+  cursor: grabbing;
+}
+
+.sheet.starchart .sc-chips {
+  position: absolute;
+  z-index: 2;
+  top: 8px;
+  left: 0;
+  right: 0;
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding: 0 calc(10px + var(--safe-r)) 4px calc(10px + var(--safe-l));
+  scrollbar-width: none;
+  pointer-events: none;
+  -webkit-overflow-scrolling: touch;
+}
+
+.sheet.starchart .sc-chips::-webkit-scrollbar {
+  display: none;
+}
+
+.sheet.starchart .sc-chip {
+  pointer-events: auto;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 0 14px 0 12px;
+  border-radius: 22px;
+  border: 1px solid color-mix(in srgb, var(--t) 50%, transparent);
+  background: rgba(8, 11, 28, 0.78);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35);
+  color: #e9eefb;
+  font: 14px var(--font-ui);
+  white-space: nowrap;
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+}
+
+.sheet.starchart .sc-chip:active {
+  transform: scale(0.96);
+}
+
+.sheet.starchart .sc-chip .sc-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--t);
+  box-shadow: 0 0 8px var(--t);
+}
+
+.sheet.starchart .sc-chip.dim {
+  color: #8e97b8;
+  border-color: rgba(142, 151, 184, 0.3);
+}
+
+.sheet.starchart .sc-chip.dim .sc-dot {
+  opacity: 0.4;
+  box-shadow: none;
+}
+
+.sheet.starchart .sc-ready {
+  font-style: normal;
+  font-size: 13px;
+  margin-left: -2px;
+}
+
+.sheet.starchart .sc-zoom {
+  position: absolute;
+  z-index: 2;
+  right: calc(12px + var(--safe-r));
+  bottom: calc(14px + var(--safe-b));
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sheet.starchart .sc-zoom button {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  border: 1px solid rgba(233, 196, 106, 0.45);
+  background: rgba(8, 11, 28, 0.78);
+  color: var(--sc-ink);
+  font: 24px/1 var(--font-ui);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35);
+}
+
+.sheet.starchart .sc-zoom button:active {
+  transform: scale(0.94);
+}
+
+.sheet.starchart .sc-hint {
+  position: absolute;
+  z-index: 2;
+  left: 50%;
+  bottom: calc(18px + var(--safe-b));
+  max-width: calc(100% - 140px);
+  margin: 0;
+  padding: 8px 14px;
+  transform: translateX(-50%);
+  border-radius: 18px;
+  background: rgba(8, 11, 28, 0.82);
+  border: 1px solid rgba(233, 196, 106, 0.35);
+  color: var(--sc-ink);
+  font-size: 13px;
+  text-align: center;
+  pointer-events: none;
+  animation: sc-hint 8s ease forwards;
+}
+
+@keyframes sc-hint {
+  0%,
+  80% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    visibility: hidden;
+  }
+}
+
+/* The card over the sky: a bottom sheet on phones in portrait, docked right on wide screens / landscape. */
+.sheet.starchart .sc-card-wrap {
+  position: absolute;
+  z-index: 3;
+  left: calc(8px + var(--safe-l));
+  right: calc(8px + var(--safe-r));
+  bottom: calc(8px + var(--safe-b));
+  max-height: min(64%, 480px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  animation: sc-up 0.2s ease-out;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+@keyframes sc-up {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+}
+
+.sheet.starchart .sc-stage.has-card .sc-zoom,
+.sheet.starchart .sc-stage.has-card .sc-hint {
+  display: none;
+}
+
+@media (min-width: 700px), (max-height: 500px) and (min-aspect-ratio: 4/3) {
+  .sheet.starchart .sc-stage .sc-card-wrap {
+    left: auto;
+    top: 62px;
+    bottom: auto;
+    width: min(380px, 46%);
+    max-height: calc(100% - 70px);
+  }
+
+  .sheet.starchart .sc-stage.has-card .sc-chips {
+    right: calc(min(380px, 46%) + 10px);
+  }
+
+  @keyframes sc-up {
+    from {
+      opacity: 0;
+      transform: translateX(16px);
+    }
+  }
+}
+
+/* ------------------------------------------------------------------ the simple card */
+
+.sheet.starchart .sc-card,
+.sheet.skcard-sheet .sc-card {
+  position: relative;
+  box-sizing: border-box;
+  padding: 12px 14px 12px;
+  border: 2px solid var(--sc-bevel);
+  border-radius: 8px;
+  background: linear-gradient(rgba(46, 31, 19, 0.97), rgba(28, 20, 14, 0.97));
+  box-shadow:
+    0 0 0 2px #120c07,
+    inset 0 1px 0 rgba(233, 196, 106, 0.25),
+    0 12px 32px rgba(0, 0, 0, 0.6);
+  color: var(--sc-ink);
+}
+
+.sheet.starchart .sc-card.ready {
+  border-color: var(--sc-gold);
+}
+
+.sc-card .sc-back {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0 12px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.22);
+  color: var(--sc-gold);
+  font: 15px var(--font-ui);
+}
+
+.sc-card .skill-head {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-height: 80px;
+  padding-right: 76px;
+}
+
+.sheet.skcard-sheet .sc-card .skill-head {
+  padding-right: 0;
+}
+
+.sc-card .sc-ico {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 76px;
+  height: 76px;
+  flex: 0 0 76px;
+  border-radius: 10px;
+  background: radial-gradient(circle at 50% 40%, rgba(255, 255, 255, 0.1), rgba(0, 0, 0, 0.45));
+  border: 2px solid var(--sc-bevel);
+  box-shadow:
+    inset 0 0 0 2px #120c07,
+    0 0 0 1px #120c07;
+}
+
+.sc-card .sc-ico img {
+  width: 64px;
+  height: 64px;
+  image-rendering: pixelated;
+}
+
+.sc-card .sc-ico.mastered {
+  border-color: var(--sc-gold);
+  box-shadow:
+    inset 0 0 0 2px #120c07,
+    0 0 14px rgba(233, 196, 106, 0.45);
+}
+
+.sc-card .sc-ico.ready {
+  border-color: var(--sc-gold);
+  animation: sc-glow 1.2s ease-in-out infinite alternate;
+}
+
+@keyframes sc-glow {
+  from {
+    box-shadow:
+      inset 0 0 0 2px #120c07,
+      0 0 6px rgba(233, 196, 106, 0.35);
+  }
+  to {
+    box-shadow:
+      inset 0 0 0 2px #120c07,
+      0 0 20px rgba(233, 196, 106, 0.85);
+  }
+}
+
+.sc-card .sc-spark,
+.sheet.starchart .sc-tile .sc-spark {
+  position: absolute;
+  top: -10px;
+  right: -10px;
+  font-size: 18px;
+  font-style: normal;
+  animation: sc-twinkle 1.2s ease-in-out infinite alternate;
+}
+
+@keyframes sc-twinkle {
+  from {
+    transform: scale(0.85);
+    opacity: 0.7;
+  }
+  to {
+    transform: scale(1.1);
+    opacity: 1;
+  }
+}
+
+.sc-card .sc-q {
+  font: 44px/1 var(--font-ui);
+  color: #9aa6c6;
+}
+
+.sc-card.whisper .sc-q {
+  color: #ff9fe0;
+}
+
+.sc-card .skill-head.locked .sc-ico img {
+  filter: grayscale(0.7) brightness(0.7);
+}
+
+.sc-card .sc-id {
+  min-width: 0;
+}
+
+.sc-card .sc-id .nm {
+  margin: 0;
+  font: 21px/1.15 var(--font-ui);
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--sc-ink);
+  overflow-wrap: anywhere;
+}
+
+.sc-card .sc-stars {
+  margin-top: 4px;
+  color: var(--sc-gold);
+  font-size: 18px;
+  letter-spacing: 2px;
+  line-height: 1.1;
+}
+
+.sc-card .sc-stars.gold {
+  text-shadow: 0 0 8px rgba(233, 196, 106, 0.65);
+}
+
+.sc-card .sc-bar {
+  max-width: 190px;
+  height: 6px;
+  margin-top: 6px;
+  border: 1px solid var(--sc-wood);
+  border-radius: 3px;
+  background: #120c07;
+  overflow: hidden;
+}
+
+.sc-card .sc-bar i {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, #5a9df0, #a8d4ff);
+}
+
+.sc-card .sc-bar.over i {
+  background: linear-gradient(90deg, #c9a03a, #fff0b3);
+}
+
+.sc-card .sc-tag {
+  margin-top: 4px;
+  color: var(--sc-mute);
+  font-size: 14px;
+}
+
+.sc-card .sc-line {
+  margin: 12px 0 6px;
+  font-size: 16px;
+  line-height: 1.35;
+  color: var(--sc-ink);
+}
+
+.sc-card .sc-meta {
+  display: flex;
+  gap: 18px;
+  margin: 0 0 10px;
+  color: var(--sc-mute);
+  font-size: 15px;
+}
+
+.sc-card .sc-meta b {
+  color: var(--sc-gold);
+  font-weight: 400;
+}
+
+.sc-card .sc-meta b.sp {
+  color: #6fa8ff;
+}
+
+.sc-card .sc-act {
+  margin: 8px 0 2px;
+}
+
+.sc-card .sc-primary {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-height: 54px;
+  border: 2px solid var(--sc-dark);
+  border-radius: 8px;
+  background: linear-gradient(#fff6dc, #f2e6c9 55%, #d8c39a);
+  box-shadow:
+    inset 0 2px 0 rgba(255, 255, 255, 0.6),
+    0 3px 0 #120c07;
+  color: #24180f;
+  font: 22px/1.1 var(--font-ui);
+}
+
+.sc-card .sc-primary small {
+  font-size: 13px;
+  opacity: 0.8;
+}
+
+.sc-card .sc-primary.gold {
+  background: linear-gradient(#ffe9a8, var(--sc-gold) 55%, var(--sc-bronze));
+  animation: sc-pulse 1.3s ease-in-out infinite alternate;
+}
+
+@keyframes sc-pulse {
+  from {
+    box-shadow:
+      inset 0 2px 0 rgba(255, 255, 255, 0.6),
+      0 3px 0 #120c07,
+      0 0 4px rgba(233, 196, 106, 0.3);
+  }
+  to {
+    box-shadow:
+      inset 0 2px 0 rgba(255, 255, 255, 0.6),
+      0 3px 0 #120c07,
+      0 0 22px rgba(233, 196, 106, 0.85);
+  }
+}
+
+.sc-card .sc-primary:active {
+  transform: translateY(2px);
+  box-shadow:
+    inset 0 2px 0 rgba(255, 255, 255, 0.4),
+    0 1px 0 #120c07;
+}
+
+.sc-card .sc-done {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 52px;
+  border: 2px solid rgba(143, 227, 136, 0.45);
+  border-radius: 8px;
+  background: rgba(143, 227, 136, 0.07);
+  color: #a8f0a0;
+  font-size: 20px;
+}
+
+.sc-card .sc-done small {
+  color: var(--sc-mute);
+  font-size: 13px;
+}
+
+.sc-card .sc-done.cls {
+  border-color: rgba(233, 196, 106, 0.5);
+  background: rgba(233, 196, 106, 0.07);
+  color: #ffe6a0;
+}
+
+.sc-card .sc-step {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 52px;
+  padding: 4px 6px 4px 12px;
+  border: 1px solid var(--sc-wood);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.28);
+  font-size: 16px;
+  line-height: 1.3;
+  color: var(--sc-ink);
+}
+
+.sc-card .sc-step > span:nth-child(2) {
+  flex: 1;
+  padding: 6px 0;
+}
+
+.sc-card .sc-arrow {
+  color: var(--sc-gold);
+}
+
+.sc-card .sc-more {
+  flex: 0 0 44px;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  border: 1px solid var(--sc-bevel);
+  background: rgba(74, 50, 32, 0.6);
+  color: var(--sc-gold);
+  font: 18px var(--font-ui);
+}
+
+.sc-card .sc-more.open {
+  background: var(--sc-bevel);
+  color: #1c130c;
+}
+
+.sc-card .sc-rest {
+  margin: 8px 0 0;
+  padding: 0 0 0 28px;
+  color: var(--sc-mute);
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.sc-card .sc-next {
+  margin: 8px 0 0;
+  color: var(--sc-mute);
+  font-size: 14px;
+  text-align: center;
+}
+
+.sc-card .sc-details {
+  margin-top: 10px;
+  border-top: 1px solid rgba(122, 84, 48, 0.55);
+}
+
+.sc-card .sc-details summary {
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  color: var(--sc-mute);
+  font-size: 15px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.sc-card .sc-details summary::-webkit-details-marker {
+  display: none;
+}
+
+.sc-card .sc-details summary::before {
+  content: '▸';
+  width: 18px;
+  color: var(--sc-bronze);
+}
+
+.sc-card .sc-details[open] summary::before {
+  content: '▾';
+}
+
+.sc-card .sc-details dl {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 5px 14px;
+  margin: 0 0 10px;
+  font-size: 14px;
+}
+
+.sc-card .sc-details dt {
+  color: var(--sc-mute);
+}
+
+.sc-card .sc-details dd {
+  margin: 0;
+  color: var(--sc-ink);
+}
+
+.sc-card .sc-forms {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+  color: var(--sc-mute);
+  font-size: 14px;
+}
+
+.sc-card .sc-forms > span {
+  width: 100%;
+}
+
+.sc-card .sc-form {
+  min-height: 44px;
+  padding: 0 14px;
+  border-radius: 22px;
+  border: 1px solid var(--sc-wood);
+  background: rgba(0, 0, 0, 0.3);
+  color: var(--sc-mute);
+  font: 14px var(--font-ui);
+}
+
+.sc-card .sc-form.known {
+  border-color: var(--sc-bronze);
+  color: var(--sc-ink);
+}
+
+.sc-card .sc-link {
+  width: 100%;
+  min-height: 44px;
+  margin-top: 10px;
+  border: 1px solid rgba(121, 226, 255, 0.35);
+  border-radius: 8px;
+  background: rgba(8, 11, 28, 0.5);
+  color: #9fe9ff;
+  font: 15px var(--font-ui);
+}
+
+/* ------------------------------------------------------------------ List / Passives / Essences pages */
+
+.sheet.starchart .sc-page {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  background:
+    radial-gradient(ellipse at 50% -10%, rgba(121, 160, 255, 0.16), transparent 60%),
+    linear-gradient(#0a1030, var(--sc-night));
+}
+
+.sheet.starchart .sc-scroll {
+  position: absolute;
+  inset: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  padding: 6px calc(12px + var(--safe-r)) calc(28px + var(--safe-b)) calc(12px + var(--safe-l));
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.sheet.starchart .sc-inner {
+  max-width: 860px;
+  margin: 0 auto;
+}
+
+.sheet.starchart .sc-group h3 {
+  margin: 16px 2px 8px;
+  color: var(--sc-gold);
+  font: 15px var(--font-ui);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.sheet.starchart .sc-group h3 small {
+  margin-left: 6px;
+  color: var(--sc-mute);
+  font-size: 14px;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.sheet.starchart .sc-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(104px, 1fr));
+  gap: 8px;
+}
+
+.sheet.starchart .skill-card.sc-tile {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  min-height: 132px;
+  padding: 10px 4px 8px;
+  border: 2px solid var(--sc-wood);
+  border-radius: 8px;
+  background: linear-gradient(rgba(46, 31, 19, 0.92), rgba(28, 20, 14, 0.92));
+  box-shadow:
+    0 0 0 1px #120c07,
+    inset 0 1px 0 rgba(176, 128, 58, 0.3);
+  text-align: center;
+  color: var(--sc-ink);
+  animation: none;
+}
+
+.sheet.starchart .sc-tile:active {
+  transform: scale(0.97);
+}
+
+.sheet.starchart .sc-tile.mastered {
+  border-color: var(--sc-bronze);
+}
+
+.sheet.starchart .sc-tile.ready {
+  border-color: var(--sc-gold);
+  box-shadow:
+    0 0 0 1px #120c07,
+    0 0 14px rgba(233, 196, 106, 0.4);
+}
+
+.sheet.starchart .sc-tile.sel {
+  border-color: var(--sc-ink);
+}
+
+.sheet.starchart .sc-tico {
+  position: relative;
+  width: 64px;
+  height: 64px;
+  display: grid;
+  place-items: center;
+  font-size: 34px;
+}
+
+.sheet.starchart .sc-tico img {
+  width: 64px;
+  height: 64px;
+  image-rendering: pixelated;
+}
+
+.sheet.starchart .sc-tile .sc-spark {
+  top: -8px;
+  right: -14px;
+}
+
+.sheet.starchart .sc-new {
+  position: absolute;
+  top: -6px;
+  right: -18px;
+  padding: 1px 4px;
+  border-radius: 2px;
+  background: var(--sc-gold);
+  box-shadow: 0 0 0 1px #120c07;
+  color: var(--sc-dark);
+  font: 10px var(--font-small);
+  font-style: normal;
+}
+
+.sheet.starchart .sc-tname {
+  font-size: 14px;
+  line-height: 1.15;
+  color: var(--sc-ink);
+  overflow-wrap: anywhere;
+}
+
+.sheet.starchart .sc-tstars {
+  max-width: 100%;
+  color: var(--sc-gold);
+  font-size: 9px;
+  letter-spacing: 0;
+  line-height: 1.2;
+  opacity: 0.85;
+  white-space: nowrap;
+}
+
+.sheet.starchart .sc-tstars.gold {
+  opacity: 1;
+  text-shadow: 0 0 6px rgba(233, 196, 106, 0.6);
+}
+
+.sheet.starchart .sc-tnote {
+  color: var(--sc-mute);
+  font-size: 12px;
+}
+
+.sheet.starchart .sc-lead {
+  margin: 10px 2px 2px;
+  color: var(--sc-mute);
+  font-size: 15px;
+  line-height: 1.4;
+}
+
+.sheet.starchart .sc-prow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--sc-wood);
+  border-radius: 8px;
+  background: rgba(28, 20, 14, 0.8);
+}
+
+.sheet.starchart .sc-prow.dim {
+  opacity: 0.6;
+}
+
+.sheet.starchart .sc-pico {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  flex: 0 0 40px;
+  font-size: 24px;
+}
+
+.sheet.starchart .sc-pico img {
+  width: 32px;
+  height: 32px;
+  image-rendering: pixelated;
+}
+
+.sheet.starchart .sc-count-b {
+  position: absolute;
+  right: -6px;
+  bottom: -4px;
+  padding: 0 3px;
+  border-radius: 2px;
+  background: var(--sc-dark);
+  color: var(--sc-ink);
+  font: 11px var(--font-small);
+  font-style: normal;
+}
+
+.sheet.starchart .sc-ptext {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.sheet.starchart .sc-ptext b {
+  color: var(--sc-ink);
+  font-size: 16px;
+  font-weight: 400;
+}
+
+.sheet.starchart .sc-ptext small {
+  color: var(--sc-mute);
+  font-size: 14px;
+  line-height: 1.3;
+}
+
+.sheet.starchart .sc-ptext .sc-tstars {
+  font-size: 13px;
+}
+
+.sheet.starchart .sc-none,
+.sheet.starchart .sc-empty {
+  margin: 20px 8px;
+  color: var(--sc-mute);
+  font-size: 15px;
+  text-align: center;
+}
+
+.sheet.starchart .sc-scrim {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  background: rgba(2, 3, 10, 0.6);
+  animation: sc-in 0.15s ease-out;
+}
+
+.sheet.starchart .sc-page .sc-card-wrap {
+  z-index: 3;
+}
+
+@media (min-width: 700px), (max-height: 500px) and (min-aspect-ratio: 4/3) {
+  .sheet.starchart .sc-page .sc-card-wrap {
+    left: auto;
+    top: 10px;
+    bottom: auto;
+    width: min(400px, 48%);
+    max-height: calc(100% - 20px);
+  }
+}
+
+/* ------------------------------------------------------------------ the card on its own sheet ('skill') */
+
+.sheet.skcard-sheet {
+  width: min(440px, 100%);
+  border-color: var(--sc-bevel);
+  background: linear-gradient(#2e1f13, #1c130c);
+}
+
+.sheet.skcard-sheet > header {
+  border-bottom-color: rgba(122, 84, 48, 0.5);
+}
+
+.sheet.skcard-sheet h2 {
+  color: var(--sc-mute);
+  font: 15px var(--font-ui);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.sheet.skcard-sheet .sc-card {
+  padding: 4px 2px 6px;
+  border: 0;
+  background: none;
+  box-shadow: none;
+}

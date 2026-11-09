@@ -10,6 +10,8 @@
 //   fully deterministic.
 // - Frame 0 of every idle keeps the legacy key ('player_sword', 'npc_blacksmith', ...).
 import type Phaser from 'phaser';
+import type { ClassOutfit, Emblem } from './classLooks';
+import { OUTFIT_DEFAULTS } from './classLooks';
 import { PAL, outline, pixelTex, px, rect, shade, type Ctx } from './pixel';
 
 export const CHAR_W = 40;
@@ -136,7 +138,27 @@ function layer(dst: Ctx, draw: (c: Ctx) => void, outlined = true): void {
 // ---------------------------------------------------------------- looks
 
 type HairStyle = 'tousled' | 'spiky' | 'long' | 'bun' | 'pony' | 'bald' | 'braid' | 'tuft' | 'crop';
-type Hat = 'wizard' | 'hood' | 'veil' | 'cowl' | 'straw' | 'shako' | 'cap' | 'miner' | 'feather' | 'goggles' | 'circlet' | 'bandana';
+type Hat =
+  | 'wizard'
+  | 'hood'
+  | 'veil'
+  | 'cowl'
+  | 'straw'
+  | 'shako'
+  | 'cap'
+  | 'miner'
+  | 'feather'
+  | 'goggles'
+  | 'circlet'
+  | 'bandana'
+  // class headgear (art/classLooks.ts)
+  | 'widehat'
+  | 'tallhat'
+  | 'helm'
+  | 'winghelm'
+  | 'crown'
+  | 'horns'
+  | 'antlers';
 type Prop =
   | 'sword'
   | 'dagger'
@@ -197,6 +219,21 @@ interface Look {
   eye?: string;
   /** Broad shoulders (smith, drillmaster). */
   broad?: boolean;
+  // ---- class outfits (art/classLooks.ts)
+  /** Plate armour: breastplate ridge and bands, steel greaves (legs) and fauld. */
+  plate?: boolean;
+  /** Leather jerkin: stitched edge and studs in this colour. */
+  studs?: string;
+  /** Shoulder piece style (colour: `pauldron`). Default 'plate'. */
+  shoulder?: 'pad' | 'plate' | 'spiked' | 'fur' | 'crystal';
+  /** Chest emblem shape (colour: `emblem`); default is the small cross. */
+  emblemShape?: Emblem;
+  /** Helm plume colour. */
+  plume?: string;
+  /** Gem / glow on headgear (circlet stone, crown jewels, helm brow, horn tips, antler glints). */
+  hatGem?: string;
+  /** Cape lining (inner edge) colour. */
+  capeLining?: string;
 }
 
 // ---------------------------------------------------------------- poses
@@ -758,8 +795,17 @@ function paintHat(c: Ctx, R: Rig): void {
     }
     case 'circlet': {
       rect(c, hx + 4, hy + 6, 12, 1, trim);
-      px(c, hx + 11, hy + 5, '#bffcff');
-      px(c, hx + 11, hy + 6, t % 2 ? '#ffffff' : '#7ff0ff');
+      if (L.hatGem) {
+        // class circlet: a set stone with a glint on the breath frame
+        const g = ramp(L.hatGem);
+        rect(c, hx + 10, hy + 5, 3, 2, g[2]);
+        px(c, hx + 11, hy + 4, g[3]);
+        px(c, hx + 10, hy + 5, t % 2 ? '#ffffff' : g[3]);
+        px(c, hx + 12, hy + 6, g[1]);
+      } else {
+        px(c, hx + 11, hy + 5, '#bffcff');
+        px(c, hx + 11, hy + 6, t % 2 ? '#ffffff' : '#7ff0ff');
+      }
       break;
     }
     case 'bandana': {
@@ -767,6 +813,142 @@ function paintHat(c: Ctx, R: Rig): void {
       rect(c, hx + 2, hy + 4, 14, 1, h[3]);
       const f = t % 2;
       tpl(c, hx - 2, hy + 5 + f, ['hhh', '.hH', '..H'], { h: h[2], H: h[1] });
+      break;
+    }
+    case 'widehat': {
+      // Traveller's hat: low rounded crown, coloured band, wide brim dipping a little at the front.
+      trap(c, hy, hy + 2, hx + 6, hx + 11, hx + 4, hx + 13, h[2]);
+      rect(c, hx + 4, hy + 3, 10, 3, h[2]);
+      rect(c, hx + 11, hy + 1, 3, 5, h[1]);
+      rect(c, hx + 5, hy + 1, 2, 2, h[3]);
+      px(c, hx + 8, hy, h[1]); // crown dent
+      rect(c, hx + 4, hy + 4, 10, 2, trim);
+      rect(c, hx + 4, hy + 4, 3, 1, shade(trim, 30));
+      rect(c, hx - 3, hy + 6, 23, 1, h[2]);
+      rect(c, hx - 2, hy + 6, 7, 1, h[3]);
+      rect(c, hx - 4, hy + 7, 24, 1, h[1]);
+      rect(c, hx + 14, hy + 8, 6, 1, h[0]);
+      break;
+    }
+    case 'tallhat': {
+      // Showman's top hat with a bright band, tilted back a touch.
+      rect(c, hx + 5, hy - 6, 9, 1, h[1]);
+      rect(c, hx + 4, hy - 5, 10, 10, h[2]);
+      rect(c, hx + 5, hy - 5, 1, 9, h[3]);
+      rect(c, hx + 12, hy - 5, 2, 10, h[1]);
+      rect(c, hx + 4, hy + 1, 10, 3, trim);
+      rect(c, hx + 4, hy + 1, 10, 1, shade(trim, 34));
+      rect(c, hx + 12, hy + 2, 2, 2, shade(trim, -30));
+      rect(c, hx + 2, hy + 5, 14, 1, h[2]);
+      rect(c, hx + 1, hy + 6, 17, 1, h[1]);
+      rect(c, hx + 3, hy + 5, 3, 1, h[3]);
+      // a playing card tucked in the band
+      rect(c, hx + 6, hy - 1, 2, 3, PAL.cream);
+      px(c, hx + 6, hy, PAL.crimson);
+      break;
+    }
+    case 'helm':
+    case 'winghelm': {
+      // Open-faced helm: dome, brow band, neck guard at the back; a crest plume or wings.
+      if (L.hat === 'helm' && L.plume) {
+        const p = ramp(L.plume);
+        const sw = t % 2;
+        rect(c, hx + 6, hy - 2, 6, 1, p[2]);
+        rect(c, hx + 4, hy - 1, 9, 1, p[2]);
+        rect(c, hx + 6, hy - 1, 3, 1, p[3]);
+        rect(c, hx + 2, hy, 11, 1, p[2]);
+        rect(c, hx + 2, hy, 3, 1, p[1]);
+        rect(c, hx + 1 - sw, hy + 1, 3, 1, p[1]);
+        rect(c, hx - sw, hy + 2, 3, 1, p[1]);
+        rect(c, hx - sw, hy + 3, 2, 1, p[0]);
+        px(c, hx - sw, hy + 4, p[0]);
+      }
+      if (L.hat === 'winghelm') {
+        // one wing sweeping back from the temple, the far wing's tip over the brow
+        const w = ['#fbf8ee', '#d2d6e2', '#9aa2b8'];
+        const f = t % 2;
+        tpl(c, hx - 4, hy - 3 + f, ['w.......', 'ww......', 'wwW.....', '.wwWw...', '.wwwWWw.', '..wwWWW.', '...wwWW.', '....wW..'], { w: w[0], W: w[1] });
+        tpl(c, hx + 13, hy - 1 + f, ['..w', '.wW', 'wWW'], { w: w[0], W: w[2] });
+      }
+      trap(c, hy + 1, hy + 3, hx + 5, hx + 11, hx + 2, hx + 14, h[2]);
+      rect(c, hx + 1, hy + 4, 16, 3, h[2]);
+      rect(c, hx + 13, hy + 2, 2, 5, h[1]);
+      rect(c, hx + 15, hy + 4, 2, 3, h[1]);
+      rect(c, hx + 5, hy + 2, 3, 1, h[3]);
+      rect(c, hx + 3, hy + 3, 2, 2, h[3]);
+      px(c, hx + 8, hy + 1, h[3]);
+      rect(c, hx + 1, hy + 7, 16, 1, trim);
+      rect(c, hx + 1, hy + 7, 4, 1, shade(trim, 30));
+      rect(c, hx + 13, hy + 8, 4, 1, h[0]);
+      // neck guard
+      rect(c, hx + 1, hy + 8, 4, 4, h[1]);
+      rect(c, hx + 1, hy + 12, 4, 1, h[0]);
+      px(c, hx + 2, hy + 9, h[3]);
+      // rivets
+      px(c, hx + 6, hy + 5, h[1]);
+      px(c, hx + 10, hy + 5, h[1]);
+      if (L.hatGem) {
+        px(c, hx + 14, hy + 6, L.hatGem);
+        px(c, hx + 14, hy + 7, t % 2 ? '#ffffff' : shade(L.hatGem, 40));
+      }
+      break;
+    }
+    case 'crown': {
+      const g = ramp(base);
+      for (const cx of [hx + 4, hx + 9, hx + 14]) {
+        px(c, cx, hy, L.hatGem ?? g[3]);
+        rect(c, cx - 1, hy + 1, 3, 3, g[2]);
+        px(c, cx + 1, hy + 2, g[1]);
+        px(c, cx - 1, hy + 1, g[3]);
+      }
+      rect(c, hx + 3, hy + 4, 13, 2, g[2]);
+      rect(c, hx + 3, hy + 4, 5, 1, g[3]);
+      rect(c, hx + 13, hy + 4, 3, 2, g[1]);
+      rect(c, hx + 3, hy + 6, 13, 1, g[0]);
+      if (L.hatGem) {
+        rect(c, hx + 8, hy + 4, 2, 2, L.hatGem);
+        px(c, hx + 8, hy + 4, t % 2 ? '#ffffff' : shade(L.hatGem, 40));
+        px(c, hx + 4, hy + 5, L.hatGem);
+        px(c, hx + 13, hy + 5, shade(L.hatGem, -30));
+      }
+      break;
+    }
+    case 'horns': {
+      // Curled horns on top of the head; the far horn is darker. Tips in the accent colour.
+      // Thick at the root, tapering as they sweep up and out; ridged; tips in the accent colour.
+      const tip = L.hatGem ?? h[3];
+      cap(c, hx + 5, hy + 5, hx + 4, hy + 2, 1.6, h[1]);
+      cap(c, hx + 4, hy + 2, hx + 2, hy, 1.1, h[1]);
+      cap(c, hx + 2, hy, hx + 1, hy - 2, 0.6, h[1]);
+      rect(c, hx, hy - 3, 2, 2, tip);
+      px(c, hx + 3, hy + 2, h[0]);
+      cap(c, hx + 11, hy + 4, hx + 12, hy + 1, 1.7, h[2]);
+      cap(c, hx + 12, hy + 1, hx + 14, hy - 1, 1.1, h[2]);
+      cap(c, hx + 14, hy - 1, hx + 16, hy - 2, 0.6, h[2]);
+      rect(c, hx + 16, hy - 4, 2, 2, tip);
+      px(c, hx + 16, hy - 4, shade(tip, 40));
+      px(c, hx + 11, hy + 3, h[3]);
+      px(c, hx + 11, hy + 1, h[3]);
+      px(c, hx + 13, hy - 1, h[3]);
+      rect(c, hx + 12, hy + 2, 2, 1, h[1]);
+      px(c, hx + 14, hy, h[1]);
+      break;
+    }
+    case 'antlers': {
+      // Branching antlers over a thin band; glints of moonlight at two tines.
+      const a = ramp(base);
+      for (const [x0, x1, col] of [[hx + 5, hx + 3, a[1]], [hx + 11, hx + 13, a[2]]] as const) {
+        const d = x1 > x0 ? 1 : -1;
+        cap(c, x0, hy + 4, x1, hy - 3, 0.6, col);
+        cap(c, x0 + d, hy + 1, x0 + 4 * d, hy - 1, 0.5, col);
+        cap(c, x1, hy - 3, x1 + 2 * d, hy - 6, 0.5, col);
+        cap(c, x1, hy - 3, x1 - 2 * d, hy - 6, 0.5, col);
+      }
+      px(c, hx + 12, hy - 1, a[3]);
+      rect(c, hx + 4, hy + 6, 12, 1, trim);
+      const g = L.hatGem ?? '#bfe8ff';
+      px(c, hx + 15, hy - 6, t % 2 ? '#ffffff' : g);
+      px(c, hx + 1, hy - 6, g);
       break;
     }
   }
@@ -785,6 +967,11 @@ function paintBack(c: Ctx, R: Rig): void {
     trap(c, ty0 + 1, bottom, tx0 + 1, tx0 + 6, tx0 - 2 - flow, tx0 + 5, cp[1]);
     trap(c, ty0 + 1, bottom - 1, tx0 + 1, tx0 + 3, tx0 - 1 - flow, tx0 + 1, cp[2]);
     rect(c, tx0 - 2 - flow, bottom, 3, 1, cp[0]);
+    if (L.capeLining) {
+      // the lining shows along the fluttering edge and the hem
+      trap(c, ty0 + 3, bottom - 1, tx0, tx0, tx0 - 2 - flow, tx0 - 2 - flow, L.capeLining);
+      rect(c, tx0 - 1 - flow, bottom, 3, 1, shade(L.capeLining, -40));
+    }
   }
   if (L.scarf) {
     const s = ramp(L.scarf);
@@ -848,6 +1035,13 @@ function paintLeg(c: Ctx, R: Rig, front: boolean): void {
   rect(c, ax + 3, ay + 1, 1, 2, front ? bt[2] : bt[1]);
   rect(c, ax - 1, ay, 3, 1, front ? bt[3] : bt[2]);
   rect(c, ax - 1, ay + 2, 5, 1, bt[0]);
+  if (L.plate && !L.robe) {
+    // greave: knee cop and a lit shin line
+    const kx = Math.round((hip[0] + ank[0]) / 2);
+    const ky = Math.round((hip[1] + ank[1]) / 2);
+    rect(c, kx - 1, ky, 2, 1, front ? lg[3] : lg[2]);
+    if (front) px(c, kx - 1, ky + 2, lg[3]);
+  }
 }
 
 function paintTorso(c: Ctx, R: Rig): void {
@@ -886,6 +1080,21 @@ function paintTorso(c: Ctx, R: Rig): void {
       rect(c, tx0 + 5, ty0 + 1, 1, ty1 - ty0 - 1, L.trim);
     }
   }
+  if (L.plate) {
+    // breastplate: lit ridge, a band under the chest, and a fauld of plates over the hips
+    rect(c, tx0 + 1, ty0 + 2, 1, 4, tp[3]);
+    px(c, tx0 + 2, ty0 + 2, tp[3]);
+    rect(c, tx0 + 6, ty0 + 2, 1, 4, tp[3]);
+    rect(c, tx0, ty0 + 6, w, 1, tp[1]);
+    rect(c, tx0 + 1, ty0 + 7, w - 3, 1, tp[3]);
+    if (!L.robe) for (let x = tx0; x <= tx1 + 1; x += 3) rect(c, x, ty1 - 1, 1, 2, tp[0]);
+  }
+  if (L.studs) {
+    // stitched front edge and two studs
+    for (let y = ty0 + 2; y < ty1 - 3; y += 2) px(c, tx1 - 2, y, shade(L.top, 34));
+    px(c, tx0 + 1, ty0 + 3, L.studs);
+    px(c, tx0 + 1, ty0 + 6, L.studs);
+  }
   // collar / neck shadow
   rect(c, tx0 + 3, ty0, w - 5, 1, tp[0]);
   if (L.trim) rect(c, tx0 + 3, ty0 + 1, w - 5, 1, L.trim);
@@ -918,7 +1127,7 @@ function paintTorso(c: Ctx, R: Rig): void {
     // pouch
     rect(c, tx0 + 1, by + 2, 3, 2, shade(L.belt, -10));
   }
-  if (L.emblem) {
+  if (L.emblem && !L.emblemShape) {
     const ex = tx0 + 5;
     const ey = ty0 + 4;
     px(c, ex, ey, L.emblem);
@@ -947,7 +1156,45 @@ function paintTorso(c: Ctx, R: Rig): void {
     rect(c, tx0 + 1, ty0 + 1, 2, ty1 - ty0 - 3, st);
     px(c, tx0 + 1, ty0 + 5, GOLD[1]);
   }
+  if (L.shoulder === 'fur' && L.pauldron) {
+    // fur ruff around the neck and both shoulders
+    const f = ramp(L.pauldron);
+    for (let x = tx0 - 1; x <= tx1 + 1; x++) {
+      const up = (x + R.P.t) % 2;
+      rect(c, x, ty0 - 1 + up, 1, 3 - up, x > tx1 - 2 ? f[1] : f[2]);
+      if (!up && x < tx1 - 1) px(c, x, ty0 - 1, f[3]);
+    }
+  }
+  if (L.emblem && L.emblemShape) paintEmblem(c, L.emblemShape, L.emblem, tx0 + 3, ty0 + 2);
+}
 
+/** 5x5 chest emblems: e = emblem, E = its shadow, w = highlight, D = dark inlay, r/y/g/b = prism colours. */
+const EMBLEMS: Record<Emblem, readonly string[]> = {
+  swords: ['E...E', '.e.e.', '..w..', '.e.e.', 'e...e'],
+  spiral: ['.eee.', 'e...e', 'e.w.e', 'e..e.', '.E...'],
+  flame: ['..e..', '.ee..', '.eee.', 'eewee', '.eEe.'],
+  eye: ['.....', '.eee.', 'eeDwe', '.eEe.', '.....'],
+  knives: ['w.w.w', 'e.e.e', 'e.e.e', 'E.E.E', 'D.D.D'],
+  star: ['..e..', '..e..', 'eewee', '..e..', '..E..'],
+  gem: ['..e..', '.ewe.', 'eweee', '.eEe.', '..E..'],
+  rune: ['eeee.', '.e...', '.ewe.', '.e.e.', '.E..E'],
+  drop: ['..e..', '.eee.', 'ewwee', 'eeeEe', '.EEE.'],
+  bolt: ['...e.', '..e..', '.ewe.', '..e..', '.E...'],
+  mountain: ['.....', '..w..', '.eee.', 'eeeEe', 'EEEEE'],
+  prism: ['..w..', '..e..', '.ere.', 'eygbe', 'eeeee'],
+  feather: ['...ew', '..eee', '.eeE.', 'eeE..', 'E....'],
+  sun: ['e.e.e', '.eee.', 'eewee', '.eEe.', 'E.E.E'],
+  dusk: ['.eee.', 'ewDDe', 'eeDDD', 'eeDDe', '.EEE.'],
+  leaf: ['...ee', '.eeee', 'eewe.', 'eeE..', 'E....'],
+  mask: ['eeeee', 'eDeDe', 'eeeee', '.eEe.', '..E..'],
+  moon: ['.ee..', 'ew...', 'e....', 'ee..E', '.eEE.'],
+  wisp: ['.eee.', 'eDeDe', 'eeeee', 'eeeEe', 'e.E.E'],
+  crown: ['.....', 'e.e.e', 'eewee', 'eeeee', 'EEEEE'],
+};
+
+function paintEmblem(c: Ctx, shape: Emblem, color: string, x: number, y: number): void {
+  const e = ramp(color);
+  tpl(c, x, y, EMBLEMS[shape], { e: e[2], E: e[1], w: mix(e[3], '#ffffff', 0.5), D: '#2a1e2e', r: '#ff6a5a', y: '#ffe066', g: '#6fd08a', b: '#6ab0ff' });
 }
 
 function paintArm(c: Ctx, R: Rig, front: boolean): void {
@@ -969,7 +1216,24 @@ function paintArm(c: Ctx, R: Rig, front: boolean): void {
   if (front) px(c, hd[0] - 1, hd[1] - 1, sk[3]);
   if (front && L.pauldron) {
     const p = ramp(L.pauldron);
-    tpl(c, sh[0] - 2, sh[1] - 1, ['.llll.', 'lppppP', '.P.P.P'], { l: p[3], p: p[2], P: p[1] });
+    const pal = { l: p[3], p: p[2], P: p[1], d: p[0], s: STEEL[3], S: STEEL[1], c: '#e8fbff', C: '#7fd6ff', K: '#3f8fd0' };
+    switch (L.shoulder ?? 'plate') {
+      case 'plate':
+        tpl(c, sh[0] - 2, sh[1] - 1, ['.llll.', 'lppppP', '.P.P.P'], pal);
+        break;
+      case 'pad':
+        tpl(c, sh[0] - 2, sh[1] - 1, ['.lll.', 'lpppP', '.PPP.'], pal);
+        break;
+      case 'spiked':
+        tpl(c, sh[0] - 2, sh[1] - 4, ['...s..', '...sS.', '..sSS.', '.llll.', 'lppppP', '.P.P.P'], pal);
+        break;
+      case 'crystal':
+        tpl(c, sh[0] - 2, sh[1] - 4, ['..c...', '..cC..', '.cCK..', '.lllP.', 'lppppP', '.PPPP.'], pal);
+        break;
+      case 'fur':
+        tpl(c, sh[0] - 2, sh[1] - 2, ['.l.l..', 'llpll.', 'lpppPl', 'pPpPpP', '.P.P..'], pal);
+        break;
+    }
   }
   if (front && L.broad && !L.pauldron && L.sleeves === L.skin) {
     // bare-armed: a hint of muscle
@@ -1670,13 +1934,21 @@ export interface CharAnimDef {
 const WEAPONS: Weapon[] = ['sword', 'dagger', 'staff'];
 const NPC_LOOKS = Object.keys(NPCS);
 
+/**
+ * The idle / walk / attack animations of one player look whose frames are `<base>`, `<base>_idle_1`,
+ * `<base>_walk_0..3`, `<base>_atk_0..1` (the weapon looks `player_<w>` and the class looks `player_<w>__<classId>`).
+ */
+export function lookAnimDefs(base: string): CharAnimDef[] {
+  return [
+    { key: `${base}_idle`, frames: [base, `${base}_idle_1`], frameRate: 2.5, repeat: -1 },
+    { key: `${base}_walk`, frames: [0, 1, 2, 3].map((i) => `${base}_walk_${i}`), frameRate: 9, repeat: -1 },
+    { key: `${base}_atk`, frames: [`${base}_atk_0`, `${base}_atk_1`], frameRate: 12, repeat: 0 },
+  ];
+}
+
 /** Every character animation: players (idle, walk, attack) and NPC idles. */
 export const CHAR_ANIMS: readonly CharAnimDef[] = [
-  ...WEAPONS.flatMap((w): CharAnimDef[] => [
-    { key: `player_${w}_idle`, frames: [`player_${w}`, `player_${w}_idle_1`], frameRate: 2.5, repeat: -1 },
-    { key: `player_${w}_walk`, frames: [0, 1, 2, 3].map((i) => `player_${w}_walk_${i}`), frameRate: 9, repeat: -1 },
-    { key: `player_${w}_atk`, frames: [`player_${w}_atk_0`, `player_${w}_atk_1`], frameRate: 12, repeat: 0 },
-  ]),
+  ...WEAPONS.flatMap((w): CharAnimDef[] => lookAnimDefs(`player_${w}`)),
   ...NPC_LOOKS.map((n): CharAnimDef => ({ key: `npc_${n}_idle`, frames: [`npc_${n}`, `npc_${n}_1`], frameRate: 2, repeat: -1 })),
 ];
 
@@ -1686,6 +1958,91 @@ export function registerCharAnims(scene: Phaser.Scene): void {
     if (scene.anims.exists(a.key)) continue;
     scene.anims.create({ key: a.key, frames: a.frames.map((key) => ({ key })), frameRate: a.frameRate, repeat: a.repeat });
   }
+}
+
+// ---------------------------------------------------------------- class looks (art/classLooks.ts)
+
+/**
+ * The look of a weapon build wearing a class outfit: the player's own face, hair style and weapon, with the
+ * outfit's clothes, headgear, shoulders, emblem, cape and colours.
+ */
+function outfitLook(base: Look, o: ClassOutfit): Look {
+  const D = OUTFIT_DEFAULTS;
+  const L: Look = {
+    skin: base.skin,
+    hair: o.hair ?? base.hair,
+    style: base.style,
+    prop: base.prop,
+    blush: base.blush,
+    eye: base.eye,
+    top: o.primary,
+    legs: o.legs ?? o.secondary,
+    boots: o.boots ?? D.LEATHER,
+    trim: o.trim,
+  };
+  switch (o.armour) {
+    case 'cloth':
+      L.sleeves = o.sleeves ?? o.primary;
+      L.belt = o.belt ?? D.LEATHER_DARK;
+      break;
+    case 'leather':
+      L.sleeves = o.sleeves ?? o.secondary;
+      L.boots = o.boots ?? D.LEATHER_DARK;
+      L.belt = o.belt ?? D.LEATHER_DARK;
+      L.buckle = o.trim;
+      L.studs = o.trim;
+      break;
+    case 'plate':
+      L.plate = true;
+      L.broad = true;
+      L.sleeves = o.sleeves ?? D.STEEL_DARK;
+      L.legs = o.legs ?? D.STEEL_DARK;
+      L.boots = o.boots ?? '#6a7480';
+      L.belt = o.belt ?? D.LEATHER;
+      L.buckle = o.trim;
+      break;
+    case 'robe':
+      L.robe = o.hem ?? 43;
+      L.sleeves = o.sleeves ?? o.primary;
+      if (o.belt) L.belt = o.belt;
+      break;
+  }
+  if (o.sash) L.sash = o.sash;
+  if (o.headgear !== 'none') {
+    L.hat = o.headgear;
+    L.hatColor = o.headColor ?? o.secondary;
+    L.hatTrim = o.headAccent ?? o.trim;
+    if (o.headgear !== 'hood' && o.headgear !== 'wizard') L.hatGem = o.headAccent ?? o.trim;
+    if (o.headgear === 'circlet') L.hatTrim = o.headColor ?? o.trim;
+    if (o.plume) L.plume = o.plume;
+  }
+  if (o.shoulders !== 'none') {
+    L.shoulder = o.shoulders;
+    L.pauldron = o.shoulderColor ?? (o.armour === 'plate' ? D.STEEL : o.secondary);
+  }
+  L.emblem = o.trim;
+  L.emblemShape = o.emblem;
+  if (o.cape) {
+    L.cape = o.cape;
+    L.capeLining = o.trim;
+  }
+  if (o.scarf) L.scarf = o.scarf;
+  if (o.mask) L.mask = o.mask;
+  if (o.back) L.back = o.back;
+  return L;
+}
+
+/**
+ * Draws one class look for a weapon: `<base>` (idle frame 0, the preview) and, when `full`, the rest of the frame
+ * set (`_idle_1`, `_walk_0..3`, `_atk_0..1`). Idempotent per key; register its animations with `lookAnimDefs(base)`.
+ */
+export function drawPlayerLook(scene: Phaser.Scene, base: string, weapon: Weapon, outfit: ClassOutfit, full = true): void {
+  const L = outfitLook(PLAYERS[weapon], outfit);
+  charTex(scene, base, L, IDLE[0]);
+  if (!full) return;
+  charTex(scene, `${base}_idle_1`, L, weapon === 'sword' ? { ...IDLE[1], fx: 'glint' } : IDLE[1]);
+  WALK.forEach((p, i) => charTex(scene, `${base}_walk_${i}`, L, p));
+  ATTACK[weapon].forEach((p, i) => charTex(scene, `${base}_atk_${i}`, L, p));
 }
 
 /** Draws every player and NPC frame (idempotent per key). */

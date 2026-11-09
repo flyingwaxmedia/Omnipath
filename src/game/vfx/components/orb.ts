@@ -48,7 +48,7 @@ function baseOrb(p: Painter, r: number, i: number, rnd: Rng): void {
 }
 
 function drawForm(p: Painter, prm: OrbParams, r: number, C: number, i: number, n: number, rnd: Rng): void {
-  const tl = Math.max(0, Math.min(6, Math.floor(C / 2) - r - 2));
+  const tl = isRadial(prm) ? 0 : Math.max(0, Math.min(6, Math.floor(C / 2) - r - 2));
   const ph = i / n;
   switch (prm.form) {
     case 'orb':
@@ -61,13 +61,16 @@ function drawForm(p: Painter, prm: OrbParams, r: number, C: number, i: number, n
       for (let k = 0; k < nt; k++) {
         const a = ((k + ph) / nt) * Math.PI * 2;
         const back = (1 - Math.cos(a)) / 2;
-        const len = 1.5 + back * Math.min(tl + 1, r * 0.9);
+        const len = 2 + back * Math.min(tl + 2, r * 1.1);
         const ex = Math.cos(a) * (r + len),
-          ey = Math.sin(a) * (r + len) * (1 - back * 0.35);
-        p.stroke(Math.cos(a) * (r - 1), Math.sin(a) * (r - 1), ex - back * 2, ey, (t) => Math.max(1, 2.6 * (1 - t)), (t) => (t < 0.5 ? IDX.R3 : IDX.R2));
+          ey = Math.sin(a) * (r + len) * (1 - back * 0.45);
+        p.stroke(Math.cos(a) * (r - 2), Math.sin(a) * (r - 2), ex - back * 2, ey, (t) => Math.max(1, Math.max(2, r * 0.6) * (1 - t) ** 0.7), (t) =>
+          t < 0.35 ? IDX.R3 : t < 0.75 ? IDX.R2 : IDX.R1,
+        );
       }
-      p.disc(0, 0, r, IDX.R4);
-      p.disc(r * 0.2, 0, Math.max(1, r * 0.55), IDX.R5);
+      p.disc(0, 0, r, IDX.R3);
+      p.disc(r * 0.15, 0, Math.max(1, r * 0.72), IDX.R4);
+      p.disc(r * 0.25, 0, Math.max(0.5, r * 0.38), IDX.R5);
       highlight(p, 0, 0, r, IDX.R5);
       break;
     }
@@ -165,7 +168,7 @@ function drawForm(p: Painter, prm: OrbParams, r: number, C: number, i: number, n
         guard = -C * 0.18,
         grip = -C * 0.36;
       const bw = Math.max(1.5, C / 14);
-      p.poly([tip, 0, tip - bw * 2.2, -bw, guard, -bw, guard, bw, tip - bw * 2.2, bw], (lx, ly, fx, fy) => {
+      p.poly([tip, 0, tip - bw * 2.2, -bw, guard, -bw, guard, bw, tip - bw * 2.2, bw], (_lx, ly, fx, fy) => {
         if (ly < -bw + 1) return IDX.R5;
         return p.pass(fx + i, fy, 0.5) ? IDX.R3 : IDX.R4;
       });
@@ -176,8 +179,7 @@ function drawForm(p: Painter, prm: OrbParams, r: number, C: number, i: number, n
     }
     case 'bubble': {
       const sq = i % 4 === 1 ? 1 : i % 4 === 3 ? -1 : 0;
-      p.ellipse(0, 0, r + sq, r - sq, IDX.R2, 0.25);
-      p.band(0, 0, r + sq, r - sq, 1, IDX.R4);
+      p.band(0, 0, r + sq, r - sq, 1, (_q, deg) => (deg > 0 && deg < 120 ? IDX.R3 : IDX.R4));
       const fx = p.X(0, 0) - Math.round(r * 0.45),
         fy = p.Y(0, 0) - Math.round(r * 0.45);
       p.set(fx, fy, IDX.R5);

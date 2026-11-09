@@ -2,6 +2,7 @@
 import type { Registry } from '../core/registry';
 import type { SkillShape } from '../core/types';
 import type { MapDef } from '../core/world/types';
+import { originText } from './words';
 
 /** HTML-escapes text for innerHTML templates. */
 export const esc = (s: string): string =>
@@ -48,31 +49,17 @@ export function shapeText(s: SkillShape): string {
   }
 }
 
-/** Where a skill/element came from, for logs and the grimoire. */
+/** Where a skill/element came from, in plain words (docs/UX-SIMPLE.md; words.ts originText). */
 export function sourceText(src: string, reg: Registry): string {
-  const [kind, rest = ''] = src.includes(':') ? [src.slice(0, src.indexOf(':')), src.slice(src.indexOf(':') + 1)] : [src, ''];
-  switch (kind) {
-    case 'morph':
-      return `Morphed from ${reg.skill(rest)?.name ?? '?'}`;
-    case 'spark':
-      return `Sparked from ${reg.skill(rest)?.name ?? '?'} mid-fight`;
-    case 'echo':
-      return `Echo of the ${reg.monster(rest)?.name ?? 'monsters'}`;
-    case 'fusion': {
-      const [a, b] = rest.split('+');
-      return b ? `Fusion of ${reg.refName(a)} + ${reg.refName(b)}` : 'Fusion';
-    }
-    case 'class':
-      return `Signature of the ${reg.classDef(rest)?.name ?? '?'}`;
-    case 'lesson': {
-      const l = reg.lesson(rest);
-      return l ? `Taught at ${l.trainer.title}` : 'A lesson';
-    }
-    case 'tome':
-      return `Read from the ${reg.item(rest)?.name ?? 'tome'}`;
-    default:
-      return src.charAt(0).toUpperCase() + src.slice(1);
-  }
+  return originText(src, (kind, id) =>
+    kind === 'skill'
+      ? reg.skill(id)?.name
+      : kind === 'monster'
+        ? reg.monster(id)?.name
+        : kind === 'class'
+          ? reg.classDef(id)?.name
+          : reg.item(id)?.name,
+  );
 }
 
 /** Throttles a function to at most once per `ms`. */

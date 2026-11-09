@@ -16,7 +16,7 @@
 // Damage = monster ATK × skill.power (element neutral vs the player), plus the technique's statuses on the player.
 // Commons and elites can be interrupted by stunning or freezing them mid wind-up; wardens cannot.
 //
-// Echo witness: an echo technique begun at the player within 6 tiles is marked on that instance (a '👁' floater
+// Echo witness: an echo technique begun at the player within 6 tiles is marked on that instance (an 'Echo!' floater
 // the first time per instance); Combat.kill credits the marks with SkillBook.witness.
 import Phaser from 'phaser';
 import type { MonsterRank, MonsterTechnique, SkillDef, StatusKind } from '../../core/types';
@@ -24,10 +24,10 @@ import { isBlockedPx } from '../../core/world/compile';
 import { esc } from '../../ui/util';
 import type { Monster } from '../entities/Monster';
 import type { MapScene } from '../scenes/MapScene';
-import { gameBus } from '../events';
+import { gameBus, type TellShape } from '../events';
 import { DEPTH, Y_BIAS, ySort } from '../render/depths';
 import { TILE } from '../world/runtime';
-import { clearShot, distToSegment, fxStyle } from './SkillSystem';
+import { clearShot, distToSegment, fxStyle, nextProjectileId } from './SkillSystem';
 
 const WITNESS_RANGE = 6 * TILE;
 const DANGER = 0xff3b3b;
@@ -48,6 +48,8 @@ const OPENING: Record<MonsterRank, [number, number]> = { common: [900, 1800], el
 const ENRAGE_WEIGHT = 3;
 
 interface HitSpec {
+  /** The monster striking (playerHurt.attacker). */
+  m: Monster;
   dmg: number;
   from: string;
   statuses: StatusKind[];
@@ -57,6 +59,8 @@ interface HitSpec {
 }
 
 interface Pending {
+  /** monsterTelegraph / monsterTelegraphEnd id (announced only for wind-ups). */
+  id: number;
   m: Monster;
   skill: SkillDef;
   start: number;
@@ -73,6 +77,8 @@ interface Pending {
 }
 
 interface Shot {
+  /** projectileSpawn / projectileEnd id. */
+  id: number;
   /** The monster that fired it (event payloads). */
   m: Monster;
   img: Phaser.GameObjects.Image;
@@ -112,6 +118,9 @@ function statusesOf(s: MapScene, skill: SkillDef): StatusKind[] {
   if (skill.status && skill.status !== 'smite' && !out.includes(skill.status)) out.push(skill.status);
   return out;
 }
+
+/** Telegraph ids (unique per tell for the whole run). */
+let tellSeq = 1;
 
 export class MonsterSkills {
   private active: Pending[] = [];
@@ -172,7 +181,8 @@ export class MonsterSkills {
   enrage(m: Monster, now: number): void {
     const s = this.s;
     m.enraged = true;
-    s.floatText(m.x, this.headY(m, 22), '💢 ENRAGED', '#ff6a4a', 17);
+    gameBus.emit('enrage', { monster: m, x: m.x, y: m.y });
+    s.floatText(m.x, this.headY(m, 22), 'ENRAGED!', '#ff6a4a', 17);
     s.ui.toast(`💢 <b>${esc(m.def.name)}</b> is enraged!`);
     s.ui.log(`💢 <b>${esc(m.def.name)}</b> is enraged — it moves, swings and casts faster. Watch the red.`, 'warn');
     s.cameras.main.shake(260, 0.008);
@@ -200,11 +210,12 @@ export class MonsterSkills {
       m.witnessed.add(skill.id);
       if (!m.eyeShown) {
         m.eyeShown = true;
-        s.floatText(m.x, this.headY(m, 18), '👁', '#e8f4ff', 17);
+        s.floatText(m.x, this.headY(m, 18), 'Echo!', '#e8f4ff', 13);
       }
     }
     const color = skill.element ? (s.reg.element(skill.element)?.color ?? DANGER) : DANGER;
     const hit: HitSpec = {
+      m,
       dmg: Math.max(1, Math.round(m.atk(now) * skill.power)),
       from: `${m.def.name}'s ${skill.name}`,
       statuses: statusesOf(s, skill),
@@ -213,17 +224,22 @@ export class MonsterSkills {
       color,
     };
     m.chargeColor = color;
-    s.floatText(m.x, this.headY(m, 2), `${skill.icon} ${skill.name}`, '#ffc8b8', 12);
+    s.floatText(m.x, this.headY(m, 2), skill.name, '#ffc8b8', 12);
     const wind = skill.castMs ?? 0;
     const sh = skill.shape;
     let total = 0;
+    // The wind-up tell and its exact geometry (monsterTelegraph: the VFX draws what is hit-tested).
+    let main: Pending | null = null;
+    let tellShape: TellShape | undefined;
+    const ref = { skillId: skill.id, skill, element: skill.element };
     switch (sh.kind) {
       case 'nova': {
         const cx = p.x;
         const cy = p.y;
         const r = sh.radius;
         total = Math.max(NOVA_MIN, sh.delay ?? 0) + wind;
-        this.tell(m, skill, now, total, true, (g, t, top) => this.zone(g, top, cx, cy, r, r * 0.65, t, color), () => {
+        tellShape = { kind: 'zone', x: cx, y: cy, rx: r, ry: r * 0.65 };
+        main = this.tell(m, skill, now, total, true, (g, t, top) => this.zone(g, top, cx, cy, r, r * 0.65, t, color), () => {
           gameBus.emit('novaBlast', { owner: m, skillId: skill.id, skill, element: skill.element, x: cx, y: cy, radius: r, heavy: skill.power >= 2 || skill.tags.includes('heavy') });
           s.skills.fxNova(cx, cy, r, color, skill.element, skill.power >= 2 || skill.tags.includes('heavy'));
           if (m.warden) s.cameras.main.shake(160, 0.007);
@@ -235,7 +251,12 @@ export class MonsterSkills {
         total = TELL.projectile + wind;
         const count = sh.count ?? 1;
         const spread = ((sh.spread ?? (count > 1 ? 30 : 0)) * Math.PI) / 180;
-        this.tell(
+        {
+          const base = Math.atan2(p.y - m.y, p.x - m.x);
+          const angs = Array.from({ length: count }, (_, i) => (count > 1 ? base - spread / 2 + (spread * i) / (count - 1) : base));
+          tellShape = { kind: 'aim', x: m.x, y: m.y - Math.min(30, m.sprite.displayHeight * 0.5), angs, len: Math.min(sh.range, Math.hypot(p.x - m.x, p.y - m.y) + 30) };
+        }
+        main = this.tell(
           m,
           skill,
           now,
@@ -256,9 +277,10 @@ export class MonsterSkills {
           },
           () => {
             const base = Math.atan2(p.y - m.y, p.x - m.x);
+            gameBus.emit('skillPulse', { ...ref, owner: m, index: 0, count: 1, ang: base, aim: { x: p.x, y: p.y }, x: m.x, y: m.y });
             for (let i = 0; i < count; i++) {
               const a = count > 1 ? base - spread / 2 + (spread * i) / (count - 1) : base;
-              this.shoot(m, a, sh.speed, sh.range, sh.size ?? 12, hit);
+              this.shoot(m, a, sh.speed, sh.range, sh.size ?? 12, hit, i, count);
             }
           },
         );
@@ -268,7 +290,11 @@ export class MonsterSkills {
         total = TELL.dash + wind;
         const a = Math.atan2(p.y - m.y, p.x - m.x);
         const w = Math.max(24, sh.width);
-        this.tell(
+        {
+          const [ex, ey] = this.dashEnd(m.x, m.y, a, sh.distance);
+          tellShape = { kind: 'lane', x0: m.x, y0: m.y, x1: ex, y1: ey, width: w };
+        }
+        main = this.tell(
           m,
           skill,
           now,
@@ -307,7 +333,9 @@ export class MonsterSkills {
         const arc = (sh.arc * Math.PI) / 180;
         const range = sh.range + m.radius;
         const style = s.skills.strikeStyle(skill, true);
+        let swingN = 0;
         const swing = () => {
+          gameBus.emit('skillPulse', { ...ref, owner: m, index: swingN++, count: hits, ang: a, aim: { x: p.x, y: p.y }, x: m.x, y: m.y });
           s.skills.fxStrike(m.x, m.y - 10, a, arc, range, color, false, style, skill.element);
           const d = Math.hypot(p.x - m.x, p.y - m.y);
           let diff = Math.atan2(p.y - m.y, p.x - m.x) - a;
@@ -316,7 +344,8 @@ export class MonsterSkills {
           if (d <= range + PLAYER_R && (Math.abs(diff) <= arc / 2 + Math.atan2(PLAYER_R, Math.max(1, d)) || d < m.radius + PLAYER_R)) this.hitPlayer(hit, { x: m.x, y: m.y });
         };
         total = TELL.strike + wind;
-        this.tell(m, skill, now, total, true, (g, t, top) => this.cone(g, top, m.x, m.y, range, a, arc, t, color), swing);
+        tellShape = { kind: 'cone', x: m.x, y: m.y, r: range, ang: a, arc };
+        main = this.tell(m, skill, now, total, true, (g, t, top) => this.cone(g, top, m.x, m.y, range, a, arc, t, color), swing);
         for (let h = 1; h < hits; h++) {
           this.tell(m, skill, now + total + (h - 1) * SWING_GAP, SWING_GAP, false, (g, t, top) => this.cone(g, top, m.x, m.y, range, a, arc, 0.5 + t * 0.5, color), swing);
         }
@@ -326,12 +355,15 @@ export class MonsterSkills {
       case 'spin': {
         const pulses = sh.pulses ?? 1;
         const r = sh.radius + m.radius;
+        let pulseN = 0;
         const pulse = () => {
+          gameBus.emit('skillPulse', { ...ref, owner: m, index: pulseN++, count: pulses, ang: Math.atan2(p.y - m.y, p.x - m.x), x: m.x, y: m.y });
           s.skills.fxSpin(m.x, m.y - 6, r, color, skill.element);
           if (Math.hypot((p.x - m.x) / r, (p.y - m.y) / (r * 0.65)) <= 1) this.hitPlayer(hit, { x: m.x, y: m.y });
         };
         total = TELL.spin + wind;
-        this.tell(m, skill, now, total, true, (g, t, top) => this.zone(g, top, m.x, m.y, r, r * 0.65, t, color), pulse);
+        tellShape = { kind: 'zone', x: m.x, y: m.y, rx: r, ry: r * 0.65 };
+        main = this.tell(m, skill, now, total, true, (g, t, top) => this.zone(g, top, m.x, m.y, r, r * 0.65, t, color), pulse);
         for (let i = 1; i < pulses; i++) {
           this.tell(m, skill, now + total + (i - 1) * PULSE_GAP, PULSE_GAP, false, (g, t, top) => this.zone(g, top, m.x, m.y, r, r * 0.65, 0.4 + 0.6 * t, color), pulse);
         }
@@ -341,7 +373,8 @@ export class MonsterSkills {
       case 'chain': {
         total = TELL.chain + wind;
         const range = sh.range;
-        this.tell(
+        tellShape = { kind: 'range', x: m.x, y: m.y, r: range };
+        main = this.tell(
           m,
           skill,
           now,
@@ -372,7 +405,8 @@ export class MonsterSkills {
         total = TELL.buff + wind;
         const bs = sh;
         const bc = s.combat.buffColor(bs.stat);
-        this.tell(
+        tellShape = { kind: 'aura', x: m.x, y: m.y, rx: m.radius + 10, ry: (m.radius + 10) / 2 };
+        main = this.tell(
           m,
           skill,
           now,
@@ -386,9 +420,9 @@ export class MonsterSkills {
             const until = s.time.now + bs.duration;
             m.buffs = m.buffs.filter((b) => b.stat !== bs.stat);
             m.buffs.push({ stat: bs.stat, amount: bs.amount, until, color: bc });
-            gameBus.emit('buffApplied', { target: m, skillId: skill.id, skill, element: skill.element, stat: bs.stat, amount: bs.amount, durationMs: bs.duration, x: m.x, y: m.y });
+            gameBus.emit('buffApplied', { target: m, skillId: skill.id, skill, element: skill.element, stat: bs.stat, amount: bs.amount, durationMs: bs.duration, untilMs: until, x: m.x, y: m.y });
             s.skills.fxRing(m.x, m.y, m.radius * 2 + 10, bc, false);
-            s.floatText(m.x, this.headY(m, 14), `${skill.icon} ${bs.stat.toUpperCase()} ↑`, '#ffe9a0', 12);
+            s.floatText(m.x, this.headY(m, 14), `${bs.stat.toUpperCase()} ↑`, '#ffe9a0', 12);
           },
         );
         break;
@@ -397,21 +431,35 @@ export class MonsterSkills {
     const aimed = sh.kind !== 'spin' && sh.kind !== 'buff';
     const radius = sh.kind === 'nova' ? sh.radius : sh.kind === 'spin' ? sh.radius + m.radius : sh.kind === 'chain' ? sh.range : undefined;
     const windMs = (sh.kind === 'nova' ? Math.max(NOVA_MIN, sh.delay ?? 0) : TELL[sh.kind]) + wind;
-    gameBus.emit('monsterTelegraph', { monster: m, skillId: skill.id, skill, element: skill.element, shape: sh.kind, x: m.x, y: m.y, at: aimed ? { x: p.x, y: p.y } : { x: m.x, y: m.y }, durationMs: windMs, radius, echo: !!tech.echo });
+    gameBus.emit('monsterTelegraph', {
+      ...ref,
+      monster: m,
+      shape: sh.kind,
+      x: m.x,
+      y: m.y,
+      at: aimed ? { x: p.x, y: p.y } : { x: m.x, y: m.y },
+      durationMs: windMs,
+      radius,
+      echo: !!tech.echo,
+      rank: m.def.rank,
+      ...(main ? { id: main.id, timing: main } : {}),
+      ...(tellShape ? { tell: tellShape } : {}),
+    });
     m.busyUntil = now + total + RECOVERY;
     m.nextAttack = Math.max(m.nextAttack, now + total + 400);
     return total;
   }
 
-  private tell(m: Monster, skill: SkillDef, start: number, dur: number, windup: boolean, draw: Pending['draw'], resolve: () => void): void {
+  private tell(m: Monster, skill: SkillDef, start: number, dur: number, windup: boolean, draw: Pending['draw'], resolve: () => void): Pending {
     // Fills are ground decals (DEPTH.TELEGRAPH, under every y-sorted sprite); rims sit on DEPTH.RIM, above sprites,
     // props and canopies but under name tags and floating text.
     const gfx = this.s.add.graphics().setDepth(DEPTH.TELEGRAPH);
     const top = this.s.add.graphics().setDepth(DEPTH.RIM);
     const at = start + dur;
-    const p: Pending = { m, skill, start, at, gfx, top, draw, resolve, windup };
+    const p: Pending = { id: tellSeq++, m, skill, start, at, gfx, top, draw, resolve, windup };
     if (start <= this.s.time.now) draw(gfx, 0, top);
     this.active.push(p);
+    return p;
   }
 
   /** Where a dash from (x, y) toward `a` stops (walls and closed gates end it early). */
@@ -470,11 +518,11 @@ export class MonsterSkills {
 
   private hitPlayer(hit: HitSpec, source: { x: number; y: number }): void {
     const s = this.s;
-    const dealt = s.combat.hurtPlayer(hit.dmg, hit.from, { statuses: hit.statuses, source, rank: hit.rank });
+    const dealt = s.combat.hurtPlayer(hit.dmg, hit.from, { statuses: hit.statuses, source, rank: hit.rank, attacker: hit.m, skill: hit.skill });
     if (dealt > 0) s.skills.fxImpactAt(s.player.x, s.player.y - 20, hit.skill, hit.color, 5);
   }
 
-  private shoot(m: Monster, a: number, speed: number, range: number, size: number, hit: HitSpec): void {
+  private shoot(m: Monster, a: number, speed: number, range: number, size: number, hit: HitSpec, index = 0, count = 1): void {
     const s = this.s;
     const look = s.skills.lookFor(hit.skill, size);
     const y = m.y - Math.min(30, m.sprite.displayHeight * 0.5);
@@ -485,9 +533,9 @@ export class MonsterSkills {
       .setRotation(a)
       .setBlendMode(look.add ? Phaser.BlendModes.ADD : Phaser.BlendModes.NORMAL)
       .setDepth(ySort(m.y, Y_BIAS.PROJECTILE));
-    const shot: Shot = { m, img, x: m.x, y: m.y, vx: Math.cos(a) * speed, vy: Math.sin(a) * speed, traveled: 0, range, size, spin: look.spin, trailT: 0, hit };
+    const shot: Shot = { id: nextProjectileId(), m, img, x: m.x, y: m.y, vx: Math.cos(a) * speed, vy: Math.sin(a) * speed, traveled: 0, range, size, spin: look.spin, trailT: 0, hit };
     this.shots.push(shot);
-    gameBus.emit('projectileSpawn', { owner: m, obj: img, mover: shot, skillId: hit.skill.id, skill: hit.skill, element: hit.skill.element, x: m.x, y: m.y, angle: a, speed, range, size });
+    gameBus.emit('projectileSpawn', { owner: m, obj: img, mover: shot, id: shot.id, index, count, skillId: hit.skill.id, skill: hit.skill, element: hit.skill.element, x: m.x, y: m.y, angle: a, speed, range, size });
   }
 
   // ---------------------------------------------------------------- update
@@ -500,6 +548,7 @@ export class MonsterSkills {
         a.gfx.destroy();
         a.top.destroy();
         this.active.splice(i, 1);
+        this.ended(a, 'cancel');
         continue;
       }
       // Stunning or freezing a common or elite mid wind-up interrupts it (wardens push through).
@@ -520,6 +569,7 @@ export class MonsterSkills {
         if (idx >= 0) this.active.splice(idx, 1);
         if (a.windup) a.m.charge = 0;
         a.resolve();
+        this.ended(a, 'resolve');
       }
     }
     for (let i = this.sweeps.length - 1; i >= 0; i--) {
@@ -570,7 +620,7 @@ export class MonsterSkills {
       }
       if (dead) {
         const sk = sh.hit.skill;
-        gameBus.emit('projectileEnd', { owner: sh.m, obj: sh.img, mover: sh, skillId: sk.id, skill: sk, element: sk.element, x: sh.x, y: sh.y, reason: sh.traveled >= sh.range ? 'expire' : isBlockedPx(s.cm, sh.x, sh.y) ? 'wall' : 'hit' });
+        gameBus.emit('projectileEnd', { owner: sh.m, obj: sh.img, mover: sh, id: sh.id, skillId: sk.id, skill: sk, element: sk.element, x: sh.x, y: sh.y, reason: sh.traveled >= sh.range ? 'expire' : isBlockedPx(s.cm, sh.x, sh.y) ? 'wall' : 'hit' });
         s.skills.fxImpactAt(sh.x, sh.y - 14, sh.hit.skill, sh.hit.color, 3);
         sh.img.destroy();
         this.shots.splice(i, 1);
@@ -593,13 +643,20 @@ export class MonsterSkills {
     this.s.floatText(m.x, this.headY(m, 16), 'Interrupted!', '#9fe0ff', 12);
   }
 
+  /** monsterTelegraphEnd for an announced (wind-up) tell. */
+  private ended(a: Pending, reason: 'resolve' | 'cancel'): void {
+    if (a.windup) gameBus.emit('monsterTelegraphEnd', { id: a.id, monster: a.m, reason });
+  }
+
   /** Drops a monster's pending technique and dash (death, leash, interrupt). Fired projectiles keep flying. */
   cancel(m: Monster): void {
     for (let i = this.active.length - 1; i >= 0; i--) {
-      if (this.active[i].m !== m) continue;
-      this.active[i].gfx.destroy();
-      this.active[i].top.destroy();
+      const a = this.active[i];
+      if (a.m !== m) continue;
+      a.gfx.destroy();
+      a.top.destroy();
       this.active.splice(i, 1);
+      this.ended(a, 'cancel');
     }
     this.sweeps = this.sweeps.filter((w) => w.m !== m);
     m.busyUntil = 0;

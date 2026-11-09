@@ -1,672 +1,17 @@
 import type Phaser from 'phaser';
-import { mulberry32 } from '../../core/rng';
-import { T, TILE_COUNT } from '../../core/world/tiles';
-import { type Ctx, canvasTex, ellipse, line, poly, rect, rgba, scratch, shade } from './common';
+import { type Ctx, canvasTex, rgba, scratch, shade } from './common';
 import { PAL, artRng, disc, keySeed, line as seg, outline, px } from './pixel';
+import { drawTiles } from './tiles';
 
-// World art: tileset atlas, props, structures, objects, gather nodes, portals and hidden-portal blockers.
+// World art (the tile atlases live in art/tiles.ts): props, structures, objects, gather nodes, portals and hidden-portal blockers.
 // Every texture key here is a contract with the client (see docs/SPEC-v2.md §7 and src/core/world/types.ts).
-// Everything below the tile section is true pixel art (docs/ART-DIRECTION.md "Lush Pixel"): integer pixels, flat
+// Everything here is true pixel art (docs/ART-DIRECTION.md "Lush Pixel"): integer pixels, flat
 // colour ramps lit from the top-left and a 1 px PAL.outline rim. Sizes and anchors are unchanged from v2.
 
-const TILE = 32;
-
-/** Tiles are drawn edge-to-edge, then copied into an atlas with 1px extruded borders
- *  so fractional camera zoom never samples a neighbouring tile (no seams). */
+/** Tile atlas margin / spacing (px) of art/tiles.ts's 'tiles' atlas (1 px extruded borders, so neighbouring tiles
+ *  never bleed). Kept here for v2 importers (textures.ts re-exports them). */
 export const TILE_MARGIN = 1;
 export const TILE_SPACING = 2;
-
-// ================================================================== tiles
-
-type Wrap = (f: () => void) => void;
-interface TileKit {
-  c: Ctx;
-  rnd: () => number;
-  /** Run `f` at the 9 toroidal offsets so anything it draws wraps across tile edges (seamless). */
-  wrap: Wrap;
-}
-
-function makeTile(seed: number, draw: (k: TileKit) => void): HTMLCanvasElement {
-  const { el, c } = scratch(TILE, TILE);
-  const rnd = mulberry32(seed);
-  const wrap: Wrap = (f) => {
-    for (const dx of [-TILE, 0, TILE])
-      for (const dy of [-TILE, 0, TILE]) {
-        c.save();
-        c.translate(dx, dy);
-        f();
-        c.restore();
-      }
-  };
-  draw({ c, rnd, wrap });
-  return el;
-}
-
-const ri = (rnd: () => number, n: number) => Math.floor(rnd() * n);
-
-/** Wrapped speckles. */
-function wspeck(k: TileKit, colors: string[], n: number, size = 2, size2 = size): void {
-  for (let i = 0; i < n; i++) {
-    const col = colors[ri(k.rnd, colors.length)];
-    const x = ri(k.rnd, TILE);
-    const y = ri(k.rnd, TILE);
-    const s = k.rnd() < 0.5 ? size : size2;
-    k.wrap(() => rect(k.c, x, y, s, s, col));
-  }
-}
-
-/** Soft low-frequency blotches that break up flat fills. */
-function wblobs(k: TileKit, colors: string[], n: number, rMin: number, rMax: number): void {
-  for (let i = 0; i < n; i++) {
-    const col = colors[i % colors.length];
-    const x = k.rnd() * TILE;
-    const y = k.rnd() * TILE;
-    const rx = rMin + k.rnd() * (rMax - rMin);
-    const ry = rx * (0.6 + k.rnd() * 0.3);
-    k.wrap(() => ellipse(k.c, x, y, rx, ry, col));
-  }
-}
-
-/** Little grass tufts. */
-function wtufts(k: TileKit, n: number, dark: string, light: string, tall = false): void {
-  for (let i = 0; i < n; i++) {
-    const x = ri(k.rnd, TILE);
-    const y = ri(k.rnd, TILE);
-    const h = tall ? 4 : 3;
-    k.wrap(() => {
-      rect(k.c, x, y + 1, 1, h - 1, dark);
-      rect(k.c, x + 1, y - 1, 1, h + 1, dark);
-      rect(k.c, x + 2, y + 1, 1, h - 1, dark);
-      rect(k.c, x + 1, y - 1, 1, 1, light);
-    });
-  }
-}
-
-/** Pebbles: lit top pixel row, dark underside. */
-function wpebbles(k: TileKit, n: number, body: string, hi: string, lo: string): void {
-  for (let i = 0; i < n; i++) {
-    const x = ri(k.rnd, TILE);
-    const y = ri(k.rnd, TILE);
-    const w = 2 + ri(k.rnd, 2);
-    k.wrap(() => {
-      rect(k.c, x, y + 1, w, 1, lo);
-      rect(k.c, x, y, w, 1, body);
-      rect(k.c, x, y, 1, 1, hi);
-    });
-  }
-}
-
-/** Water surface glints. */
-function wwaves(k: TileKit, n: number, crest: string, trough: string, sparkle: string): void {
-  for (let i = 0; i < n; i++) {
-    const x = ri(k.rnd, TILE);
-    const y = ri(k.rnd, TILE);
-    const len = 5 + ri(k.rnd, 5);
-    k.wrap(() => {
-      rect(k.c, x + 1, y, len - 2, 1, crest);
-      rect(k.c, x, y + 1, 1, 1, crest);
-      rect(k.c, x + len - 1, y + 1, 1, 1, crest);
-      rect(k.c, x + 1, y + 1, len - 2, 1, trough);
-    });
-  }
-  for (let i = 0; i < 3; i++) {
-    const x = ri(k.rnd, TILE);
-    const y = ri(k.rnd, TILE);
-    k.wrap(() => rect(k.c, x, y, 1, 1, sparkle));
-  }
-}
-
-/**
- * Raised rock / masonry: two rows of chunky blocks per tile (brick offset), each with a lit top
- * face, a darker south-facing front face and a deep crevice — reads as a raised mass from 3/4 view.
- */
-function wblocks(
-  k: TileKit,
-  o: { top: string; front: string; crevice: string; hi: string; lo: string; jag: number; widths: [number[], number[]]; topH: [number, number]; frontH: number; square?: boolean },
-): void {
-  const { c } = k;
-  c.fillStyle = o.crevice;
-  c.fillRect(0, 0, TILE, TILE);
-  for (let row = 0; row < 2; row++) {
-    const y0 = row * 16;
-    let x = row === 0 ? 0 : 8;
-    for (const bw of o.widths[row]) {
-      const j = o.jag;
-      const bx = x + (j ? ri(k.rnd, 2) : 0);
-      const ww = bw - 1 - (j ? ri(k.rnd, 2) : 0);
-      const th = o.topH[0] + ri(k.rnd, o.topH[1] - o.topH[0] + 1);
-      const fh = o.frontH;
-      const by = y0 + 16 - 1 - fh - th;
-      const tv = (k.rnd() - 0.5) * 14;
-      const top = shade(o.top, tv);
-      const front = shade(o.front, tv * 0.6);
-      const cracks: number[] = [];
-      for (let q = 0; q < 2; q++) cracks.push(bx + 2 + ri(k.rnd, Math.max(1, ww - 4)));
-      const specks: [number, number][] = [];
-      for (let q = 0; q < 4; q++) specks.push([bx + 1 + ri(k.rnd, Math.max(1, ww - 2)), by + 1 + ri(k.rnd, Math.max(1, th - 2))]);
-      const r = o.square ? 0 : 1;
-      k.wrap(() => {
-        // front face
-        rect(c, bx, by + th, ww, fh, front);
-        rect(c, bx, by + th + fh - 1, ww, 1, o.lo);
-        if (r) {
-          rect(c, bx, by + th + fh - 1, 1, 1, o.crevice);
-          rect(c, bx + ww - 1, by + th + fh - 1, 1, 1, o.crevice);
-        }
-        for (const cx of cracks) rect(c, cx, by + th + 1, 1, fh - 2, shade(front, -22));
-        // top face
-        rect(c, bx, by, ww, th, top);
-        rect(c, bx, by, ww, 1, o.hi);
-        rect(c, bx, by, 1, th, shade(top, 10));
-        rect(c, bx, by + th - 1, ww, 1, shade(top, -14));
-        if (r) {
-          rect(c, bx, by, 1, 1, o.crevice);
-          rect(c, bx + ww - 1, by, 1, 1, o.crevice);
-        }
-        for (const [sx, sy] of specks) rect(c, sx, sy, 1, 1, shade(top, -18));
-      });
-      x += bw;
-    }
-  }
-}
-
-/**
- * Rugged raised rock: a pile of lumps on three rows, each lump with a lit top face, a darker
- * south-facing front face and a dark crevice rim. Copies are painted in screen-y order across
- * the torus so lower lumps overlap upper ones exactly as they would in an endless wall.
- */
-function wrocks(
-  k: TileKit,
-  o: { top: string; front: string; crevice: string; hi: string; lo: string; grass?: [string, string]; w: [number, number]; th: [number, number]; fh: number; rows: number[]; per: number },
-): void {
-  const { c, rnd } = k;
-  rect(c, 0, 0, TILE, TILE, shade(o.front, -26));
-  interface Lump { x: number; y: number; w: number; th: number; top: string; front: string; crack: number; notch: number; tuft: number }
-  const lumps: Lump[] = [];
-  o.rows.forEach((ry) => {
-    // Random partition of the 32px row into 2-3 lumps at a random phase (wraps seamlessly).
-    const n = o.per + ri(rnd, 2);
-    const widths: number[] = [];
-    let left = TILE;
-    for (let q = 0; q < n; q++) {
-      const w = q === n - 1 ? left : Math.round(TILE / n + (rnd() - 0.5) * 6);
-      widths.push(w);
-      left -= w;
-    }
-    let x = ri(rnd, TILE);
-    for (const cell of widths) {
-      const w = Math.max(o.w[0], Math.min(o.w[1], cell + 1));
-      const v = (rnd() - 0.5) * 18;
-      lumps.push({
-        x,
-        y: ry + ri(rnd, 4) - 1,
-        w,
-        th: o.th[0] + ri(rnd, o.th[1] - o.th[0] + 1),
-        top: shade(o.top, v),
-        front: shade(o.front, v * 0.6),
-        crack: 2 + ri(rnd, Math.max(1, w - 5)),
-        notch: ri(rnd, 3),
-        tuft: o.grass && rnd() < 0.35 ? 2 + ri(rnd, Math.max(1, w - 6)) : -1,
-      });
-      x += cell;
-    }
-  });
-  const copies: [Lump, number][] = [];
-  for (const l of lumps) for (const dy of [-TILE, 0, TILE]) copies.push([l, dy]);
-  copies.sort((a, b) => a[0].y + a[1] - (b[0].y + b[1]));
-  for (const [l, dy] of copies)
-    for (const dx of [-TILE, 0, TILE]) {
-      const x = l.x + dx;
-      const y = l.y + dy;
-      const { w, th } = l;
-      const fh = o.fh;
-      // crevice rim
-      poly(c, [x + 1, y - 1, x + w - 1, y - 1, x + w + 1, y + 1, x + w + 1, y + th + fh, x + w - 1, y + th + fh + 1, x + 1, y + th + fh + 1, x - 1, y + th + fh, x - 1, y + 1], o.crevice);
-      // front face (south-facing, in shade)
-      poly(c, [x, y + th - 1, x + w, y + th - 1, x + w, y + th + fh - 1, x + w - 1, y + th + fh, x + 1, y + th + fh, x, y + th + fh - 1], l.front);
-      rect(c, x + 1, y + th + fh - 1, w - 2, 1, o.lo);
-      rect(c, x + l.crack, y + th + 1, 1, fh - 2, shade(l.front, -20));
-      rect(c, x + w - 1, y + th, 1, fh - 1, shade(l.front, -14));
-      // top face (lit from the north-west)
-      poly(c, [x + 2 + l.notch, y, x + w - 3, y, x + w, y + 3, x + w, y + th, x, y + th, x, y + 2], l.top);
-      rect(c, x + 2 + l.notch, y, w - 4 - l.notch, 1, o.hi);
-      rect(c, x, y + 2, 1, th - 2, shade(l.top, 12));
-      rect(c, x + 1, y + th - 1, w - 2, 1, shade(l.top, -16));
-      rect(c, x + Math.round(w * 0.6), y + 2 + (l.notch % 2), 2, 1, shade(l.top, -14));
-      if (th >= 8) {
-        line(c, [x + 2, y + th - 2, x + Math.round(w * 0.45), y + 3], shade(l.top, 9), 1, 'butt');
-        poly(c, [x + Math.round(w * 0.45) + 1, y + 3, x + w - 1, y + 3, x + w - 1, y + th - 1, x + 3, y + th - 1], shade(l.top, -7));
-      }
-      if (o.grass && l.tuft >= 0) {
-        rect(c, x + l.tuft, y, 4, 1, o.grass[0]);
-        rect(c, x + l.tuft + 1, y - 1, 1, 1, o.grass[1]);
-        rect(c, x + l.tuft + 3, y + 1, 1, 1, o.grass[0]);
-      }
-    }
-}
-
-const TILE_DRAW: Record<number, (k: TileKit) => void> = {
-  [T.GRASS]: (k) => {
-    rect(k.c, 0, 0, TILE, TILE, '#5d9e48');
-    wblobs(k, ['#62a44c', '#58973f'], 4, 5, 9);
-    wspeck(k, ['#6bae52', '#53913f', '#72b85a'], 30, 1, 2);
-    wtufts(k, 4, '#4a873a', '#7cc060');
-  },
-  [T.GRASS2]: (k) => {
-    rect(k.c, 0, 0, TILE, TILE, '#58994a');
-    wblobs(k, ['#5ea24e', '#529143'], 4, 5, 9);
-    wspeck(k, ['#4b8a3e', '#66a853', '#79bd5d'], 34, 1, 2);
-    wtufts(k, 7, '#447f38', '#7fc262', true);
-  },
-  [T.FLOWERS]: (k) => {
-    TILE_DRAW[T.GRASS](k);
-    const cols = ['#ffd84d', '#ff8fb1', '#ffffff', '#b59cff', '#ffd84d'];
-    for (let i = 0; i < 5; i++) {
-      const fx = ri(k.rnd, TILE);
-      const fy = ri(k.rnd, TILE);
-      const col = cols[i];
-      k.wrap(() => {
-        rect(k.c, fx, fy + 2, 1, 2, '#3f7a30');
-        rect(k.c, fx - 1, fy, 3, 1, col);
-        rect(k.c, fx, fy - 1, 1, 3, col);
-        rect(k.c, fx, fy, 1, 1, col === '#ffd84d' ? '#c77d1a' : '#ffe680');
-      });
-    }
-  },
-  [T.PATH]: (k) => {
-    rect(k.c, 0, 0, TILE, TILE, '#b8925f');
-    wblobs(k, ['#bf9a67', '#ae8856'], 5, 4, 8);
-    wspeck(k, ['#a5814f', '#c9a36e', '#9d7a49'], 36, 1, 2);
-    wpebbles(k, 4, '#cfae7d', '#e2c597', '#8a6b40');
-  },
-  [T.WATER]: (k) => {
-    rect(k.c, 0, 0, TILE, TILE, '#3c8fd1');
-    wblobs(k, ['#3887c8', '#4296d6'], 4, 6, 10);
-    wspeck(k, ['#4aa0e0', '#357fbd'], 12, 1, 2);
-    wwaves(k, 4, '#8fd0f6', '#3579b8', '#e8f8ff');
-  },
-  [T.SAND]: (k) => {
-    rect(k.c, 0, 0, TILE, TILE, '#e2cc8e');
-    wblobs(k, ['#e7d398', '#dbc384'], 4, 5, 9);
-    wspeck(k, ['#d4bc7c', '#eedb9f', '#c9b06d'], 32, 1, 2);
-    for (let i = 0; i < 3; i++) {
-      const x = ri(k.rnd, TILE);
-      const y = ri(k.rnd, TILE);
-      k.wrap(() => {
-        rect(k.c, x, y, 2, 1, '#cdb575');
-        rect(k.c, x + 2, y - 1, 3, 1, '#cdb575');
-        rect(k.c, x + 5, y, 2, 1, '#cdb575');
-        rect(k.c, x + 2, y, 3, 1, '#f2e2ad');
-      });
-    }
-  },
-  [T.STONE]: (k) => {
-    rect(k.c, 0, 0, TILE, TILE, '#8d8a85');
-    wblobs(k, ['#94918b', '#85827d'], 5, 4, 8);
-    wspeck(k, ['#7c7974', '#9f9c97', '#6e6b66'], 34, 1, 2);
-    for (let i = 0; i < 3; i++) {
-      const x = ri(k.rnd, TILE);
-      const y = ri(k.rnd, TILE);
-      const pts = [x, y, x + 4 + ri(k.rnd, 4), y + ri(k.rnd, 3) - 1, x + 9 + ri(k.rnd, 4), y + 2 + ri(k.rnd, 3)];
-      k.wrap(() => {
-        line(k.c, pts, '#6b6863', 1, 'butt');
-        k.c.save();
-        k.c.translate(0, 1);
-        line(k.c, pts, 'rgba(176,172,165,0.7)', 1, 'butt');
-        k.c.restore();
-      });
-    }
-    wpebbles(k, 3, '#a4a19b', '#bdbab3', '#64615c');
-  },
-  [T.DARK]: (k) => {
-    rect(k.c, 0, 0, TILE, TILE, '#3b4a3e');
-    wblobs(k, ['#3f4f42', '#36443a'], 4, 5, 9);
-    wspeck(k, ['#323f35', '#455748', '#2b362e', '#4b3d5a'], 40, 1, 2);
-    for (let i = 0; i < 5; i++) {
-      const x = ri(k.rnd, TILE);
-      const y = ri(k.rnd, TILE);
-      const col = i % 2 ? '#5a4a3a' : '#54446c';
-      k.wrap(() => {
-        rect(k.c, x, y, 2, 1, col);
-        rect(k.c, x + 1, y + 1, 1, 1, shade(col, -20));
-      });
-    }
-    wtufts(k, 3, '#2c382f', '#55705a');
-  },
-  [T.COBBLE]: (k) => {
-    rect(k.c, 0, 0, TILE, TILE, '#7a756d');
-    for (let r = 0; r < 4; r++) {
-      const off = r % 2 ? 4 : 0;
-      for (let q = 0; q < 4; q++) {
-        const x = off + q * 8;
-        const y = r * 8;
-        const v = (k.rnd() - 0.5) * 18;
-        const body = shade('#a7a29a', v);
-        k.wrap(() => {
-          rect(k.c, x + 1, y + 1, 6, 6, body);
-          rect(k.c, x + 1, y + 1, 1, 1, '#7a756d');
-          rect(k.c, x + 6, y + 1, 1, 1, '#7a756d');
-          rect(k.c, x + 2, y + 1, 4, 1, shade(body, 16));
-          rect(k.c, x + 1, y + 2, 1, 3, shade(body, 8));
-          rect(k.c, x + 1, y + 6, 6, 1, shade(body, -22));
-          rect(k.c, x + 1, y + 6, 1, 1, '#7a756d');
-          rect(k.c, x + 6, y + 6, 1, 1, '#7a756d');
-        });
-      }
-    }
-    wspeck(k, ['#b5b0a8', '#8f8a82'], 10, 1);
-  },
-  [T.BRIDGE]: (k) => {
-    rect(k.c, 0, 0, TILE, TILE, '#4a3220');
-    for (let r = 0; r < 4; r++) {
-      const y = r * 8;
-      const body = shade('#9a6b3c', (k.rnd() - 0.5) * 16);
-      const seam = ri(k.rnd, TILE);
-      const grain = [ri(k.rnd, TILE), ri(k.rnd, TILE)];
-      k.wrap(() => {
-        rect(k.c, 0, y, TILE, 7, body);
-        rect(k.c, 0, y, TILE, 1, shade(body, 22));
-        rect(k.c, 0, y + 6, TILE, 1, shade(body, -26));
-        rect(k.c, seam, y, 1, 7, '#4a3220');
-        rect(k.c, seam + 2, y + 3, 1, 1, '#3a2818');
-        rect(k.c, seam - 3, y + 3, 1, 1, '#3a2818');
-        for (const g of grain) rect(k.c, g, y + 2 + (g % 3), 6, 1, shade(body, -14));
-      });
-    }
-  },
-  [T.EMBER]: (k) => {
-    rect(k.c, 0, 0, TILE, TILE, '#5e4034');
-    wblobs(k, ['#654538', '#553a2f'], 4, 5, 9);
-    wspeck(k, ['#4f352b', '#6d4b3c', '#8a3f28', '#3d2a22'], 40, 1, 2);
-    for (let i = 0; i < 2; i++) {
-      const x = ri(k.rnd, TILE);
-      const y = ri(k.rnd, TILE);
-      const pts = [x, y, x + 3 + ri(k.rnd, 3), y + 2 + ri(k.rnd, 2), x + 5 + ri(k.rnd, 4), y + 1 + ri(k.rnd, 3), x + 9 + ri(k.rnd, 3), y + 4];
-      k.wrap(() => {
-        line(k.c, pts, 'rgba(255,120,40,0.25)', 3);
-        line(k.c, pts, '#2a1a14', 1, 'butt');
-        k.c.save();
-        k.c.translate(0, -1);
-        line(k.c, pts, '#ff7a3a', 1, 'butt');
-        k.c.restore();
-        rect(k.c, pts[2], pts[3] - 1, 1, 1, '#ffd27a');
-      });
-    }
-    wspeck(k, ['#ff8a3a', '#ffb050'], 3, 1);
-  },
-  [T.HILL]: (k) => {
-    rect(k.c, 0, 0, TILE, TILE, '#86b65a');
-    wblobs(k, ['#8dbd60', '#7eae52'], 4, 5, 9);
-    wspeck(k, ['#97c46a', '#78a64e', '#a2cf78'], 32, 1, 2);
-    wtufts(k, 4, '#6d9a45', '#b2da86');
-  },
-  [T.DEEP]: (k) => {
-    rect(k.c, 0, 0, TILE, TILE, '#2d6fb0');
-    wblobs(k, ['#2866a4', '#3175b8'], 4, 6, 10);
-    wspeck(k, ['#2a65a1', '#3479bf'], 12, 1, 2);
-    wwaves(k, 3, '#5a9edb', '#245d98', '#bfe2ff');
-  },
-  [T.CAVE]: (k) => {
-    rect(k.c, 0, 0, TILE, TILE, '#4d443d');
-    wblobs(k, ['#544a42', '#463e37'], 5, 4, 8);
-    wspeck(k, ['#5c5148', '#3e3630', '#605650'], 34, 1, 2);
-    for (let i = 0; i < 2; i++) {
-      const x = ri(k.rnd, TILE);
-      const y = ri(k.rnd, TILE);
-      const pts = [x, y, x + 4, y + 1 + ri(k.rnd, 2), x + 7 + ri(k.rnd, 3), y + ri(k.rnd, 3)];
-      k.wrap(() => line(k.c, pts, '#352e29', 1, 'butt'));
-    }
-    wpebbles(k, 4, '#6a5e54', '#7e7166', '#2e2823');
-  },
-  [T.CAVE_WALL]: (k) =>
-    wrocks(k, { top: '#75685b', front: '#4a4038', crevice: '#1b1613', hi: '#93836f', lo: '#342c26', w: [9, 19], th: [6, 8], fh: 4, rows: [0, 11, 22], per: 2 }),
-  [T.CRYPT]: (k) => {
-    rect(k.c, 0, 0, TILE, TILE, '#3d3946');
-    for (let r = 0; r < 2; r++)
-      for (let q = 0; q < 2; q++) {
-        const x = q * 16 + (r ? 8 : 0);
-        const y = r * 16;
-        const body = shade('#5f5a6a', (k.rnd() - 0.5) * 12);
-        const crack = k.rnd() < 0.5 ? [x + 3 + ri(k.rnd, 6), y + 2, x + 6 + ri(k.rnd, 4), y + 7, x + 5 + ri(k.rnd, 6), y + 12] : null;
-        const moss = k.rnd() < 0.5;
-        k.wrap(() => {
-          rect(k.c, x + 1, y + 1, 15, 15, body);
-          rect(k.c, x + 1, y + 1, 15, 1, shade(body, 14));
-          rect(k.c, x + 1, y + 1, 1, 15, shade(body, 8));
-          rect(k.c, x + 1, y + 15, 15, 1, shade(body, -16));
-          if (crack) line(k.c, crack, shade(body, -26), 1, 'butt');
-          if (moss) {
-            rect(k.c, x + 1, y + 13, 3, 2, '#4d6648');
-            rect(k.c, x + 2, y + 12, 2, 1, '#5d7a55');
-          }
-        });
-      }
-    wspeck(k, ['#6a6575', '#514d5c'], 14, 1);
-  },
-  [T.CRYPT_WALL]: (k) =>
-    wblocks(k, {
-      top: '#7a7489',
-      front: '#504a5e',
-      crevice: '#1c1a22',
-      hi: '#948ea4',
-      lo: '#3b3646',
-      jag: 0,
-      widths: [
-        [16, 16],
-        [16, 16],
-      ],
-      topH: [6, 6],
-      frontH: 8,
-      square: true,
-    }),
-  [T.SNOW]: (k) => {
-    rect(k.c, 0, 0, TILE, TILE, '#e6eef6');
-    wblobs(k, ['#f2f7fc', '#dbe5f0'], 5, 5, 9);
-    wspeck(k, ['#d2deea', '#ffffff', '#c8d6e6'], 22, 1, 2);
-    for (let i = 0; i < 4; i++) {
-      const x = ri(k.rnd, TILE);
-      const y = ri(k.rnd, TILE);
-      k.wrap(() => {
-        rect(k.c, x, y, 3, 1, '#ffffff');
-        rect(k.c, x - 1, y + 1, 5, 1, '#c3d2e2');
-      });
-    }
-  },
-  [T.ICE]: (k) => {
-    rect(k.c, 0, 0, TILE, TILE, '#94cde6');
-    wblobs(k, ['#a3d7ec', '#88c3de'], 5, 6, 10);
-    for (let i = 0; i < 3; i++) {
-      const x = ri(k.rnd, TILE);
-      const y = ri(k.rnd, TILE);
-      const len = 7 + ri(k.rnd, 7);
-      k.wrap(() => {
-        line(k.c, [x, y, x + len, y - len], 'rgba(255,255,255,0.55)', 2, 'butt');
-        line(k.c, [x + 3, y + 1, x + 3 + len * 0.6, y + 1 - len * 0.6], 'rgba(255,255,255,0.35)', 1, 'butt');
-      });
-    }
-    for (let i = 0; i < 2; i++) {
-      const x = ri(k.rnd, TILE);
-      const y = ri(k.rnd, TILE);
-      const pts = [x, y, x + 3, y + 2 + ri(k.rnd, 2), x + 5 + ri(k.rnd, 3), y + 1, x + 8, y + 4];
-      k.wrap(() => {
-        line(k.c, pts, '#6fa9c6', 1, 'butt');
-        k.c.save();
-        k.c.translate(0, 1);
-        line(k.c, pts, 'rgba(235,250,255,0.8)', 1, 'butt');
-        k.c.restore();
-      });
-    }
-    for (let i = 0; i < 2; i++) {
-      const x = ri(k.rnd, TILE);
-      const y = ri(k.rnd, TILE);
-      k.wrap(() => {
-        rect(k.c, x - 1, y, 3, 1, '#ffffff');
-        rect(k.c, x, y - 1, 1, 3, '#ffffff');
-      });
-    }
-  },
-  [T.BASALT]: (k) => {
-    const { c } = k;
-    rect(c, 0, 0, TILE, TILE, '#17151a');
-    // Flat-top hexagonal column tops, foreshortened (period 16 x 32 -> seamless on 32).
-    const R = 10.6;
-    const H = 16;
-    for (let col = 0; col < 2; col++)
-      for (let row = 0; row < 2; row++) {
-        const cx = col * 16;
-        const cy = row * 16 + (col ? 8 : 0);
-        const face = shade('#3a373e', (k.rnd() - 0.5) * 14);
-        const ember = k.rnd() < 0.3;
-        const r = R - 1.2;
-        const h = H / 2 - 1;
-        const hexPts = [cx - r, cy, cx - r / 2, cy - h, cx + r / 2, cy - h, cx + r, cy, cx + r / 2, cy + h, cx - r / 2, cy + h];
-        k.wrap(() => {
-          poly(c, hexPts.map((v, i) => (i % 2 ? v + 1 : v)), '#26232a');
-          poly(c, hexPts, face);
-          line(c, [cx - r + 1, cy - 0.5, cx - r / 2 + 0.5, cy - h + 0.5, cx + r / 2 - 0.5, cy - h + 0.5], shade(face, 22), 1, 'butt');
-          rect(c, Math.round(cx - 2), Math.round(cy - 1), 2, 1, shade(face, -12));
-          if (ember) rect(c, Math.round(cx + r / 2), Math.round(cy + h), 2, 1, '#c8501e');
-        });
-      }
-  },
-  [T.LAVA]: (k) => {
-    const { c } = k;
-    rect(c, 0, 0, TILE, TILE, '#d8461a');
-    wblobs(k, ['#e85c1c', '#c43a16', '#f07020'], 6, 5, 9);
-    // molten swirls
-    for (let i = 0; i < 4; i++) {
-      const x = k.rnd() * TILE;
-      const y = k.rnd() * TILE;
-      const a = (k.rnd() - 0.5) * 3;
-      const pts = [x, y, x + 4, y + a - 1, x + 8, y + a + 1, x + 12, y - a];
-      k.wrap(() => {
-        line(c, pts, '#ff9a2e', 3);
-        line(c, pts, '#ffd04a', 1);
-      });
-    }
-    // drifting crust
-    for (let i = 0; i < 3; i++) {
-      const x = ri(k.rnd, TILE);
-      const y = ri(k.rnd, TILE);
-      const w = 3 + ri(k.rnd, 3);
-      k.wrap(() => {
-        poly(c, [x, y, x + w, y - 1, x + w + 2, y + 1, x + w, y + 3, x + 1, y + 3, x - 1, y + 1], '#7a2412');
-        rect(c, x + 1, y, w - 1, 1, '#a83a1a');
-      });
-    }
-    for (let i = 0; i < 4; i++) {
-      const x = ri(k.rnd, TILE);
-      const y = ri(k.rnd, TILE);
-      k.wrap(() => {
-        rect(c, x, y, 2, 1, '#fff4b0');
-        rect(c, x, y + 1, 1, 1, '#ffe070');
-      });
-    }
-  },
-  [T.DUSK]: (k) => {
-    rect(k.c, 0, 0, TILE, TILE, '#55507e');
-    wblobs(k, ['#5a5585', '#4e4975'], 4, 5, 9);
-    wspeck(k, ['#4a4570', '#625c8c', '#6e5f96', '#7a6aa0'], 32, 1, 2);
-    wtufts(k, 5, '#433e66', '#9a88c8');
-    wspeck(k, ['#ffb0e0', '#9fe8ff'], 2, 1);
-  },
-  [T.STORMGRASS]: (k) => {
-    rect(k.c, 0, 0, TILE, TILE, '#647f68');
-    wblobs(k, ['#6a866e', '#5e7862'], 4, 5, 9);
-    wspeck(k, ['#5a745e', '#748f76', '#55705a'], 24, 1, 2);
-    for (let i = 0; i < 9; i++) {
-      const x = ri(k.rnd, TILE);
-      const y = ri(k.rnd, TILE);
-      const lit = k.rnd() < 0.4;
-      k.wrap(() => {
-        rect(k.c, x, y + 2, 1, 1, '#4c6650');
-        rect(k.c, x + 1, y + 1, 1, 1, '#4c6650');
-        rect(k.c, x + 2, y, 2, 1, lit ? '#a2bea4' : '#55705a');
-      });
-    }
-    wspeck(k, ['#c6ecff'], 1, 1);
-  },
-  [T.VOID]: (k) => {
-    rect(k.c, 0, 0, TILE, TILE, '#07060b');
-    wblobs(k, ['#0a0810', '#09070e'], 3, 6, 10);
-    wspeck(k, ['#141022', '#18132a'], 6, 1);
-  },
-  [T.CLIFF]: (k) =>
-    wrocks(k, {
-      top: '#9a8a74',
-      front: '#685a49',
-      crevice: '#2a221b',
-      hi: '#b8a78e',
-      lo: '#4a3f33',
-      grass: ['#5d9e48', '#7cc060'],
-      w: [9, 19],
-      th: [6, 8],
-      fh: 4,
-      rows: [0, 11, 22],
-      per: 2,
-    }),
-  [T.GLADE]: (k) => {
-    rect(k.c, 0, 0, TILE, TILE, '#4f9e74');
-    wblobs(k, ['#56a67b', '#48936b'], 4, 5, 9);
-    wspeck(k, ['#5fb084', '#438a64', '#6cbd90'], 30, 1, 2);
-    wtufts(k, 4, '#3d8060', '#8fd8ac');
-    for (let i = 0; i < 3; i++) {
-      const x = ri(k.rnd, TILE);
-      const y = ri(k.rnd, TILE);
-      const col = i === 1 ? '#fff3b0' : '#d8fff0';
-      k.wrap(() => {
-        rect(k.c, x, y, 1, 1, col);
-        rect(k.c, x - 1, y, 1, 1, rgba(col, 0.45));
-        rect(k.c, x + 1, y, 1, 1, rgba(col, 0.45));
-        rect(k.c, x, y - 1, 1, 1, rgba(col, 0.45));
-        rect(k.c, x, y + 1, 1, 1, rgba(col, 0.45));
-      });
-    }
-  },
-  [T.MOSS]: (k) => {
-    rect(k.c, 0, 0, TILE, TILE, '#2f4c2d');
-    for (let i = 0; i < 9; i++) {
-      const x = k.rnd() * TILE;
-      const y = k.rnd() * TILE;
-      const r = 3 + k.rnd() * 3;
-      const body = shade('#40683b', (k.rnd() - 0.5) * 14);
-      k.wrap(() => {
-        ellipse(k.c, x, y + 1, r, r * 0.8, '#263f25');
-        ellipse(k.c, x, y, r, r * 0.75, body);
-        ellipse(k.c, x - r * 0.3, y - r * 0.3, r * 0.45, r * 0.3, shade(body, 22));
-      });
-    }
-    wspeck(k, ['#5f9450', '#33522f'], 12, 1);
-  },
-};
-
-function drawTiles(scene: Phaser.Scene): void {
-  if (scene.textures.exists('tiles')) return;
-  const tiles: HTMLCanvasElement[] = [];
-  for (let i = 0; i < TILE_COUNT; i++) {
-    const draw = TILE_DRAW[i];
-    tiles.push(makeTile(1000 + i * 97, draw ?? ((k) => rect(k.c, 0, 0, TILE, TILE, '#ff00ff'))));
-  }
-  const step = TILE + TILE_SPACING;
-  // Single row: width = 2*margin + n*TILE + (n-1)*spacing  (27 tiles -> 918px).
-  canvasTex(scene, 'tiles', TILE_MARGIN * 2 + TILE_COUNT * TILE + (TILE_COUNT - 1) * TILE_SPACING, TILE + TILE_MARGIN * 2, (out) => {
-    for (let i = 0; i < TILE_COUNT; i++) {
-      const src = tiles[i];
-      const dx = TILE_MARGIN + i * step;
-      const dy = TILE_MARGIN;
-      out.drawImage(src, 0, 0, TILE, TILE, dx, dy, TILE, TILE);
-      // Extrude each edge (and corners) by one pixel.
-      out.drawImage(src, 0, 0, 1, TILE, dx - 1, dy, 1, TILE);
-      out.drawImage(src, TILE - 1, 0, 1, TILE, dx + TILE, dy, 1, TILE);
-      out.drawImage(src, 0, 0, TILE, 1, dx, dy - 1, TILE, 1);
-      out.drawImage(src, 0, TILE - 1, TILE, 1, dx, dy + TILE, TILE, 1);
-      out.drawImage(src, 0, 0, 1, 1, dx - 1, dy - 1, 1, 1);
-      out.drawImage(src, TILE - 1, 0, 1, 1, dx + TILE, dy - 1, 1, 1);
-      out.drawImage(src, 0, TILE - 1, 1, 1, dx - 1, dy + TILE, 1, 1);
-      out.drawImage(src, TILE - 1, TILE - 1, 1, 1, dx + TILE, dy + TILE, 1, 1);
-    }
-  });
-}
 
 // ================================================================== pixel kit
 // Shared by props, structures, objects, nodes and portals. Bodies are painted on a scratch canvas by sprite(),
@@ -855,18 +200,39 @@ const DEAD_BARK = ['#201814', '#2e241e', '#43362c', '#5a4a3c', '#74624f', '#8e7b
 const DUSK_BARK = ['#1a1220', '#281c30', '#3a2a44', '#4f3b5a', '#664e72', '#7f6690'];
 const BASALT = ['#0e0c10', '#19161c', '#252128', '#332e38', '#45404c', '#5e5866'];
 
-function broadTree(scene: Phaser.Scene, key: string, leaf: Ramp, bark: Ramp, extra?: (b: Ctx, rnd: () => number) => void): void {
+/** Leaf-mass layouts for broad trees ([cx, cy, rx, ry] × top, left, right, bottom): variant 0 is the v2 look. */
+const BROAD_LAYOUTS: readonly (readonly (readonly [number, number, number, number])[])[] = [
+  [
+    [24, 16, 16, 12],
+    [12, 29, 11, 9],
+    [36, 28, 11, 9],
+    [23, 36, 10, 6],
+  ],
+  [
+    [25, 15, 15, 12],
+    [13, 27, 10, 9],
+    [35, 30, 12, 9],
+    [24, 37, 11, 6],
+  ],
+  [
+    [23, 17, 17, 11],
+    [11, 30, 11, 8],
+    [37, 27, 10, 9],
+    [22, 36, 10, 6],
+  ],
+];
+
+function broadTree(scene: Phaser.Scene, key: string, leaf: Ramp, bark: Ramp, extra?: (b: Ctx, rnd: () => number) => void, v = 0): void {
+  const L = BROAD_LAYOUTS[v % BROAD_LAYOUTS.length];
   canvasTex(scene, key, 48, 64, (c) => {
     const rnd = artRng(keySeed(key));
     shadow(c, 24, 60, 18, 4);
     sprite(c, 48, 64, (b) => {
       trunkPx(b, 24, 30, 61, 8, bark, rnd);
-      brush(b, [22, 42, 15, 33], 2, bark[3]);
-      brush(b, [26, 40, 33, 31], 2, bark[2]);
-      leafMass(b, 24, 16, 16, 12, leaf, rnd, false);
-      leafMass(b, 12, 29, 11, 9, leaf, rnd);
-      leafMass(b, 36, 28, 11, 9, leaf, rnd);
-      leafMass(b, 23, 36, 10, 6, leaf, rnd);
+      brush(b, [22, 42, 15 + (v === 2 ? -1 : 0), 33], 2, bark[3]);
+      brush(b, [26, 40, 33 + (v === 1 ? 1 : 0), 31], 2, bark[2]);
+      leafMass(b, L[0][0], L[0][1], L[0][2], L[0][3], leaf, rnd, false);
+      for (let i = 1; i < L.length; i++) leafMass(b, L[i][0], L[i][1], L[i][2], L[i][3], leaf, rnd);
       extra?.(b, rnd);
     });
   });
@@ -914,7 +280,20 @@ function pineTier(b: Ctx, cx: number, top: number, bottom: number, hw: number, r
   }
 }
 
-function pineTree(scene: Phaser.Scene, key: string, ramp: Ramp, snow: boolean): void {
+function pineTree(scene: Phaser.Scene, key: string, ramp: Ramp, snow: boolean, v = 0): void {
+  // tier [top, bottom, half width] × 3, bottom tier first; variant 1 is slimmer and taller in the middle
+  const tiers =
+    v === 1
+      ? ([
+          [27, 51, 16],
+          [13, 37, 14],
+          [2, 23, 8],
+        ] as const)
+      : ([
+          [28, 51, 17],
+          [15, 37, 13],
+          [3, 24, 9],
+        ] as const);
   canvasTex(scene, key, 40, 64, (c) => {
     shadow(c, 20, 60, 14, 4);
     if (snow) disc(c, 20, 60, 12, 3, 'rgba(238,244,250,0.75)');
@@ -923,10 +302,8 @@ function pineTree(scene: Phaser.Scene, key: string, ramp: Ramp, snow: boolean): 
       box(b, 17, 48, 2, 13, DEAD_BARK[4]);
       box(b, 21, 48, 2, 13, DEAD_BARK[2]);
       box(b, 16, 59, 8, 2, DEAD_BARK[2]);
-      pineTier(b, 20, 28, 51, 17, ramp, snow, true);
-      pineTier(b, 20, 15, 37, 13, ramp, snow, true);
-      pineTier(b, 20, 3, 24, 9, ramp, snow, false);
-      box(b, 19, 1, 2, 3, snow ? SNOW[3] : ramp[4]);
+      tiers.forEach(([top, bottom, hw], i) => pineTier(b, 20, top, bottom, hw, ramp, snow, i < 2));
+      box(b, 19, tiers[2][0] - 2, 2, 3, snow ? SNOW[3] : ramp[4]);
     });
   });
 }
@@ -1009,17 +386,25 @@ function shroom(b: Ctx, x: number, y: number, rx: number, ry: number, stemH: num
 }
 
 function drawProps(scene: Phaser.Scene): void {
-  broadTree(scene, 'tree', R.leaf, R.bark);
-  broadTree(scene, 'darktree', LEAF_DARK, DEAD_BARK, (b, rnd) => {
+  const darkMotes = (b: Ctx, rnd: () => number) => {
     for (let i = 0; i < 5; i++) {
       const x = Math.round(8 + rnd() * 32);
       const y = Math.round(8 + rnd() * 30);
       px(b, x, y, '#b89ae8');
       px(b, x + 1, y + 1, '#6a4ea8');
     }
-  });
+  };
+  broadTree(scene, 'tree', R.leaf, R.bark);
+  broadTree(scene, 'darktree', LEAF_DARK, DEAD_BARK, darkMotes);
   pineTree(scene, 'pine', PINE, false);
   pineTree(scene, 'frostpine', FROST_PINE, true);
+  // Layout variants (render/stage.ts picks one per tile, so dense forests stop repeating one sprite in a grid).
+  broadTree(scene, 'tree~1', R.leaf, R.bark, undefined, 1);
+  broadTree(scene, 'tree~2', R.leaf, R.bark, undefined, 2);
+  broadTree(scene, 'darktree~1', LEAF_DARK, DEAD_BARK, darkMotes, 1);
+  broadTree(scene, 'darktree~2', LEAF_DARK, DEAD_BARK, darkMotes, 2);
+  pineTree(scene, 'pine~1', PINE, false, 1);
+  pineTree(scene, 'frostpine~1', FROST_PINE, true, 1);
 
   canvasTex(scene, 'deadtree', 40, 56, (c) => {
     shadow(c, 20, 52, 13, 3.5);
@@ -2880,6 +2265,14 @@ function drawPortals(scene: Phaser.Scene): void {
 
 export { drawProps, drawStructures, drawObjects, drawNodes, drawPortals };
 
+/** Extra look variants per prop kind (same size and anchor as the base key); render/stage.ts picks one per tile. */
+export const PROP_VARIANTS: Readonly<Record<string, readonly string[]>> = {
+  tree: ['tree~1', 'tree~2'],
+  darktree: ['darktree~1', 'darktree~2'],
+  pine: ['pine~1'],
+  frostpine: ['frostpine~1'],
+};
+
 /**
  * Every world sprite EXCEPT the tile atlas: props (PropKind keys), struct_*, obj_*, node_*, portal_*, gate_*, hide_*,
  * bobber and the legacy aliases. Use this together with the terrain artist's art/tiles.ts drawTiles(). Idempotent.
@@ -2892,8 +2285,7 @@ export function drawWorldSprites(scene: Phaser.Scene): void {
   drawPortals(scene);
 }
 
-/** Draw every world texture (v2 tile atlas + all sprites). Idempotent per key: if another module already created
- *  'tiles', the v2 atlas below is skipped. */
+/** Draw every world texture: the tile atlases (art/tiles.ts — they must come first) and every world sprite. */
 export function drawWorld(scene: Phaser.Scene): void {
   drawTiles(scene);
   drawWorldSprites(scene);

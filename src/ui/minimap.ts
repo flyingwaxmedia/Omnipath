@@ -403,7 +403,8 @@ function readCollapsed(): boolean {
   } catch {
     /* storage unavailable */
   }
-  return window.innerWidth < 360;
+  // Small screens start folded: narrow portrait phones and short landscape phones (the Pursuits need the room).
+  return window.innerWidth < 360 || window.innerHeight < 480;
 }
 
 function writeCollapsed(v: boolean): void {

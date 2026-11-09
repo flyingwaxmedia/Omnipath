@@ -193,10 +193,6 @@ export class Interactions {
     this.s.ui.npcDialog({ npcId: npc.id, name: npc.name, title: npc.title, portrait: npc.portrait, line, options });
   }
 
-  private lessonsOpt(npc: NpcDef) {
-    return npc.trainer ? [{ label: '📜 Lessons', action: () => this.s.ui.open('trainer', npc.id) }] : [];
-  }
-
   // ---------------------------------------------------------------- NPCs
 
   private npc(v: NpcView): void {
@@ -220,7 +216,6 @@ export class Interactions {
         const ore = s.session.count('ore');
         this.say(npc, `${fireLine}<br><br>Each forging takes <b>2 ore</b>. You have <b>${ore}</b>.`, [
           { label: '🔥 Forge', action: () => this.forge(), disabled: ore < 2 },
-          ...this.lessonsOpt(npc),
           ...forSale.map((w) => ({
             label: `${WEAPONS[w].icon} Buy ${WEAPONS[w].name} (🪙${WEAPONS[w].price})`,
             action: () => {
@@ -243,25 +238,24 @@ export class Interactions {
           text += 'Three elements dwell within you, in balance. Then you are ready for the light.';
           this.say(npc, text, [
             { label: 'Receive the light', action: () => book.learnElement('holy', "Sister Alba's blessing") },
-            ...this.lessonsOpt(npc),
           ]);
           return;
         }
         text += book.hasElement('holy')
           ? esc(this.line(npc))
           : `When <b>three elements</b> dwell in you, return to me. <small>(${n}/3)</small>`;
-        this.say(npc, text, [{ label: 'Thank you' }, ...this.lessonsOpt(npc)]);
+        this.say(npc, text, [{ label: 'Thank you' }]);
         return;
       }
       case 'fisher': {
         const caught = book.flag('fish_caught');
         const extra = book.hasElement('water') ? '' : ` <small>(${Math.min(caught, FISH_FOR_WATER)}/${FISH_FOR_WATER} fish)</small>`;
-        this.say(npc, `${esc(this.line(npc))}${extra}`, [{ label: 'Got it' }, ...this.lessonsOpt(npc)]);
+        this.say(npc, `${esc(this.line(npc))}${extra}`, [{ label: 'Got it' }]);
         return;
       }
       case 'hermit':
       case 'trainer':
-        this.say(npc, esc(this.line(npc)), [...this.lessonsOpt(npc), { label: 'Leave' }]);
+        this.say(npc, esc(this.line(npc)), [{ label: 'Leave' }]);
         return;
       case 'waykeeper': {
         const wsId = waystoneOf(s.def);

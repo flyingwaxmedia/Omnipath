@@ -1,6 +1,7 @@
-// Fusion panel (docs/CLIENT-v2.md §7): fusing only takes at an altar (controller.atAltar(); elsewhere the panel plans
-// and explains where altars stand). Tabs Elements | Skills | Essences, two sockets, live legality checks, the
-// remembered-pair memory (per pair and per ingredient against the socketed one), a result card and whispers.
+// Fuse panel (panels lane; docs/UX-SIMPLE.md): fusing only takes at an altar (controller.atAltar(); elsewhere the
+// panel plans and says where altars stand). Two sockets, ONE line about the pair (the reason sits behind "Details"),
+// ONE big Fuse button, the ingredients as pixel tiles (Skills | Elements | Essences — essences once you own one),
+// ✓ / ○ marks for pairs you already tried, and the result card. Words stay plain: no slots, shapes or merge rules.
 //
 // Spoiler rule: for an UNTRIED pair the panel only states recipe-independent rules (element slots, essence fit,
 // shape-merge eligibility) — never whether an authored recipe exists or what it makes. resolveFusion() is used only
@@ -12,10 +13,11 @@ import { pairKey, parseRef } from '../../core/refs';
 import type { FuseResult, IngredientEntry } from '../../core/skillbook';
 import type { EssenceDef, IngredientRef } from '../../core/types';
 import { $, $$, esc } from '../util';
+import { oneLine } from '../words';
 import { sheet } from './skills';
-import { type PanelHost, tab, tabsHtml, wireTabs } from './common';
+import { type PanelHost, detailsHtml, refIconHtml, tab, tabsHtml, wireTabs, wireToggles } from './common';
 
-const ALTAR_TOWNS = '<b>Hearthvale</b>, the <b>Emberwatch</b> outpost and <b>Riftmarch</b>';
+const ALTAR_TOWNS = '<b>Hearthvale</b>, <b>Emberwatch</b> or <b>Riftmarch</b>';
 
 type Line = { kind: 'ok' | 'no' | 'info' | 'mem' | 'good'; text: string };
 
@@ -58,22 +60,21 @@ function preview(host: PanelHost, a: IngredientRef, b: IngredientRef): { lines: 
   if (mem === 'discovered') {
     if (out.ok) {
       const known = parseRef(out.result).kind === 'skill' ? book.has(parseRef(out.result).id) : true;
-      lines.push({ kind: 'good', text: `You made ${reg.refIcon(out.result)} ${esc(reg.refName(out.result))} from this before${known ? '' : ' — and could again'}.` });
-    } else lines.push({ kind: 'mem', text: `This once worked, but now: ${esc(out.message)}` });
+      lines.push({ kind: 'good', text: `You made <b>${esc(reg.refName(out.result))}</b> from these before${known ? '.' : ' — make it again!'}` });
+    } else lines.push({ kind: 'mem', text: `This worked before, but not right now: ${esc(out.message)}` });
   } else if (mem === 'nothing') {
     lines.push(
       out.ok
-        ? { kind: 'mem', text: 'You tried this before and nothing came of it — but something in you has changed since.' }
+        ? { kind: 'mem', text: 'Nothing happened last time — but you have grown since.' }
         : { kind: 'mem', text: `Tried before: ${esc(out.message)}` },
     );
   } else {
     lines.push(...ruleLines(host, a, b));
-    lines.push({ kind: 'info', text: 'Untried. The altar keeps its secrets until you try.' });
   }
   const pa = parseRef(a);
   const pb = parseRef(b);
   const ess = pa.kind === 'mod' ? reg.essence(pa.id) : pb.kind === 'mod' ? reg.essence(pb.id) : undefined;
-  if (ess && mem !== 'discovered') lines.push({ kind: 'info', text: `${ess.icon} ${esc(ess.name)} is used up only if something is made.` });
+  if (ess && mem !== 'discovered') lines.push({ kind: 'info', text: `Uses 1 ${esc(ess.name)} only if it works.` });
   return { lines, block: null };
 }
 
@@ -89,13 +90,13 @@ function ruleLines(host: PanelHost, a: IngredientRef, b: IngredientRef): Line[] 
       const el = reg.element(y.id)!;
       const slot = elementSlotState(reg, s);
       if (slot === 'bound') {
-        return [{ kind: 'no', text: s.element ? `${esc(s.name)} is bound to ${esc(reg.element(s.element)?.name ?? s.element)}; its slot will not take ${esc(el.name)}.` : `${esc(s.name)} has no element slot.` }];
+        return [{ kind: 'no', text: s.element ? `${esc(s.name)} keeps its own element.` : `${esc(s.name)} can’t take an element.` }];
       }
-      if (s.element === y.id) return [{ kind: 'no', text: `${esc(s.name)} already carries ${esc(el.name)}.` }];
+      if (s.element === y.id) return [{ kind: 'no', text: `${esc(s.name)} already has ${esc(el.name)}.` }];
       return [
         slot === 'free'
-          ? { kind: 'ok', text: `${esc(s.name)} has a free element slot for ${el.icon} ${esc(el.name)}.` }
-          : { kind: 'ok', text: `${esc(s.name)} may swap its element for ${el.icon} ${esc(el.name)}, keeping its essences.` },
+          ? { kind: 'ok', text: `${esc(s.name)} can take ${esc(el.name)}.` }
+          : { kind: 'ok', text: `${esc(s.name)} can trade its element for ${esc(el.name)}.` },
       ];
     }
     if (y.kind === 'mod') {
@@ -105,8 +106,8 @@ function ruleLines(host: PanelHost, a: IngredientRef, b: IngredientRef): Line[] 
       const check = canApplyEssence(s, ess, slots, applied);
       return [
         check.ok
-          ? { kind: 'ok', text: `${ess.icon} ${esc(ess.name)} fits ${esc(s.name)} (${s.shape.kind} · ${applied.length + 1}/${slots} essence slot${slots > 1 ? 's' : ''}).` }
-          : { kind: 'no', text: esc(check.message) },
+          ? { kind: 'ok', text: `${esc(ess.name)} fits ${esc(s.name)}.` }
+          : { kind: 'no', text: `${esc(ess.name)} doesn’t fit ${esc(s.name)}${slots && applied.length >= slots ? ' (no free Rune socket)' : ''}.` },
       ];
     }
     if (y.kind === 'skill') {
@@ -114,13 +115,25 @@ function ruleLines(host: PanelHost, a: IngredientRef, b: IngredientRef): Line[] 
       const blocker = mergeBlocker(s, t);
       return [
         blocker
-          ? { kind: 'no', text: `No shape merge: ${esc(blocker)}` }
-          : { kind: 'ok', text: 'These two could shape-merge: the stronger shape leads, the other adds a rider.' },
+          ? { kind: 'no', text: 'These two skills don’t combine.' }
+          : { kind: 'ok', text: 'These two skills could combine into one.' },
       ];
     }
   }
-  if (pa.kind === 'el' && pb.kind === 'el') return [{ kind: 'info', text: 'Two elements answer only to an old union — or resonate within you.' }];
-  return [{ kind: 'no', text: 'An essence needs a technique to shape.' }];
+  if (pa.kind === 'el' && pb.kind === 'el') return [{ kind: 'ok', text: 'Two elements might make something new.' }];
+  return [{ kind: 'no', text: 'An essence needs a skill.' }];
+}
+
+/** The pair's ONE line (the first and most useful thing), plus the rest for "Details". */
+function pairLine(lines: Line[], a: string | null, b: string | null): { main: Line; more: Line[] } {
+  if (!a || !b) return { main: { kind: 'info', text: a || b ? 'Now pick a second one.' : 'Pick two things below to fuse.' }, more: [] };
+  const no = lines.find((l) => l.kind === 'no');
+  if (no) return { main: no, more: [] };
+  const good = lines.find((l) => l.kind === 'good');
+  if (good) return { main: good, more: [] };
+  const mem = lines.find((l) => l.kind === 'mem');
+  if (mem) return { main: { kind: 'mem', text: 'You tried this before.' }, more: lines.filter((l) => l !== mem).concat(mem) };
+  return { main: { kind: 'ok', text: 'Try it and see what happens!' }, more: lines.filter((l) => l.kind !== 'info') };
 }
 
 function resultCard(host: PanelHost, st: Stored): string {
@@ -129,18 +142,18 @@ function resultCard(host: PanelHost, st: Stored): string {
   const fresh = st.fresh ? 'fresh' : '';
   st.fresh = false;
   if (!r.ok) {
-    return `<div class="fres bad ${fresh}"><span class="ico">💨</span><div><b>Nothing takes shape</b><small>${esc(r.message)}</small>
+    return `<div class="fres bad ${fresh}"><span class="ico">💨</span><div><b>Nothing happened</b><small>Try another pair.</small>
       ${r.hint ? `<p class="whisper">“${esc(r.hint)}”</p>` : ''}</div></div>`;
   }
-  const kind = r.kind === 'authored' ? 'Discovery' : r.kind === 'merge' ? 'Shape fusion' : r.kind === 'essence' ? 'Essence variant' : 'Infusion';
   const p = parseRef(r.result);
   const s = p.kind === 'skill' ? reg.skill(p.id) : undefined;
+  const el = p.kind === 'el' ? reg.element(p.id) : undefined;
   return `<div class="fres good ${r.isNew ? 'new' : ''} ${fresh}">
-    <span class="ico">${reg.refIcon(r.result)}</span>
-    <div><small class="kick">${r.isNew ? `NEW ${kind.toUpperCase()}` : 'ALREADY KNOWN'}</small><b>${esc(r.name)}</b>
-      <small>${esc(reg.refName(st.a))} + ${esc(reg.refName(st.b))}${r.consumed ? ` · used 1 ${esc(reg.essence(r.consumed)?.name ?? r.consumed)}` : ''}</small>
-      ${s ? `<small>${esc(s.desc)}</small>` : ''}
-      ${s && book.has(s.id) ? `<button class="btn" data-view="${esc(s.id)}">View skill ›</button>` : ''}</div></div>`;
+    <span class="ico">${refIconHtml(host.ctrl, r.result, reg.refIcon(r.result), 48)}</span>
+    <div><small class="kick">${r.isNew ? 'NEW!' : 'MADE BEFORE'}</small><b>${esc(r.name)}</b>
+      ${s ? `<small>${esc(oneLine(s.desc))}</small>` : el ? `<small>${esc(oneLine(el.desc))}</small>` : ''}
+      ${r.consumed ? `<small>Used 1 ${esc(reg.essence(r.consumed)?.name ?? '')}</small>` : ''}
+      ${s && book.has(s.id) ? `<button class="btn" data-view="${esc(s.id)}">See skill</button>` : ''}</div></div>`;
 }
 
 export function renderAltar(host: PanelHost): void {
@@ -150,22 +163,24 @@ export function renderAltar(host: PanelHost): void {
   const socks = sockets(host);
   const [a, b] = socks;
   const ings = book.ingredients();
-  const t = tab(host, 'altar.tab', 'skills');
+  const essOn = ctrl.unlocks().essences || ings.essences.length > 0;
+  let t = tab(host, 'altar.tab', 'skills');
+  if (t === 'essences' && !essOn) t = 'skills';
   const stored = host.state['altar.result'] as Stored | undefined;
 
   const sockHtml = (ref: string | null, i: number) =>
     ref
-      ? `<button class="fsock full" data-fslot="${i}" aria-label="Remove ${esc(reg.refName(ref))}"><span class="ico">${reg.refIcon(ref)}</span><small>${esc(reg.refName(ref))}</small><i class="rm">✕</i></button>`
-      : `<button class="fsock" data-fslot="${i}" aria-label="Empty socket"><span class="ico">◇</span><small>${i ? 'Second' : 'First'}</small></button>`;
+      ? `<button class="fsock full" data-fslot="${i}" aria-label="Remove ${esc(reg.refName(ref))}">${refIconHtml(ctrl, ref, reg.refIcon(ref), 48)}<small>${esc(reg.refName(ref))}</small><i class="rm">✕</i></button>`
+      : `<button class="fsock" data-fslot="${i}" aria-label="Empty"><span class="ico">＋</span><small>${i ? 'Second' : 'First'}</small></button>`;
 
   let lines: Line[] = [];
   let block: string | null = null;
   if (a && b) ({ lines, block } = preview(host, a, b));
-  else lines = [{ kind: 'info', text: a || b ? 'Choose a second ingredient below.' : 'Place two ingredients: a skill and an element, a skill and an essence, two skills, or two elements.' }];
+  const { main, more } = pairLine(lines, a, b);
   const canFuse = !!a && !!b && at && !block;
-  const fuseLabel = !at ? 'Altar needed' : !a || !b ? 'Fuse' : block ? 'Cannot fuse' : 'Fuse';
+  const fuseLabel = !at ? 'Fuse at an altar' : 'Fuse';
 
-  // Memory badges against the one socketed ingredient.
+  // ✓ / ○ marks against the one socketed ingredient.
   const anchor = (a && !b) || (!a && b) ? (a ?? b) : null;
   const memOf = (ref: string): string => {
     if (!anchor || ref === anchor) return '';
@@ -179,37 +194,41 @@ export function renderAltar(host: PanelHost): void {
         const s = p.kind === 'skill' ? reg.skill(p.id) : undefined;
         const inUse = socks.includes(i.ref);
         const badge = s
-          ? `<span class="rk">${i.ready ? 'R' + book.rank(s.id) : '🔒R' + fusionMinRank(s.maxRank)}</span>`
+          ? i.ready
+            ? ''
+            : `<span class="rk">🔒 Rank ${fusionMinRank(s.maxRank)}</span>`
           : i.count !== undefined
             ? `<span class="rk cnt">×${i.count}</span>`
             : '';
-        return `<button class="ing ${i.ready ? '' : 'locked'} ${inUse ? 'inuse' : ''}" data-ref="${esc(i.ref)}" title="${esc(i.message ?? i.name)}">
-          <span class="ico">${i.icon}</span><small>${esc(i.name)}</small>${badge}${memOf(i.ref)}</button>`;
+        return `<button class="ing ${i.ready ? '' : 'locked'} ${inUse ? 'inuse' : ''}" data-ref="${esc(i.ref)}" data-why="${esc(
+          s && !i.ready ? `Reach rank ${fusionMinRank(s.maxRank)} with ${s.name} to fuse it.` : '',
+        )}">${refIconHtml(ctrl, i.ref, i.icon, 32)}<small>${esc(i.name)}</small>${badge}${memOf(i.ref)}</button>`;
       })
       .join('');
   const empty: Record<string, string> = {
-    elements: 'No elements attuned yet. Elements are found by doing things: forging, fishing, mining, meditating, hunting wardens.',
+    elements: 'No elements yet. Quests and the world will teach you some.',
     skills: 'No skills yet.',
-    essences: 'No essences held. Monsters drop the essence of what they do; trainers sell some.',
+    essences: 'No essences yet. Monsters drop them.',
   };
   const skills = [...ings.skills].sort((x, y) => Number(y.ready) - Number(x.ready));
   const entries = t === 'elements' ? ings.elements : t === 'essences' ? ings.essences : skills;
+  const tabs: [string, string][] = [
+    ['skills', `Skills`],
+    ['elements', `Elements`],
+    ...(essOn ? ([['essences', 'Essences']] as [string, string][]) : []),
+  ];
 
   // Whispers already heard about what is on the altar (never new information).
   const heard = new Set(book.state.hints);
   const about = [...new Set(socks.filter((r): r is string => !!r).flatMap((r) => reg.recipesWith(r)))]
     .filter((r) => r.hint && heard.has(r.hint) && !book.state.discoveries.includes(pairKey(r.a, r.b)))
-    .map((r) => r.hint!);
-  const recent = book.state.hints.slice(-3).reverse().filter((h) => !about.includes(h));
-  const stats = book.stats();
+    .map((r) => r.hint!)
+    .slice(0, 2);
+  const made = book.stats().discoveries;
+  const mark = (k: Line['kind']) => (k === 'no' ? '✗' : k === 'good' ? '★' : k === 'mem' ? '○' : k === 'ok' ? '✓' : '·');
 
   const body = `
-    ${
-      at
-        ? ''
-        : `<div class="away"><span class="ico">⚗️</span><div><b>Fusion only takes at an altar.</b>
-            <small>Altars stand in ${ALTAR_TOWNS}. You can plan here; the Fuse button wakes when you stand beside one.</small></div></div>`
-    }
+    ${at ? '' : `<div class="away small"><span class="ico">⚗️</span><div><b>Fuse at a Fusion Altar</b><small>${ALTAR_TOWNS}. You can plan here.</small></div></div>`}
     <div class="altar-split">
       <div class="altar-left">
         <div class="altar-stage ${a && b ? 'armed' : ''}">
@@ -217,30 +236,22 @@ export function renderAltar(host: PanelHost): void {
           <span class="core" aria-hidden="true"><i></i></span>
           ${sockHtml(b, 1)}
         </div>
-        <ul class="fcheck">${lines.map((l) => `<li class="${l.kind}">${l.kind === 'ok' ? '✓' : l.kind === 'no' ? '✗' : l.kind === 'good' ? '★' : l.kind === 'mem' ? '◷' : '·'} <span>${l.text}</span></li>`).join('')}</ul>
-        <button class="btn gold fuse" ${canFuse ? '' : 'disabled'}>⚗️ ${fuseLabel}</button>
+        <p class="fline ${main.kind}"><i>${mark(main.kind)}</i> <span>${main.text}</span></p>
+        ${detailsHtml(more.length ? `<ul class="fcheck">${more.map((l) => `<li class="${l.kind}">${mark(l.kind)} <span>${l.text}</span></li>`).join('')}</ul>` : '')}
+        <button class="btn gold big fuse" ${canFuse ? '' : 'disabled'}>⚗️ ${fuseLabel}</button>
         <div class="fuse-result">${stored ? resultCard(host, stored) : ''}</div>
       </div>
       <div class="altar-right">
-        ${tabsHtml(
-          'altar.tab',
-          [
-            ['elements', `Elements · ${ings.elements.length}`],
-            ['skills', `Skills · ${ings.skills.length}`],
-            ['essences', `Essences · ${ings.essences.length}`],
-          ],
-          t,
-        )}
-        ${anchor ? `<p class="memleg">Against ${reg.refIcon(anchor)} <b>${esc(reg.refName(anchor))}</b>: <i class="mem made">✓</i> made something · <i class="mem tried">○</i> tried</p>` : ''}
+        ${tabsHtml('altar.tab', tabs, t)}
+        ${anchor && entries.some((e) => memOf(e.ref)) ? `<p class="memleg"><i class="mem made">✓</i> made something · <i class="mem tried">○</i> tried</p>` : ''}
         ${entries.length ? `<div class="ings">${list(entries)}</div>` : `<p class="sub">${empty[t]}</p>`}
-        ${t === 'skills' ? `<p class="sub">Skills join the altar at rank ${fusionMinRank(99)} (or their max rank). Ingredients are never used up — only essences, and only on success.</p>` : ''}
-        ${about.length ? `<h3>Whispers about these</h3>${about.map((h) => `<p class="whisper">“${esc(h)}”</p>`).join('')}` : ''}
-        ${recent.length ? `<h3>Recent whispers</h3>${recent.map((h) => `<p class="whisper">“${esc(h)}”</p>`).join('')}` : ''}
+        ${about.length ? `<h3>Whispers</h3>${about.map((h) => `<p class="whisper">“${esc(h)}”</p>`).join('')}` : ''}
       </div>
     </div>
-    <p class="foot">${stats.discoveries} discoveries from ${stats.experiments} experiments</p>`;
-  sheet(host, '⚗️ Fusion Altar', body, 'fusion wide');
+    ${made ? `<p class="foot">${made} thing${made === 1 ? '' : 's'} made so far</p>` : ''}`;
+  sheet(host, '⚗️ Fuse', body, 'fusion wide');
   wireTabs(host, 'altar.tab');
+  wireToggles(host.modal);
 
   const changed = () => {
     delete host.state['altar.result'];
@@ -256,7 +267,7 @@ export function renderAltar(host: PanelHost): void {
     btn.addEventListener('click', () => {
       const ref = btn.dataset.ref!;
       if (btn.classList.contains('locked')) {
-        host.toast(esc(btn.title));
+        if (btn.dataset.why) host.toast(esc(btn.dataset.why));
         return;
       }
       const i = socks.indexOf(ref);
@@ -268,7 +279,7 @@ export function renderAltar(host: PanelHost): void {
       changed();
     }),
   );
-  $$<HTMLButtonElement>(host.modal, '[data-view]').forEach((btn) => btn.addEventListener('click', () => host.open('skills', btn.dataset.view!)));
+  $$<HTMLButtonElement>(host.modal, '[data-view]').forEach((btn) => btn.addEventListener('click', () => host.open('skill', btn.dataset.view!)));
   const fuseBtn = $<HTMLButtonElement>(host.modal, '.fuse');
   fuseBtn.addEventListener('click', () => {
     if (!a || !b || !canFuse) return;

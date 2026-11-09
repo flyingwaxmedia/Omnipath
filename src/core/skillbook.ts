@@ -1289,6 +1289,16 @@ export class SkillBook {
     return { ok: true, message: `You now wear ${cls.name}.` };
   }
 
+  /** Takes the worn class off ("No class"): worn → null, caches invalidated, classes re-evaluated. */
+  unwear(): BookOutcome {
+    const id = this.state.worn;
+    if (id === null) return { ok: true, message: 'You wear no class.' };
+    this.state.worn = null;
+    this.invalidate();
+    this.evaluateClasses();
+    return { ok: true, message: `You set ${this.reg.classDef(id)?.name ?? 'your class'} aside.` };
+  }
+
   /** Buys one rank of a tree node of a discovered class; a skill node also learns its skill. */
   buyNode(classId: string, nodeId: string): BookOutcome {
     const cls = this.reg.classDef(classId);

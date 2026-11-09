@@ -1,6 +1,7 @@
 import type { WeaponType } from '../core/types';
 import { WEAPONS } from '../data/weapons';
 import { esc } from './util';
+import { oneLine } from './words';
 
 export interface TitleChoice {
   kind: 'continue' | 'new';
@@ -29,7 +30,7 @@ export function showTitle(parent: HTMLElement, hasSave: boolean, savedName?: str
             ${hasSave ? `<button class="btn gold big cont">Continue${savedName ? ` as ${esc(savedName)}` : ''}</button>` : ''}
             <button class="btn ${hasSave ? '' : 'gold'} big new">New Adventure</button>
           </div>
-          <p class="fine">Master · Morph · Fuse · Discover</p>
+          <p class="fine">Learn · Transform · Fuse · Discover</p>
         </div>`;
       el.querySelector('.cont')?.addEventListener('click', () => done({ kind: 'continue' }));
       el.querySelector('.new')!.addEventListener('click', () => create());
@@ -40,19 +41,19 @@ export function showTitle(parent: HTMLElement, hasSave: boolean, savedName?: str
       el.innerHTML = `
         <div class="title-card create">
           <h2>Who are you?</h2>
-          <input class="name" maxlength="16" placeholder="Name" value="" autocomplete="off" />
-          <h3>Choose your first weapon</h3>
-          <p class="fine">It decides your first basic attack — and every skill grows from there.</p>
+          <input class="name" maxlength="16" placeholder="Your name" value="" autocomplete="off" />
+          <h3>Pick your first weapon</h3>
+          <p class="fine">Every skill you learn works with any weapon.</p>
           <div class="weapon-pick">
             ${(Object.keys(WEAPONS) as WeaponType[])
               .map(
                 (w) => `<button class="wcard ${w === weapon ? 'on' : ''}" data-w="${w}">
                   <span class="ico">${WEAPONS[w].icon}</span><b>${w[0].toUpperCase() + w.slice(1)}</b>
-                  <small>${esc(WEAPONS[w].blurb)}</small></button>`,
+                  <small>${esc(oneLine(WEAPONS[w].blurb))}</small></button>`,
               )
               .join('')}
           </div>
-          ${hasSave ? '<p class="warn">Starting a new adventure will erase your current character.</p>' : ''}
+          ${hasSave ? '<p class="warn">This erases your current hero.</p>' : ''}
           <div class="title-actions">
             <button class="btn back">Back</button>
             <button class="btn gold big go">Begin</button>

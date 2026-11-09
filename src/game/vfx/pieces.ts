@@ -13,6 +13,7 @@ import {
   SIGIL_BUCKETS,
   UTILITY_RAMP_IDS,
   VFX_BUDGET,
+  floorBucket,
   type ComponentId,
   type ComponentParams,
   type FamilyId,
@@ -63,6 +64,18 @@ const VSYNC = 1000 / 60;
 /** A duration rounded to whole 60 Hz vsyncs (total animation times, ring `ms`). At least one vsync. */
 export function vsync(ms: number): number {
   return Math.round(Math.max(1, Math.round(ms / VSYNC)) * VSYNC);
+}
+
+/**
+ * Aftermath decals (scorch, wet, frost, ink, rune, cracks, pool) mark the core of a blast, not its whole area: the
+ * rim, the rings and the units carry the true radius. Capping them keeps the warm atlas set of a busy fight inside
+ * VFX_BUDGET.maxPages (a full-radius r168 decal alone is 3 x 300² px).
+ */
+export const AFTERMATH_MAX_R = 96;
+/** Aftermath sizes (DECAL_BUCKETS values): coarse, so novas of similar size share one decal bake. */
+const AFTERMATH_R: readonly number[] = [16, 32, 48, 64, AFTERMATH_MAX_R];
+export function aftermathR(radius: number): number {
+  return floorBucket(Math.min(radius, AFTERMATH_MAX_R), AFTERMATH_R);
 }
 
 /** Projectile cell for a hit-test size: ≤ 9 → 16, ≤ 14 → 24, ≤ 22 → 32, else 48; `up` buckets larger (monsters). */

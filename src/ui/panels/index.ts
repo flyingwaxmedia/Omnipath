@@ -7,6 +7,7 @@ import { renderClasses } from './classes';
 import { renderCodex } from './codex';
 import type { PanelRender } from './common';
 import { renderMap } from './map';
+import { renderNpc } from './npc';
 import { renderTrainer } from './trainer';
 
 /** Panels of this lane that cover the whole screen (uiOpen.fullscreen: the render lane sleeps the game loop). */
@@ -19,4 +20,8 @@ export const PANELS: Record<string, PanelRender> = {
   bag: renderBag,
   trainer: renderTrainer,
   map: renderMap,
+  // The quest-aware NPC dialog (ui.npcDialog → openNpcDialog opens it as 'dialog' with the NPC id, so ui.current keeps
+  // reading 'dialog' while an NPC talks; an object dialog without an arg is never re-rendered). 'npc' is an alias.
+  dialog: renderNpc,
+  npc: renderNpc,
 };

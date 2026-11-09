@@ -3,7 +3,7 @@
 // params and compositions and runs last in deriveVfx. Package R; Phaser-free and pure.
 import type { SkillDef, SkillShape } from '../../core/types';
 import { familyOf, lookOf } from './families';
-import { cellFor, piece, reink, type Ink } from './pieces';
+import { aftermathR, cellFor, piece, reink, type Ink } from './pieces';
 import {
   DECAL_BUCKETS,
   floorBucket,
@@ -73,6 +73,7 @@ function repaint(r: VfxRecipe, from: FamilyId, to: FamilyId): VfxRecipe {
       ...(rd.returns ? { returns: { turn: rd.returns.turn.map(fix), tether: rd.returns.tether.map(fix), catch: rd.returns.catch.map(fix) } } : {}),
       ...(rd.reprise ? { reprise: { ghost: rd.reprise.ghost.map(fix) } } : {}),
       ...(rd.pierce ? { pierce: { mark: rd.pierce.mark.map(fix) } } : {}),
+      ...(rd.arc ? { arc: { zap: rd.arc.zap.map(fix) } } : {}),
     },
   };
 }
@@ -106,14 +107,12 @@ function funnel(r: VfxRecipe, lift = 1): VfxPiece[] {
   const ink = inkOf(r);
   return [1, 0.7, 0.45].map((k, i) =>
     piece('ring', { r: round(R * k), aspect: aspectOf(r), thick: i === 0 ? 3 : 2, style: 'gapped', ink: i === 0 ? 'hot' : 'lit', anim: 'sweep', heads: 2, ms: 117 }, ink, {
-      anchor: at('caster', -round(12 * i * lift)),
+      anchor: at('caster', i === 0 ? 0 : -round(12 * i * lift)),
       tags: geoTags(r),
     }),
   );
 }
 const vortex = (r: VfxRecipe, lift = 1): VfxRecipe => swap(r, 'cast', (p) => p.component === 'ring' && p.params.ink !== 'dim', funnel(r, lift));
-const spiral = (r: VfxRecipe, kind: 'leaf' | 'ember' | 'line', f: FamilyId = r.family): VfxPiece =>
-  piece('motes', { kind, size: 2 }, inkOf(r, f), { anchor: at('caster', -12), place: { pattern: 'spiral', count: 12, radius: radiusOf(r) } });
 
 /** Shadow-cloud nova: cloud core + drifting smoke sheets instead of the implode. */
 function shroud(r: VfxRecipe, f: FamilyId): VfxRecipe {
@@ -134,7 +133,9 @@ function well(r: VfxRecipe, s: SkillDef): VfxRecipe {
   const arc = (from: number) =>
     piece('ring', { r: round(R * 0.5), aspect: aspectOf(r), thick: 2, style: 'solid', ink: 'lit', anim: 'sweep', heads: 1, arc: [from, from + 90], ms: 117 }, ink, { anchor: aim, layer: 'ground', lifeMs: delay });
   const out = add(r, 'telegraph', piece('nova', { core: 'implode', c: 24, heavy: false }, ink, { anchor: aim, lifeMs: delay }), arc(0), arc(180));
-  return add(out, 'area', piece('ring', { r: round(R * 0.15), r0: R, aspect: aspectOf(r), thick: 2, style: 'solid', ink: 'hot', anim: 'contract', ms: 217 }, ink, { anchor: aim, layer: 'ground' }));
+  return swap(out, 'area', (p) => p.component === 'ring' && p.params.r === R && p.params.anim === 'expand', [
+    piece('ring', { r: round(R * 0.15), r0: R, aspect: aspectOf(r), thick: 3, style: 'solid', ink: 'hot', anim: 'contract', ms: 217 }, ink, { anchor: aim, layer: 'ground', tags: geoTags(r) }),
+  ]);
 }
 
 /** Storm head: 4 stacked cloud puffs over the zone during the delay, 3 staggered sky-bolts with one flash, rain. */
@@ -196,12 +197,13 @@ const DEFS: readonly [string, string, SignaturePatch][] = [
       out = edit(out, 'area', 'nova', (p) => ({ ...p, params: { ...p.params, core: 'blast', c: 56, heavy: true } }) as VfxPiece);
       const unit: UnitKind = rock ? 'rock-spike' : lookOf(r.family).unit;
       out = swap(out, 'area', (p) => p.component === 'erupt', [units(out, unit, rock ? 'earth' : r.family, 12)]);
-      out = add(out, 'area', piece('decal', { kind: 'cracks', r: decalR(R), aspect: aspectOf(r), density: 0.5, shape: 'disc' }, inkOf(r, rock ? 'earth' : r.family), { anchor: at('aim', 0), layer: 'ground', lifeMs: 1000 }));
+      out = add(out, 'area', piece('decal', { kind: 'cracks', r: aftermathR(R), aspect: aspectOf(r), density: 0.5, shape: 'disc' }, inkOf(r, rock ? 'earth' : r.family), { anchor: at('aim', 0), layer: 'ground', lifeMs: 1000 }));
       return { ...withCarrier(out, { kind: 'nova', core: 'blast', unit }), juice: { ...out.juice, trauma: 0.3 } };
     },
   ],
-  ['tornado', 'vortex funnel of 3 stacked gapped sweeps + leaves on a spiral', (r) => add(vortex(r), 'cast', spiral(r, 'leaf'))],
-  ['firestorm', 'the tornado funnel in fire + an ember spiral', (r) => add(vortex(r), 'cast', spiral(r, 'ember'))],
+  // The vortex style already throws the family's debris (leaves / embers) on a spiral; the funnel replaces its rings.
+  ['tornado', 'vortex funnel of 3 stacked gapped sweeps + leaves on a spiral', (r) => vortex(r)],
+  ['firestorm', 'the tornado funnel in fire + an ember spiral', (r) => vortex(r)],
   [
     'eye_of_the_storm',
     'a taller funnel + stacked storm clouds + rain',
@@ -209,7 +211,6 @@ const DEFS: readonly [string, string, SignaturePatch][] = [
       add(
         vortex(r, 1.2),
         'cast',
-        spiral(r, 'leaf'),
         piece('puff', { kind: 'cloud', r: 7 }, inkOf(r, 'storm'), { anchor: at('caster', -36), place: { pattern: 'stack', count: 3, radius: 24 } }),
         piece('motes', { kind: 'line', size: 2 }, inkOf(r, 'storm'), { anchor: at('caster', -40), place: { pattern: 'fall', count: 12, radius: radiusOf(r) } }),
       ),
@@ -294,7 +295,7 @@ const DEFS: readonly [string, string, SignaturePatch][] = [
   ],
   [
     'starfall_lattice',
-    '10 star shards fall onto lattice points joined by bead lines during the delay; sigil r48 at the centre',
+    '10 star shards fall onto lattice points joined by bead lines during the delay, over the r48 rune circle',
     (r, s) => {
       const delay = novaDelay(r, s);
       const R = radiusOf(r);
@@ -302,8 +303,8 @@ const DEFS: readonly [string, string, SignaturePatch][] = [
         r,
         'telegraph',
         piece('erupt', { unit: 'star-shard', scale: 'm' }, inkOf(r), { anchor: at('aim', 0), place: { pattern: 'lattice', count: 10, radius: R }, move: { from: { x: 0, y: -48 }, ms: delay, ease: 'in' }, lifeMs: delay }),
+        // The r48 rune circle at the centre is the arcane nova marker every staff nova already draws (no second sigil).
         piece('motes', { kind: 'bead', size: 2 }, inkOf(r), { anchor: at('aim', 0), place: { pattern: 'path', count: 20, radius: R }, lifeMs: delay }),
-        piece('sigil', { r: 48, points: 8, glyphs: 8, anim: 'draw' }, inkOf(r), { anchor: at('aim', 0), layer: 'preview', lifeMs: delay }),
       );
     },
   ],
@@ -383,7 +384,7 @@ const DEFS: readonly [string, string, SignaturePatch][] = [
       const decal = lookOf(fam).decal ?? 'wet';
       const R = radiusOf(out);
       out = swap(out, 'area', (p) => p.component === 'decal' && p.layer === 'ground', [
-        piece('decal', { kind: decal, r: decalR(R), aspect: aspectOf(out), density: 0.5, shape: 'disc' }, inkOf(out), { anchor: at('aim', 0), layer: 'ground', lifeMs: 1000, blend: decal === 'scorch' || decal === 'ink' ? 'multiply' : 'normal' }),
+        piece('decal', { kind: decal, r: aftermathR(R), aspect: aspectOf(out), density: 0.5, shape: 'disc' }, inkOf(out), { anchor: at('aim', 0), layer: 'ground', lifeMs: 1000, blend: decal === 'scorch' || decal === 'ink' ? 'multiply' : 'normal' }),
       ]);
       return withCarrier(out, { kind: 'nova', core: 'goo', unit });
     },
@@ -405,7 +406,7 @@ const DEFS: readonly [string, string, SignaturePatch][] = [
       let out = edit(r, 'area', 'nova', (p) => ({ ...p, params: { ...p.params, heavy: true } }) as VfxPiece);
       out = add(out, 'area', piece('ring', { r: R, r0: round(R * 0.7), aspect: aspectOf(r), thick: 2, style: 'jagged', ink: 'mid', anim: 'expand', ms: 250 }, inkOf(r), { anchor: at('aim', 0), layer: 'ground', delayMs: 83, tags: geoTags(r) }));
       if (!phase(out, 'area').some((p) => p.component === 'decal' && p.params.kind === 'cracks')) {
-        out = add(out, 'area', piece('decal', { kind: 'cracks', r: decalR(R), aspect: aspectOf(r), density: 0.5, shape: 'disc' }, inkOf(r), { anchor: at('aim', 0), layer: 'ground', lifeMs: 1000 }));
+        out = add(out, 'area', piece('decal', { kind: 'cracks', r: aftermathR(R), aspect: aspectOf(r), density: 0.5, shape: 'disc' }, inkOf(r), { anchor: at('aim', 0), layer: 'ground', lifeMs: 1000 }));
       }
       return r.owner === 'monster' ? { ...out, juice: { ...out.juice, trauma: 0.5 } } : out;
     },
@@ -418,7 +419,7 @@ const DEFS: readonly [string, string, SignaturePatch][] = [
       let out = add(r, 'telegraph', piece('missile', { form: 'glob', cell: 24, halo: r.owner === 'monster', pose: 'fly' }, inkOf(r), { anchor: at('aim', 0), move: { from: { x: -80, y: -40 }, ms: delay, ease: 'arc' }, lifeMs: delay, tags: ['geometryFromEvent'] }));
       out = add(out, 'area', piece('burst', { cls: 'blunt', size: 'm' }, inkOf(r), { anchor: at('aim', 0) }));
       if (!phase(out, 'area').some((p) => p.component === 'decal' && p.params.kind === 'pool')) {
-        out = add(out, 'area', piece('decal', { kind: 'pool', r: decalR(radiusOf(r)), aspect: aspectOf(r), density: 0.5, shape: 'disc' }, inkOf(r), { anchor: at('aim', 0), layer: 'ground', lifeMs: 1600 }));
+        out = add(out, 'area', piece('decal', { kind: 'pool', r: aftermathR(radiusOf(r)), aspect: aspectOf(r), density: 0.5, shape: 'disc' }, inkOf(r), { anchor: at('aim', 0), layer: 'ground', lifeMs: 1600 }));
       }
       return out;
     },

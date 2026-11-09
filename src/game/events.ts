@@ -43,12 +43,14 @@
 //   spark            Sudden insight: a skill cracked open into a new form mid-fight (forwarded from SkillBook 'spark')
 //   monsterTelegraph a monster began a technique wind-up (MonsterSkills.start): shape, where it lands, how long
 //
-// Declared for the game lane to emit (docs/INTEGRATION-v3.md §4, docs/VFX.md §8.2 — the names the VFX bridge uses):
+// VFX additions (docs/INTEGRATION-v3.md §4, docs/VFX.md §8.2 — the names the VFX bridge uses), emitted since v3:
 //   skillPulse          each strike swing / spin pulse / nova release / volley launch of ONE cast (player:
-//                       SkillSystem; monster: MonsterSkills swing / pulse) — the VFX never re-times swings
+//                       SkillSystem; monster: MonsterSkills swing / pulse / volley) — the VFX never re-times swings
 //   monsterTelegraphEnd a telegraphed monster technique resolved (its hits ran) or was cancelled (death, stun)
 //   enrage              a warden became enraged below half HP (MonsterSkills.enrage)
-// Optional fields marked "(VFX request)" are filled in by the game lane; listeners must cope with them missing.
+// Fields marked "(VFX request)" are filled where the emitter knows them (castId on castStart, projectile id / index /
+// count, telegraph id / timing / tell / rank, untilMs, source, via / from, spreadTo, heal.from, spark x / y,
+// death.killer, playerHurt attacker / skill); they stay optional, so listeners must cope with them missing.
 import type Phaser from 'phaser';
 import type { BuffStat, ElementId, MonsterDef, MonsterRank, ShapeKind, SkillDef, StatusKind } from '../core/types';
 import type { NodeKind } from '../core/world/types';
@@ -71,7 +73,7 @@ export interface SkillRef {
   element?: ElementId;
   /**
    * The player's cast (SkillSystem Cast.id): links castFire → projectiles / hops / novas / hits of the SAME cast
-   * (a reprise keeps its id). Absent for wind-ups (no cast yet) and monster techniques.
+   * (a reprise keeps its id); castStart carries the id reserved at wind-up. Absent for monster techniques.
    */
   castId?: number;
   /** The reprised copy of a cast (same castId) (VFX request). */
@@ -456,7 +458,7 @@ export interface GameEvents {
   barChanged: BarChangedEvent;
   spark: SparkEvent;
   monsterTelegraph: MonsterTelegraphEvent;
-  // Declared for the game lane (VFX requests, docs/VFX.md §8.2); not emitted yet.
+  // VFX requests (docs/VFX.md §8.2), emitted by SkillSystem / MonsterSkills.
   skillPulse: SkillPulseEvent;
   monsterTelegraphEnd: MonsterTelegraphEndEvent;
   enrage: EnrageEvent;

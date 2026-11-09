@@ -22,7 +22,7 @@ import { type Buff, type Stats, expToNext } from '../session';
 import { gameBus } from '../events';
 import { DEPTH } from '../render/depths';
 import { TILE } from '../world/runtime';
-import { CFX, type Cast, type CombatHost, SkillSystem, clearShot, fxStyle, hex } from './SkillSystem';
+import { CFX, type Cast, type CombatHost, SkillSystem, castRef, clearShot, fxStyle, hex } from './SkillSystem';
 
 const GLOOMCAPS_FOR_SHADOW = 5;
 /** Dealt or took damage within this window = in combat (buff use XP). */
@@ -57,6 +57,9 @@ export interface HurtOpts {
   source?: { x: number; y: number };
   /** Attacker rank (stronger crowd control from elites and wardens). */
   rank?: MonsterRank;
+  /** The monster that struck and its technique, when known (playerHurt / statusApplied payloads). */
+  attacker?: Monster;
+  skill?: SkillDef;
 }
 
 interface WindUp {
@@ -66,6 +69,8 @@ interface WindUp {
   target: Monster | null;
   aim: { x: number; y: number };
   preview: Phaser.GameObjects.Graphics | null;
+  /** Reserved at wind-up: castStart and every later part of this cast carry it. */
+  castId: number;
 }
 
 export class Combat implements CombatHost {
@@ -106,6 +111,8 @@ export class Combat implements CombatHost {
   private playerFxAt = 0;
   private pushDest: { x: number; y: number } | null = null;
   private readonly sparkable = new Map<string, boolean>();
+  /** Resting (the rest button): HP and SP come back four times faster until the player moves, casts or is hit. */
+  resting = false;
 
   constructor(readonly scene: MapScene) {}
 
@@ -301,7 +308,7 @@ export class Combat implements CombatHost {
           const tg = w.target && w.target.alive ? w.target : null;
           const aim = tg ? { x: tg.x, y: tg.y } : w.aim;
           if (tg) p.face(tg.x, tg.y);
-          this.fire(w.skill, tg, aim);
+          this.fire(w.skill, tg, aim, w.castId);
         }
       }
       return;
@@ -431,7 +438,7 @@ export class Combat implements CombatHost {
     this.windup = null;
     w.preview?.destroy();
     this.player.setCast(null);
-    if (show) this.scene.floatText(this.player.x, this.player.y - 66, `✕ ${w.skill.name}`, '#b8c0d0', 11);
+    if (show) this.scene.floatText(this.player.x, this.player.y - 66, `× ${w.skill.name}`, '#b8c0d0', 11);
   }
 
   /** Ground preview of a winding-up skill: where a nova lands, a dash's lane, a spin's ring, a strike's cone. */
@@ -512,6 +519,7 @@ export class Combat implements CombatHost {
     const s = this.scene;
     const skill = s.reg.skill(id);
     if (!skill || this.dead) return false;
+    this.resting = false;
     const u = s.usable(id);
     if (!u.ok) {
       if (!auto) this.gateToast(u.reason!);
@@ -564,9 +572,10 @@ export class Combat implements CombatHost {
     }
     if ((skill.castMs ?? 0) > 0) {
       p.path = [];
-      this.windup = { skill, start: now, until: now + skill.castMs!, target, aim, preview: null };
+      const castId = s.skills.reserveId();
+      this.windup = { skill, start: now, until: now + skill.castMs!, target, aim, preview: null, castId };
       p.setCast(0, this.colorFor(skill));
-      gameBus.emit('castStart', { skillId: skill.id, skill, element: skill.element, x: p.x, y: p.y, aim, target, durationMs: skill.castMs!, auto });
+      gameBus.emit('castStart', { skillId: skill.id, skill, element: skill.element, castId, x: p.x, y: p.y, aim, target, durationMs: skill.castMs!, auto });
       return true;
     }
     this.fire(skill, target, aim);
@@ -574,7 +583,7 @@ export class Combat implements CombatHost {
   }
 
   /** The effect fires: pay SP, start cooldown and after-cast lock, run the shape. */
-  private fire(skill: SkillDef, target: Monster | null, aim: { x: number; y: number }): void {
+  private fire(skill: SkillDef, target: Monster | null, aim: { x: number; y: number }, castId?: number): void {
     const s = this.scene;
     const pl = s.session.player;
     const cost = this.spCost(skill);
@@ -597,9 +606,9 @@ export class Combat implements CombatHost {
       this.lockUntil = now + this.lockTotal;
     }
     const rank = Math.max(1, s.book.rank(skill.id));
-    const cast = s.skills.newCast(skill, rank, { x: p.x, y: p.y });
+    const cast = s.skills.newCast(skill, rank, { x: p.x, y: p.y }, castId);
     if (skill.shape.kind === 'buff' && this.inCombat(now)) s.book.recordBuffUse(skill.id, this.maxEngagedThreat());
-    gameBus.emit('castFire', { skillId: skill.id, skill, element: skill.element, castId: cast.id, x: p.x, y: p.y, shape: skill.shape.kind, aim, target, rank, basic, map: s.mapId });
+    gameBus.emit('castFire', { ...castRef(cast), x: p.x, y: p.y, shape: skill.shape.kind, aim, target, rank, basic, map: s.mapId });
     s.skills.execute(cast, aim, target);
     s.onCast(skill, aim);
     if (target && !this.target && skill.shape.kind !== 'dash') this.setTarget(target);
@@ -610,8 +619,9 @@ export class Combat implements CombatHost {
     const sh = skill.shape;
     const amount = sh.amount * (1 + 0.08 * (rank - 1));
     this.buffs = this.buffs.filter((b) => b.source !== skill.id);
-    this.buffs.push({ stat: sh.stat, amount, until: this.scene.time.now + sh.duration, source: skill.id });
-    gameBus.emit('buffApplied', { target: 'player', skillId: skill.id, skill, element: skill.element, stat: sh.stat, amount, durationMs: sh.duration, x: this.player.x, y: this.player.y });
+    const until = this.scene.time.now + sh.duration;
+    this.buffs.push({ stat: sh.stat, amount, until, source: skill.id });
+    gameBus.emit('buffApplied', { target: 'player', skillId: skill.id, skill, element: skill.element, stat: sh.stat, amount, durationMs: sh.duration, untilMs: until, x: this.player.x, y: this.player.y });
     this.scene.ui.log(`${skill.icon} <b>${esc(skill.name)}</b> active for ${sh.duration / 1000}s.`, 'good');
   }
 
@@ -691,7 +701,7 @@ export class Combat implements CombatHost {
     const top = m.y - m.sprite.displayHeight;
     const color = this.colorFor(skill);
     if (roll.resisted) {
-      gameBus.emit('hit', { source: 'player', target: m, skillId: skill.id, skill, element: skill.element, castId: cast.id, x: m.x, y: m.y, damage: 0, crit: false, resisted: true, multiplier: 0, killed: false, hitIndex: cast.tally.hits, ang: Math.atan2(m.y - cast.origin.y, m.x - cast.origin.x) });
+      gameBus.emit('hit', { ...castRef(cast), ...this.via(cast), source: 'player', target: m, x: m.x, y: m.y, damage: 0, crit: false, resisted: true, multiplier: 0, killed: false, hitIndex: cast.tally.hits, ang: Math.atan2(m.y - cast.origin.y, m.x - cast.origin.x) });
       s.floatText(m.x, top, 'Resist', '#9aa0aa', 12);
       if (!this.target && m.alive) this.setTarget(m);
       return roll;
@@ -711,7 +721,7 @@ export class Combat implements CombatHost {
     }
     if (skill.status && !kinds.includes(skill.status)) kinds.push(skill.status);
     if (skill.riders?.knockback && !kinds.includes('knockback')) kinds.push('knockback');
-    for (const k of kinds) this.applyStatus(m, k, roll.amount, cast.origin);
+    for (const k of kinds) this.applyStatus(m, k, roll.amount, cast.origin, skill);
 
     const leech = skill.riders?.leech;
     if (leech) {
@@ -721,7 +731,7 @@ export class Combat implements CombatHost {
       if (heal >= 1) {
         cast.leech.healed += heal;
         pl.hp = Math.min(st.maxHp, pl.hp + heal);
-        gameBus.emit('heal', { amount: heal, source: 'leech', x: this.player.x, y: this.player.y });
+        gameBus.emit('heal', { amount: heal, source: 'leech', x: this.player.x, y: this.player.y, from: { x: m.x, y: m.y } });
         s.floatText(this.player.x, this.player.y - 40, `+${Math.round(heal)}`, '#7fff9f', 11);
         s.skills.fxStream({ x: m.x, y: m.y - 14 }, { x: this.player.x, y: this.player.y - 20 }, 0x7fff9f, 3);
       }
@@ -729,14 +739,16 @@ export class Combat implements CombatHost {
 
     const killed = m.hp <= 0;
     const hitIndex = cast.tally.hits++;
-    gameBus.emit('hit', { source: 'player', target: m, skillId: skill.id, skill, element: skill.element, castId: cast.id, x: m.x, y: m.y, damage: roll.amount, crit: roll.crit, resisted: false, multiplier: roll.multiplier, combo: roll.combo?.name, killed, hitIndex, ang: Math.atan2(m.y - cast.origin.y, m.x - cast.origin.x) });
+    gameBus.emit('hit', { ...castRef(cast), ...this.via(cast), source: 'player', target: m, x: m.x, y: m.y, damage: roll.amount, crit: roll.crit, resisted: false, multiplier: roll.multiplier, combo: roll.combo?.name, killed, hitIndex, ang: Math.atan2(m.y - cast.origin.y, m.x - cast.origin.x) });
     const instanceHits = m.hitGrants.get(skill.id) ?? 0;
     book.recordHit(skill.id, { monster: m.def, killed, hitIndex, instanceHits });
     if (hitIndex < MASTERY.maxHitsPerUse) m.hitGrants.set(skill.id, instanceHits + 1);
     if (this.canSpark(skill.id)) {
       // Spark moment: the 'spark' event (MapScene) runs the 250 ms hit-stop, banner and vibration; the radial
       // flash bursts from the struck foe.
+      s.session.sparkAt = { x: m.x, y: m.y };
       const learned = book.trySpark(skill.id, m.def, book.now());
+      s.session.sparkAt = null;
       if (learned) s.skills.fxSpark(m.x, m.y - Math.min(30, m.sprite.displayHeight * 0.5));
     }
 
@@ -747,7 +759,7 @@ export class Combat implements CombatHost {
         .filter((o) => o !== m && o.alive && Math.hypot(o.x - m.x, o.y - m.y) <= ARC_RADIUS)
         .sort((a, b) => Math.hypot(a.x - m.x, a.y - m.y) - Math.hypot(b.x - m.x, b.y - m.y))
         .slice(0, arc.targets);
-      const zap: Cast = { ...cast, arcZap: true, mult: cast.mult * arc.mult };
+      const zap: Cast = { ...cast, arcZap: true, arcFrom: from, via: 'arc', mult: cast.mult * arc.mult };
       others.forEach((o, i) =>
         s.time.delayedCall(50 + i * 40, () => {
           if (!o.alive || this.dead) return;
@@ -757,16 +769,26 @@ export class Combat implements CombatHost {
       );
     }
 
-    if (killed) this.kill(m);
+    if (killed) this.kill(m, cast);
     else if (!this.target && m.alive && skill.shape.kind !== 'dash') this.setTarget(m);
     return roll;
+  }
+
+  /** hit.via / hit.from for a blow that did not land directly (arc zap, pierce, return). */
+  private via(cast: Cast): { via?: 'arc' | 'pierce' | 'return'; from?: { x: number; y: number } } {
+    if (!cast.via) return {};
+    return cast.via === 'arc' && cast.arcFrom ? { via: 'arc', from: { ...cast.arcFrom } } : { via: cast.via };
   }
 
   /** Ends the consumed status, floats the combo name and plays its FX (Shatter / Conduct / Fan the Flames). */
   private applyCombo(m: Monster, roll: DamageRoll, cast: Cast, top: number, now: number): void {
     const s = this.scene;
     const c = roll.combo!;
-    gameBus.emit('combo', { target: m, name: c.name, consumes: c.consumes, skillId: cast.skill.id, skill: cast.skill, element: cast.skill.element, castId: cast.id, x: m.x, y: m.y });
+    // Fan the Flames: where the burn spreads (computed before the event so the VFX can draw the streams).
+    const spread = c.spreadBurn
+      ? this.monsters.filter((o) => o !== m && o.alive && Math.hypot(o.x - m.x, o.y - m.y) <= BURN_SPREAD_RADIUS + o.radius)
+      : [];
+    gameBus.emit('combo', { ...castRef(cast), target: m, name: c.name, consumes: c.consumes, x: m.x, y: m.y, ...(c.spreadBurn ? { spreadTo: spread.map((o) => ({ x: o.x, y: o.y })) } : {}) });
     delete m.status.marks[c.consumes];
     const y = m.y - Math.min(24, m.sprite.displayHeight * 0.45);
     if (c.consumes === 'freeze') {
@@ -783,17 +805,13 @@ export class Combat implements CombatHost {
       s.skills.fxSpin(m.x, m.y - 8, m.radius + 12, 0xff8a3a, 'fire');
     }
     s.floatText(m.x, top - 18, `${c.name}!`, '#ffd76a', 15);
-    if (c.spreadBurn) {
-      for (const o of this.monsters) {
-        if (o === m || !o.alive) continue;
-        if (Math.hypot(o.x - m.x, o.y - m.y) > BURN_SPREAD_RADIUS + o.radius) continue;
-        this.applyStatus(o, 'burn', roll.amount, cast.origin);
-        s.skills.fxStream({ x: m.x, y }, { x: o.x, y: o.y - 12 }, 0xff6a2b, 4, CFX.flame);
-      }
+    for (const o of spread) {
+      this.applyStatus(o, 'burn', roll.amount, cast.origin, cast.skill);
+      s.skills.fxStream({ x: m.x, y }, { x: o.x, y: o.y - 12 }, 0xff6a2b, 4, CFX.flame);
     }
   }
 
-  applyStatus(m: Monster, kind: StatusKind, dmg: number, origin: { x: number; y: number }): void {
+  applyStatus(m: Monster, kind: StatusKind, dmg: number, origin: { x: number; y: number }, source?: SkillDef): void {
     const now = this.scene.time.now;
     const boss = m.warden;
     const st = m.status;
@@ -854,13 +872,14 @@ export class Combat implements CombatHost {
         const pl = this.scene.session.player;
         const heal = Math.max(1, Math.round(dmg * 0.12));
         pl.hp = Math.min(this.scene.stats().maxHp, pl.hp + heal);
-        gameBus.emit('heal', { amount: heal, source: 'smite', x: this.player.x, y: this.player.y });
+        gameBus.emit('heal', { amount: heal, source: 'smite', x: this.player.x, y: this.player.y, from: { x: m.x, y: m.y } });
         this.scene.floatText(this.player.x, this.player.y - 40, `+${heal}`, '#7fff9f', 12);
         mark('smite', 1000);
         break;
       }
     }
-    gameBus.emit('statusApplied', { target: m, kind, x: m.x, y: m.y });
+    const until = st.marks[kind];
+    gameBus.emit('statusApplied', { target: m, kind, x: m.x, y: m.y, ...(until !== undefined && until > now ? { untilMs: until } : {}), ...(source ? { source } : {}) });
   }
 
   private damageMonsterRaw(m: Monster, amount: number, color: number): void {
@@ -872,7 +891,8 @@ export class Combat implements CombatHost {
 
   // ---------------------------------------------------------------- kills & rewards
 
-  kill(m: Monster): void {
+  /** A monster dies to the player; `killer` = the cast that landed the blow (death.killer), absent for DoT ticks. */
+  kill(m: Monster, killer?: Cast): void {
     if (!m.alive) return;
     const s = this.scene;
     const { book } = s;
@@ -933,7 +953,7 @@ export class Combat implements CombatHost {
     }
     m.witnessed.clear();
     gameBus.emit('kill', { monster: m, def: m.def, x: m.x, y: m.y, exp: m.def.exp, coins, elite: m.elite, warden: m.warden });
-    gameBus.emit('death', { target: m, rank: m.def.rank, x: m.x, y: m.y });
+    gameBus.emit('death', { target: m, rank: m.def.rank, x: m.x, y: m.y, ...(killer ? { killer: castRef(killer) } : {}) });
     s.requestSave();
   }
 
@@ -954,8 +974,8 @@ export class Combat implements CombatHost {
       pl.sp = st.maxSp;
       s.floatText(this.player.x, this.player.y - 60, `LEVEL ${pl.level}!`, '#ffe14a', 18);
       s.skills.fxRing(this.player.x, this.player.y, 60, 0xffe14a, false);
-      s.ui.toast(`🎉 Base level <b>${pl.level}</b>`);
-      s.ui.log(`🎉 Reached base level <b>${pl.level}</b>. HP and SP restored.`, 'good');
+      s.ui.toast(`🎉 Level <b>${pl.level}</b>!`);
+      s.ui.log(`🎉 Level <b>${pl.level}</b>! HP and SP restored.`, 'good');
       s.markHotbarDirty();
     }
   }
@@ -977,7 +997,18 @@ export class Combat implements CombatHost {
     pl.hp -= dmg;
     this.lastHurt = now;
     this.player.hurt();
-    gameBus.emit('playerHurt', { damage: dmg, hp: pl.hp, maxHp: st.maxHp, from, origin: opts.source, heavy: dmg >= st.maxHp * 0.15, x: this.player.x, y: this.player.y });
+    gameBus.emit('playerHurt', {
+      damage: dmg,
+      hp: pl.hp,
+      maxHp: st.maxHp,
+      from,
+      origin: opts.source,
+      heavy: dmg >= st.maxHp * 0.15,
+      x: this.player.x,
+      y: this.player.y,
+      ...(opts.attacker ? { attacker: opts.attacker } : {}),
+      ...(opts.skill ? { skillId: opts.skill.id, skill: opts.skill } : {}),
+    });
     s.floatText(this.player.x, this.player.y - 44, `-${dmg}`, '#ff5a5a', dmg >= st.maxHp * 0.15 ? 17 : 14);
     if (dmg >= st.maxHp * 0.15) s.cameras.main.shake(130, 0.005);
     s.interactions.onDamaged();
@@ -1066,7 +1097,16 @@ export class Combat implements CombatHost {
       default:
         break;
     }
-    gameBus.emit('statusApplied', { target: 'player', kind, x: p.x, y: p.y, blocked: (kind === 'stun' || kind === 'freeze') && immune });
+    const until = p.marks[kind];
+    gameBus.emit('statusApplied', {
+      target: 'player',
+      kind,
+      x: p.x,
+      y: p.y,
+      blocked: (kind === 'stun' || kind === 'freeze') && immune,
+      ...(until !== undefined && until > now ? { untilMs: until } : {}),
+      ...(opts.skill ? { source: opts.skill } : {}),
+    });
   }
 
   /** Player DoT ticks, status motes and knockback travel. */
@@ -1239,7 +1279,7 @@ export class Combat implements CombatHost {
         m.nextAttack = now + m.attackDelay();
         m.facing = p.x > m.x ? 1 : -1;
         s.tweens.add({ targets: m.sprite, y: m.y - 6, yoyo: true, duration: 90 });
-        this.hurtPlayer(m.atk(now), m.def.name, { source: { x: m.x, y: m.y }, rank: m.def.rank });
+        this.hurtPlayer(m.atk(now), m.def.name, { source: { x: m.x, y: m.y }, rank: m.def.rank, attacker: m });
       }
     } else {
       // Not engaged: the next engagement starts with the opening beat again (MonsterSkills.tryStart).
@@ -1332,14 +1372,37 @@ export class Combat implements CombatHost {
   updateVitals(dt: number, now: number, st: Stats): void {
     this.updatePlayerStatus(dt, now);
     if (this.buffs.length && this.buffs.some((b) => b.until <= now)) this.buffs = this.buffs.filter((b) => b.until > now);
+    const pl = this.scene.session.player;
+    if (this.resting && (this.dead || this.player.moving || this.player.path.length > 0 || this.windup || now - this.lastHurt < 300)) this.resting = false;
     this.regenT += dt;
     if (this.regenT < 1 || this.dead) return;
     this.regenT -= 1;
-    const pl = this.scene.session.player;
     const calm = now - this.lastHurt > 5000;
-    const still = this.player.moving ? 1 : 1 + regenStillPct(this.scene.book.totals()) / 100;
+    const still = (this.player.moving ? 1 : 1 + regenStillPct(this.scene.book.totals()) / 100) * (this.resting ? 4 : 1);
     pl.hp = Math.min(st.maxHp, pl.hp + st.maxHp * ((calm ? 0.02 : 0.005) * still + st.regen / 100));
     pl.sp = Math.min(st.maxSp, pl.sp + (st.maxSp * (calm ? 0.05 : 0.02) + 0.5) * still);
+    if (this.resting && pl.hp >= st.maxHp && pl.sp >= st.maxSp) {
+      this.resting = false;
+      this.scene.floatText(this.player.x, this.player.y - 56, 'Rested', '#9fffb8', 12);
+    }
+  }
+
+  /** The rest button: sit and recover (four times faster) until moving, casting or being hit. */
+  rest(): { ok: boolean; message?: string } {
+    const s = this.scene;
+    const pl = s.session.player;
+    const st = s.stats();
+    if (this.dead) return { ok: false, message: 'Not now.' };
+    if (this.inCombat()) return { ok: false, message: 'Not during a fight.' };
+    if (pl.hp >= st.maxHp && pl.sp >= st.maxSp) return { ok: false, message: 'You are already rested.' };
+    this.cancelWindup();
+    this.player.path = [];
+    this.setTarget(null);
+    this.holdAuto(8000);
+    this.resting = true;
+    s.skills.fxRing(this.player.x, this.player.y, 36, 0x9fffb8, false);
+    s.floatText(this.player.x, this.player.y - 56, 'Resting', '#9fffb8', 12);
+    return { ok: true, message: 'You sit and rest. Move to get up.' };
   }
 
   clear(): void {

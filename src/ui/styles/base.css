@@ -31,6 +31,9 @@ body {
   background: #0f1424;
   color: var(--ink);
   font-family: var(--font-ui);
+  /* The pixel font's "fi"/"fl" ligatures draw as one wrong glyph ("Fire" → "Are"): letters only. */
+  font-variant-ligatures: none;
+  font-feature-settings: 'liga' 0, 'clig' 0;
   -webkit-user-select: none;
   user-select: none;
   -webkit-tap-highlight-color: transparent;
@@ -233,8 +236,14 @@ button {
   display: flex;
   gap: 10px;
   justify-content: center;
+  align-items: center;
   flex-wrap: wrap;
   margin: 16px 0;
+}
+
+.title-actions .btn {
+  min-height: 48px;
+  min-width: 96px;
 }
 
 .fine {
@@ -256,6 +265,7 @@ button {
 }
 
 .create input {
+  font-family: var(--font-ui);
   width: min(280px, 100%);
   padding: 12px 14px;
   border-radius: 12px;

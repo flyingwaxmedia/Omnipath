@@ -122,8 +122,11 @@ export class Strip {
     const nonEmpty = frames.map((f, k) => (f.body.some((v) => v !== 0) ? k : -1)).filter((k) => k >= 0);
     const tail = new Set(once ? nonEmpty.slice(-2) : []);
     const emissive = cfg.glowFrom === 'none' ? null : cfg.glowFrom === 'bright' ? BRIGHT : HOT;
+    // Crop every frame to its content + a 3 px margin (room for the keyline and glow dilation) so the passes and
+    // the bake only touch pixels near the effect. The Bayer origin follows the crop, so patterns do not shift.
+    frames = frames.map((f) => crop(f, 3));
     frames.forEach((f, k) => {
-      const p = wrap(f, this.bx, this.by);
+      const p = wrap(f, this.bx + (f as Cropped).cx, this.by + (f as Cropped).cy);
       if (cfg.orphans && !tail.has(k)) p.orphans();
       if (opts.keyline && !cfg.matter) p.keyline();
       if (emissive) p.dilate(emissive);
@@ -134,6 +137,45 @@ export class Strip {
     }
     return frames;
   }
+}
+
+interface Cropped extends PFrame {
+  /** Crop offset inside the strip canvas (keeps the Bayer origin stable). */
+  cx: number;
+  cy: number;
+}
+
+/** Crop a frame to its body + glow content plus `m` px; an empty frame becomes 1x1. */
+function crop(f: PFrame, m: number): PFrame {
+  let x0 = f.w,
+    y0 = f.h,
+    x1 = -1,
+    y1 = -1;
+  for (let y = 0; y < f.h; y++)
+    for (let x = 0; x < f.w; x++) {
+      const k = y * f.w + x;
+      if (f.body[k] || f.glow[k]) {
+        if (x < x0) x0 = x;
+        if (x > x1) x1 = x;
+        if (y < y0) y0 = y;
+        if (y > y1) y1 = y;
+      }
+    }
+  if (x1 < 0) return Object.assign({ ...f, w: 1, h: 1, body: new Uint8Array(1), glow: new Uint8Array(1), ox: f.ox, oy: f.oy }, { cx: 0, cy: 0 });
+  x0 = Math.max(0, x0 - m);
+  y0 = Math.max(0, y0 - m);
+  x1 = Math.min(f.w - 1, x1 + m);
+  y1 = Math.min(f.h - 1, y1 + m);
+  const w = x1 - x0 + 1,
+    h = y1 - y0 + 1;
+  const body = new Uint8Array(w * h),
+    glow = new Uint8Array(w * h);
+  for (let y = 0; y < h; y++) {
+    const src = (y + y0) * f.w + x0;
+    body.set(f.body.subarray(src, src + w), y * w);
+    glow.set(f.glow.subarray(src, src + w), y * w);
+  }
+  return Object.assign({ ...f, w, h, body, glow, ox: f.ox - x0, oy: f.oy - y0 }, { cx: x0, cy: y0 });
 }
 
 /** A painter view over an existing frame's buffers (passes only). */
