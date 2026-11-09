@@ -165,6 +165,18 @@ SkillBook flags (`tests/content.test.ts` enforces it), so the client must set ev
 - AFK: auto-attack chains stop after 30 s without player input.
 - Death: respawn at `world.savePoint` waystone (else region hub spawn), 50 % HP/SP, lose 5 % EXP.
 
+### 6.1 Auto-cast
+- Any non-basic skill can be marked **auto-cast**: hold its hotbar slot (450 ms; short taps still cast on release),
+  press Shift+1..6 on desktop, or use the switch in the skill's detail panel. The mark follows the skill
+  (`PlayerSave.autoSkills`), and the **AUTO** pill beside the attack button pauses/resumes all of them
+  (`PlayerSave.autoOn`, default on).
+- While fighting (a live target, or dealt/took damage in the last 5 s) the first ready auto skill **in hotbar order**
+  fires on its own (checked every 150 ms): respects cooldown, the after-cast lock, wind-ups, stuns, channels and the
+  30 s AFK stop; never spends SP below 15 % of max (`AUTO_SP_RESERVE`); buffs refresh only when not active; pure
+  movement skills (power 0) cannot auto-cast; non-buff skills need a monster in reach. Auto casts earn mastery like
+  manual ones (XP still requires real hits) and never count as player input.
+- Controller: `isAutoCast(id)`, `toggleAutoCast(id)`, `autoCastOn()`, `setAutoCastOn(on)`.
+
 ## 7. UI (`src/ui/**`)
 
 `GameController` v2 (`src/ui/controller.ts`) — the only API the DOM may call:

@@ -32,6 +32,12 @@ const HIDING: ReadonlySet<Requirement['type']> = new Set<Requirement['type']>(['
 
 // ==================================================================== shared widgets (also used by other panels)
 
+/** sheet(host, ) that plays the slide-in only when the panel opens, not on every re-render (taps, tabs). */
+export function sheet(host: PanelHost, title: string, body: string, cls = ''): HTMLElement {
+  const again = !!host.modal.querySelector('.sheet');
+  return host.sheet(title, body, `${cls}${again ? ' stay' : ''}`);
+}
+
 /** ●●○ pips. */
 export function pips(n: number, max: number, cls = ''): string {
   let out = '';
@@ -313,11 +319,11 @@ function renderPath(host: PanelHost, w: WeaponType): void {
   }
   const sum = pathSummary(host, w);
   const body = `
-    <button class="back">‹ Skills</button>
+    <div class="path-top"><button class="back" aria-label="Back to skills">‹</button>
     <div class="path-tabs" role="tablist">${WEAPON_TYPES.map((x) => {
       const s = pathSummary(host, x);
       return `<button class="ptab ${x === w ? 'on' : ''}" data-path="${x}">${WEAPONS[x].icon} ${esc(WEAPONS[x].name.split(' ').pop()!)}<small>${s.known}/${s.total}${s.ready ? ' · ✨' : ''}</small></button>`;
-    }).join('')}</div>
+    }).join('')}</div></div>
     <div class="path-split">
       <div class="mtree-wrap">
         <div class="mtree" style="--n:${views.length}">
@@ -329,7 +335,7 @@ function renderPath(host: PanelHost, w: WeaponType): void {
       <div class="mdetail">${detail}</div>
     </div>
     <p class="foot">${sum.known} of ${sum.total} forms known on the ${esc(WEAPONS[w].name)} path</p>`;
-  host.sheet('🌳 Morph Paths', body, 'wide');
+  sheet(host, '🌳 Morph Paths', body, 'wide');
   $(host.modal, '.back').addEventListener('click', () => host.open('skills'));
   $$<HTMLButtonElement>(host.modal, '[data-path]').forEach((b) => b.addEventListener('click', () => host.open('skills', `tree:${b.dataset.path}`)));
   $$<HTMLButtonElement>(host.modal, '[data-node]').forEach((b) =>
@@ -403,7 +409,7 @@ function skillCard(host: PanelHost, s: SkillDef, variant: boolean, picking: bool
       <span class="rank">${max ? `★ Mastered${p.charges ? ` · <em>${p.charges} morph charge${p.charges > 1 ? 's' : ''}</em>` : ''}` : `Rank ${p.rank} / ${s.maxRank}`}${usable ? '' : ` · ${s.weapons?.map((w) => WEAPONS[w].icon).join('') ?? ''} only`}</span>
       <span class="bar mini ${max ? 'over' : ''}"><i style="width:${pct}%"></i></span>
     </span>
-    <span class="flags">${isNew ? '<i class="new">NEW</i>' : ''}${slot >= 0 ? `<i class="hk">${slot + 1}</i>` : ''}${morph ? '<i class="mr">✨</i>' : ''}</span>
+    <span class="flags">${isNew ? '<i class="new">NEW</i>' : ''}${slot >= 0 ? `<i class="hk">${slot + 1}</i>` : ''}${host.ctrl.isAutoCast(s.id) ? '<i class="au" title="Auto-cast">⟳</i>' : ''}${morph ? '<i class="mr">✨</i>' : ''}</span>
   </button>`;
 }
 
@@ -630,7 +636,7 @@ export function renderSkills(host: PanelHost, arg?: string): void {
       ],
       t,
     ) + (t === 'passives' ? passivesTab(host) : t === 'essences' ? essencesTab(host) : skillsTab(host));
-  host.sheet('📖 Skills', body);
+  sheet(host, '📖 Skills', body);
   wireTabs(host, 'skills.tab');
   const { ctrl } = host;
   $$<HTMLButtonElement>(host.modal, '.skill-card').forEach((b) =>
@@ -703,7 +709,8 @@ function renderSkill(host: PanelHost, id: string): void {
         const curS = cur ? reg.skill(cur) : undefined;
         return `<button class="hb ${cur === id ? 'on' : ''} ${curS ? '' : 'empty'}" data-assign="${i}" aria-label="Slot ${i + 1}">${curS ? curS.icon : '+'}<small>${i + 1}</small></button>`;
       }).join('')}</div>
-      <p class="sub">${session.player.hotbar.includes(id) ? `On slot ${session.player.hotbar.indexOf(id) + 1}. Tap it again to clear, or another slot to move it.` : 'Tap a slot to put it there.'}</p>`;
+      <p class="sub">${session.player.hotbar.includes(id) ? `On slot ${session.player.hotbar.indexOf(id) + 1}. Tap it again to clear, or another slot to move it.` : 'Tap a slot to put it there.'}</p>
+      ${autoHtml(host, s)}`;
   const body = `
     <button class="back">‹ ${back.startsWith('tree:') ? 'Path' : 'Skills'}</button>
     <div class="skill-head">
@@ -743,7 +750,7 @@ function renderSkill(host: PanelHost, id: string): void {
     ${root !== id && reg.skill(root) && book.has(root) ? `<h3>Base</h3><div class="cards">${skillCard(host, reg.skill(root)!, false, false)}</div>` : ''}
     ${variants.length ? `<h3>Variants <small>${variants.length}</small></h3><div class="cards">${variants.map((v) => skillCard(host, v, true, false)).join('')}</div>` : ''}
     ${morphHtml}`;
-  host.sheet('📖 Skills', body);
+  sheet(host, '📖 Skills', body);
   $(host.modal, '.back').addEventListener('click', () => {
     delete host.state['skills.back'];
     host.open('skills', back || undefined);
@@ -765,6 +772,21 @@ function renderSkill(host: PanelHost, id: string): void {
       host.render();
     }),
   );
+  host.modal.querySelector('[data-auto]')?.addEventListener('click', () => {
+    const r = ctrl.toggleAutoCast(id);
+    if (r.message) host.toast(esc(r.message));
+    host.render();
+  });
+}
+
+/** Auto-cast switch for a skill (attacks with power and buffs; movement-only skills cannot). */
+function autoHtml(host: PanelHost, s: SkillDef): string {
+  const { ctrl } = host;
+  if (s.shape.kind !== 'buff' && s.power <= 0) return '';
+  const on = ctrl.isAutoCast(s.id);
+  const master = ctrl.autoCastOn();
+  return `<div class="auto-row"><button class="switch ${on ? 'on' : ''}" data-auto role="switch" aria-checked="${on}" aria-label="Auto-cast ${esc(s.name)}"><i></i></button>
+    <span><b>⟳ Auto-cast</b><small>${on ? (master ? 'Fires on its own while you fight, when ready.' : 'On, but the AUTO switch on the hotbar is paused.') : 'Off — cast it yourself from the hotbar.'}</small></span></div>`;
 }
 
 function riderText(s: SkillDef): string {

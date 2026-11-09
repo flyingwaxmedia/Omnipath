@@ -37,6 +37,13 @@ export interface GameController {
   cooldown(id: string): { remain: number; total: number };
   usable(id: string): { ok: boolean; reason?: string };
   sparkWindow(id: string): 'none' | 'low' | 'good' | 'peak';
+  /** Auto-cast: is this skill set to fire on its own while fighting? */
+  isAutoCast(id: string): boolean;
+  /** Toggles auto-cast for a skill (hold a hotbar slot, or the skill panel switch). */
+  toggleAutoCast(id: string): Outcome;
+  /** Master auto-cast switch (AUTO button). */
+  autoCastOn(): boolean;
+  setAutoCastOn(on: boolean): void;
   morph(from: string, to: string): void;
   fuse(a: string, b: string): FuseResult;
   atAltar(): boolean;

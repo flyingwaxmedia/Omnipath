@@ -25,6 +25,10 @@ import { CFX, type Cast, type CombatHost, SkillSystem, clearShot, fxStyle, hex }
 const GLOOMCAPS_FOR_SHADOW = 5;
 /** Dealt or took damage within this window = in combat (buff use XP). */
 const COMBAT_WINDOW = 5000;
+/** Auto-cast never spends SP below this fraction of max SP, so manual casts stay possible. */
+export const AUTO_SP_RESERVE = 0.15;
+/** Auto-cast re-checks at most this often (ms). */
+const AUTO_TICK_MS = 150;
 /** Auto-attack chains stop after this long without player input. */
 const AFK_MS = 30000;
 const LEECH_CAP = 0.08;
@@ -71,6 +75,8 @@ export class Combat implements CombatHost {
   lastHurt = -1e9;
   lastDealt = -1e9;
   lastInput = 0;
+  /** Next time auto-cast may look for a skill. */
+  private autoAt = 0;
   /** Global skill lock after a cast (afterCastMs); walking and auto-attacks stay allowed. */
   lockUntil = 0;
   private lockTotal = 0;
@@ -278,6 +284,8 @@ export class Combat implements CombatHost {
       return;
     }
     if (s.interactions.channel) return;
+    this.autoCast(now);
+    if (this.windup) return;
     const t = this.target;
     if (!t || !t.alive) return;
     if (now - this.lastInput > AFK_MS) {
@@ -298,6 +306,37 @@ export class Combat implements CombatHost {
       p.path = [];
       const cd = this.ownCooldown(w.basic);
       if (cd.remain <= 0 && now >= p.lockedUntil) this.castSkill(w.basic, true);
+    }
+  }
+
+  /**
+   * Auto-cast: while the player is fighting (a live target, or dealt/took damage in the last 5 s), fire the first
+   * ready hotbar skill marked auto, in hotbar order. Buffs refresh only when not active; pure mobility skills
+   * (power 0, e.g. Quickstep) never auto-fire; an SP reserve keeps manual casts possible. Respects the AFK stop,
+   * wind-ups, the after-cast lock, stuns and gathering channels. Auto casts never count as player input.
+   */
+  private autoCast(now: number): void {
+    const s = this.scene;
+    const pl = s.session.player;
+    if (!pl.autoOn || !pl.autoSkills.length || this.dead || this.windup || now < this.autoAt) return;
+    this.autoAt = now + AUTO_TICK_MS;
+    if (now < this.lockUntil || now - this.lastInput > AFK_MS || this.player.stunned(now)) return;
+    if (!((this.target && this.target.alive) || this.inCombat(now))) return;
+    const reserve = s.stats().maxSp * AUTO_SP_RESERVE;
+    for (const id of pl.hotbar) {
+      if (!id || !pl.autoSkills.includes(id)) continue;
+      const skill = s.reg.skill(id);
+      if (!skill || !s.usable(id).ok) continue;
+      if (skill.shape.kind === 'buff') {
+        if (this.buffs.some((b) => b.source === id && b.until > now + 1000)) continue;
+      } else if (skill.power <= 0) continue;
+      const cost = this.spCost(skill);
+      if (cost > 0 && pl.sp - cost < reserve) continue;
+      if (this.ownCooldown(id).remain > 0) continue;
+      if (this.castSkill(id, true)) {
+        s.ui.pulseSlot(id);
+        return;
+      }
     }
   }
 

@@ -25,6 +25,10 @@ export interface PlayerSave {
   coins: number;
   /** 6 slots. */
   hotbar: (string | null)[];
+  /** Skill ids set to auto-cast while fighting (only hotbar skills fire; the flag follows the skill between slots). */
+  autoSkills: string[];
+  /** Master switch for auto-cast (the AUTO button by the attack button). */
+  autoOn: boolean;
   /** Item id -> count (materials, consumables, relics). */
   bag: Record<string, number>;
   createdAt: number;
@@ -173,6 +177,8 @@ function readPlayer(raw: unknown): PlayerSave {
     sp: Math.max(0, num(p.sp, 40)),
     coins: Math.max(0, Math.floor(num(p.coins, 0))),
     hotbar: [...hotbar, ...Array<null>(HOTBAR_SIZE).fill(null)].slice(0, HOTBAR_SIZE),
+    autoSkills: [...new Set((Array.isArray(p.autoSkills) ? p.autoSkills : []).filter((x): x is string => typeof x === 'string'))],
+    autoOn: typeof p.autoOn === 'boolean' ? p.autoOn : true,
     bag: nums(p.bag),
     createdAt: num(p.createdAt, Date.now()),
     playMs: Math.max(0, num(p.playMs, 0)),
@@ -254,6 +260,8 @@ export class Session {
       sp: 40,
       coins: 0,
       hotbar: Array<null>(HOTBAR_SIZE).fill(null),
+      autoSkills: [],
+      autoOn: true,
       bag: {},
       createdAt: Date.now(),
       playMs: 0,

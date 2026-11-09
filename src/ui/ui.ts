@@ -2,7 +2,15 @@
 // HUD, minimap, dialogs and panels, and owns the shared modal (which panel is open, the discovery-card queue,
 // pausing the world while anything modal is up). Everything the game asks of the DOM goes through here.
 import type { GameController } from './controller';
-import { type DialogOption, type DiscoveryCard, renderDialog, renderDiscovery, runFishing, runForge } from './dialogs';
+import {
+  type DialogOption,
+  type DiscoveryCard,
+  renderDialog,
+  renderDiscovery,
+  runFishing,
+  runForge,
+  wireDiscoveryCards,
+} from './dialogs';
 import { Hud, type CastInfo, type LogKind, type TargetInfo } from './hud';
 import { Minimap } from './minimap';
 import { renderAltar } from './panels/altar';
@@ -58,6 +66,8 @@ export class UI implements PanelHost {
       if (e.target === this.modal && !this.showingDiscovery && this.panel !== 'minigame') this.close();
     });
     this.root.addEventListener('contextmenu', (e) => e.preventDefault());
+    // v2 discovery cards (spark, echo, passive, essence, class rank…): the book outlives map restarts, so once.
+    wireDiscoveryCards(this, ctrl);
   }
 
   // ================================================================ HUD passthroughs
@@ -119,10 +129,28 @@ export class UI implements PanelHost {
   }
 
   renderHotbar(): void {
-    this.hud.renderHotbar((i, empty) => {
-      if (empty) this.open('skills');
-      else this.ctrl.castSlot(i);
-    });
+    this.hud.renderHotbar(
+      (i, empty) => {
+        if (empty) this.open('skills');
+        else this.ctrl.castSlot(i);
+      },
+      (i) => {
+        const id = this.ctrl.session.player.hotbar[i];
+        if (!id) return;
+        const r = this.ctrl.toggleAutoCast(id);
+        if (r.message) this.toast(r.message);
+      },
+      () => {
+        const on = !this.ctrl.autoCastOn();
+        this.ctrl.setAutoCastOn(on);
+        this.toast(on ? '⟳ Auto-cast resumed' : '⏸ Auto-cast paused');
+      },
+    );
+  }
+
+  /** Brief glow on the hotbar slot an auto-cast just fired. */
+  pulseSlot(skillId: string): void {
+    this.hud.pulseSlot(skillId);
   }
 
   // ================================================================ modal plumbing

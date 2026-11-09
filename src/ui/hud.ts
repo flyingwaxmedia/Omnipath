@@ -392,7 +392,15 @@ export class Hud {
 
   // ---------------------------------------------------------------- hotbar
 
-  renderHotbar(onSlot: (i: number, empty: boolean) => void): void {
+  /**
+   * Renders the hotbar. Tap a skill to cast; HOLD it (450 ms) to toggle auto-cast. The basic attack casts on press.
+   * The small AUTO button next to it pauses/resumes every auto-cast skill.
+   */
+  renderHotbar(
+    onSlot: (i: number, empty: boolean) => void,
+    onHold?: (i: number) => void,
+    onAutoToggle?: () => void,
+  ): void {
     const c = this.ctrl;
     const p = c.session.player;
     const basic = c.reg.skill(WEAPONS[p.weapon].basic)!;
@@ -405,30 +413,87 @@ export class Hud {
       const morph = c.book.canMorph(s.id);
       if (c.reg.morphsFrom(s.id).some((m) => !!m.spark && !c.book.has(m.to))) this.sparkSkills.add(s.id);
       const el = s.element ? c.reg.element(s.element) : undefined;
-      return `<button class="slot ${max ? 'maxed' : ''} ${morph ? 'can-morph' : ''}" data-slot="${i}" data-skill="${s.id}" aria-label="${esc(s.name)}">
-        <span class="ico">${s.icon}</span>
+      const auto = i >= 0 && c.isAutoCast(s.id);
+      return `<button class="slot ${max ? 'maxed' : ''} ${morph ? 'can-morph' : ''} ${auto ? 'auto' : ''} ${auto && !p.autoOn ? 'auto-paused' : ''}" data-slot="${i}" data-skill="${s.id}" aria-label="${esc(s.name)}${auto ? ' (auto-cast)' : ''}">
+        <span class="ico">${s.icon}</span>${auto ? '<span class="autob" aria-hidden="true">A</span>' : ''}
         <span class="rk">${max ? '★' : rank}</span>
         ${el ? `<span class="elb">${el.icon}</span>` : ''}
         <span class="spk" data-w="none" title="Spark window">${SPARK_RUNE}</span>
         <span class="cd"></span><span class="ring"></span><span class="nm">${esc(s.name)}</span>
       </button>`;
     };
+    const anyAuto = p.hotbar.some((id) => !!id && c.isAutoCast(id));
     this.hotbar.innerHTML = `
       <div class="slots">${p.hotbar.map((id, i) => slot(i, id ? c.reg.skill(id) : undefined)).join('')}</div>
-      ${slot(-1, basic).replace('class="slot', 'class="slot basic')}`;
+      <div class="basic-col">
+        <button class="autobtn ${p.autoOn ? 'on' : 'off'} ${anyAuto ? '' : 'idle'}" aria-pressed="${p.autoOn}"
+          title="Auto-cast (hold a skill to mark it)">${p.autoOn ? '⟳' : '⏸'}<small>AUTO</small></button>
+        ${slot(-1, basic).replace('class="slot', 'class="slot basic')}
+      </div>`;
+    const HOLD_MS = 450;
     $$<HTMLButtonElement>(this.hotbar, '.slot').forEach((b) => {
       const i = Number(b.dataset.slot);
-      b.addEventListener('pointerdown', (e) => {
-        e.preventDefault();
-        onSlot(i, b.classList.contains('empty'));
+      const empty = b.classList.contains('empty');
+      const press = () => {
         b.classList.add('pressed');
         setTimeout(() => b.classList.remove('pressed'), 120);
+      };
+      // Basic attack and empty slots act immediately on press (fastest feel).
+      if (i < 0 || empty || !onHold) {
+        b.addEventListener('pointerdown', (e) => {
+          e.preventDefault();
+          onSlot(i, empty);
+          press();
+        });
+        return;
+      }
+      // Skill slots: tap = cast on release; hold = toggle auto-cast.
+      let timer = 0;
+      let held = false;
+      let down = false;
+      b.addEventListener('pointerdown', (e) => {
+        e.preventDefault();
+        down = true;
+        held = false;
+        b.classList.add('holding');
+        timer = window.setTimeout(() => {
+          held = true;
+          b.classList.remove('holding');
+          navigator.vibrate?.(20);
+          onHold(i);
+        }, HOLD_MS);
       });
+      const end = (cast: boolean) => {
+        if (!down) return;
+        down = false;
+        clearTimeout(timer);
+        b.classList.remove('holding');
+        if (cast && !held) {
+          onSlot(i, false);
+          press();
+        }
+      };
+      b.addEventListener('pointerup', () => end(true));
+      b.addEventListener('pointercancel', () => end(false));
+      b.addEventListener('pointerleave', () => end(false));
+    });
+    this.hotbar.querySelector<HTMLButtonElement>('.autobtn')?.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      onAutoToggle?.();
     });
     this.last = Object.fromEntries(Object.entries(this.last).filter(([k]) => !k.startsWith('slot:')));
     if (this.castKey) this.hotbar.querySelector(`.slot[data-skill="${CSS.escape(this.castKey)}"]`)?.classList.add('casting');
     this.badgeT = 0;
     this.updateCooldowns();
+  }
+
+  /** Brief glow on the slot an auto-cast just fired. */
+  pulseSlot(skillId: string): void {
+    const b = this.hotbar.querySelector<HTMLElement>(`.slot[data-skill="${CSS.escape(skillId)}"]:not(.basic)`);
+    if (!b) return;
+    b.classList.remove('autofire');
+    void b.offsetWidth;
+    b.classList.add('autofire');
   }
 
   updateCooldowns(): void {
