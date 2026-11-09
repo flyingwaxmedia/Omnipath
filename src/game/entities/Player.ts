@@ -1,5 +1,6 @@
 import Phaser from 'phaser';
 import type { StatusKind, WeaponType } from '../../core/types';
+import { DEPTH, ySort } from '../render/depths';
 
 /** A damage-over-time effect a monster technique left on the player. */
 export interface PlayerDot {
@@ -67,10 +68,10 @@ export class Player {
     name: string,
     weapon: WeaponType,
   ) {
-    this.shadow = scene.add.image(x, y, 'shadow');
-    this.aura = scene.add.graphics();
+    this.shadow = scene.add.image(x, y, 'shadow').setDepth(DEPTH.SHADOW);
+    this.aura = scene.add.graphics().setDepth(DEPTH.AURA);
     this.sprite = scene.add.image(x, y, `player_${weapon}`).setOrigin(0.45, 0.95);
-    this.castBar = scene.add.graphics().setDepth(100001);
+    this.castBar = scene.add.graphics().setDepth(DEPTH.CAST_BAR);
     this.nameText = scene.add
       .text(x, y, name, {
         fontFamily: 'system-ui, sans-serif',
@@ -80,7 +81,8 @@ export class Player {
         strokeThickness: 3,
       })
       .setOrigin(0.5, 0)
-      .setResolution(2);
+      .setResolution(2)
+      .setDepth(DEPTH.NAME_TAG);
   }
 
   setWeapon(w: WeaponType): void {
@@ -173,13 +175,13 @@ export class Player {
     const shake = now < this.stunUntil && now >= this.frozenUntil ? Math.sin(now / 25) * 1.2 : 0;
     this.sprite.setPosition(this.x + lx + shake, this.y - bob + ly);
     this.sprite.setFlipX(this.facing < 0);
-    this.sprite.setDepth(this.y);
+    this.sprite.setDepth(ySort(this.y));
     if (now < this.hurtUntil) this.sprite.setTintFill(0xff4444);
     else if (now < this.frozenUntil) this.sprite.setTint(0xaee9ff);
     else if ((this.marks.poison ?? 0) > now) this.sprite.setTint(0xd0f0b8);
     else this.sprite.clearTint();
-    this.shadow.setPosition(this.x, this.y + 1).setDepth(this.y - 1000);
-    this.nameText.setPosition(this.x, this.y + 4).setDepth(100000);
+    this.shadow.setPosition(this.x, this.y + 1);
+    this.nameText.setPosition(this.x, this.y + 4);
     this.aura.clear();
     auraColors.forEach((col, i) => {
       const t = now / 300 + i;
@@ -192,7 +194,6 @@ export class Player {
         this.aura.fillStyle(0xfff3a0, 1).fillCircle(this.x + Math.cos(a) * 12, this.y - 52 + Math.sin(a) * 4, 2.4);
       }
     }
-    this.aura.setDepth(this.y - 999);
     if (this.castProgress !== null) this.drawCast();
     this.syncStatusGlyphs(now);
   }
@@ -209,7 +210,7 @@ export class Player {
           .text(this.x, this.y, '', { fontFamily: 'system-ui, sans-serif', fontSize: '13px', stroke: '#000', strokeThickness: 3 })
           .setOrigin(0.5, 1)
           .setResolution(2)
-          .setDepth(100002);
+          .setDepth(DEPTH.STATUS_ICON);
       }
       this.statusText?.setText(key).setVisible(!!key);
     }

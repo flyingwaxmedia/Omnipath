@@ -15,6 +15,8 @@ import { isBlockedPx } from '../../core/world/compile';
 import type { CompiledMap } from '../../core/world/types';
 import type { Monster } from '../entities/Monster';
 import type { Player } from '../entities/Player';
+import { gameBus } from '../events';
+import { DEPTH, Y_BIAS, ySort } from '../render/depths';
 
 export interface Cast {
   id: number;
@@ -453,7 +455,9 @@ export class SkillSystem {
         const cy = o.y + Math.sin(ang) * d;
         const delay = s.delay ?? 200;
         this.fxTelegraph(cx, cy, s.radius, color, delay);
+        gameBus.emit('novaTelegraph', { owner: 'player', skillId: skill.id, skill, element: skill.element, x: cx, y: cy, radius: s.radius, delayMs: delay });
         scene.time.delayedCall(delay, () => {
+          gameBus.emit('novaBlast', { owner: 'player', skillId: skill.id, skill, element: skill.element, x: cx, y: cy, radius: s.radius, heavy: skill.power >= 2 || skill.tags.includes('heavy') });
           this.fxNova(cx, cy, s.radius, color, skill.element, skill.power >= 2 || skill.tags.includes('heavy'));
           for (const m of this.host.liveMonsters()) {
             if (Math.hypot(m.x - cx, m.y - cy) <= s.radius + m.radius) this.host.hit(m, { ...cast, origin: { x: cx, y: cy } });
@@ -531,6 +535,7 @@ export class SkillSystem {
       else scene.time.delayedCall(delay, () => this.fxLightning([from, { x: m.x, y: m.y - 10 }], color));
       scene.time.delayedCall(delay + (knives ? step : 0), () => {
         if (!m.alive) return;
+        gameBus.emit('chainHop', { owner: 'player', skillId: skill.id, skill, element: skill.element, from, to, index: i, target: m, knives });
         const roll = this.host.hit(m, cast, Math.pow(0.85, i));
         // Conduct: one extra jump on chain shapes (once per cast).
         if (roll?.combo?.extraJump && !extended) {
@@ -577,7 +582,7 @@ export class SkillSystem {
       pr.img.setPosition(pr.x, pr.y - 14);
       if (pr.spin) pr.img.rotation += pr.spin * dt * (pr.returning ? 1.6 : 1);
       else pr.img.rotation = Math.atan2(pr.vy, pr.vx) + pr.rotOffset;
-      pr.img.setDepth(pr.y + 20);
+      pr.img.setDepth(ySort(pr.y, Y_BIAS.PROJECTILE));
       pr.trailT -= dt;
       if (pr.trailT <= 0) {
         pr.trailT = pr.returning ? 0.022 : 0.03;
@@ -604,6 +609,8 @@ export class SkillSystem {
         }
       }
       if (dead) {
+        const sk = pr.cast.skill;
+        gameBus.emit('projectileEnd', { owner: 'player', obj: pr.img, skillId: sk.id, skill: sk, element: sk.element, x: pr.x, y: pr.y, reason: pr.returning ? 'return' : pr.traveled >= pr.range ? 'range' : isBlockedPx(map, pr.x, pr.y) ? 'wall' : 'hit' });
         if (pr.returning) this.fxFlash(p.x, p.y - 20, 12, pr.color);
         else this.fxImpactAt(pr.x, pr.y - 14, pr.cast.skill, pr.color, 4);
         pr.img.destroy();
@@ -628,7 +635,7 @@ export class SkillSystem {
 
   /** Line from the caster to a returning projectile: crackling for lightning/storm, a faint tether otherwise. */
   private drawTether(pr: Projectile): void {
-    if (!this.tether || !this.tether.active) this.tether = this.host.world.add.graphics().setDepth(99999).setBlendMode(ADD);
+    if (!this.tether || !this.tether.active) this.tether = this.host.world.add.graphics().setDepth(DEPTH.FX_FRONT).setBlendMode(ADD);
     const g = this.tether;
     const p = this.host.player;
     const ax = p.x;
@@ -710,7 +717,10 @@ export class SkillSystem {
   private spawnProjectile(cast: Cast, a: number, speed: number, range: number, pierce: number, size: number, color: number) {
     const look = this.lookFor(cast.skill, size);
     const plain = look.key === CFX.knife && !cast.skill.element;
-    const img = this.host.world.add.image(cast.origin.x, cast.origin.y - 14, look.key).setScale(look.scale);
+    const img = this.host.world.add
+      .image(cast.origin.x, cast.origin.y - 14, look.key)
+      .setScale(look.scale)
+      .setDepth(ySort(cast.origin.y, Y_BIAS.PROJECTILE));
     if (!plain) img.setTint(color);
     img.setBlendMode(look.add ? ADD : NORMAL);
     img.rotation = a;
@@ -734,6 +744,8 @@ export class SkillSystem {
       trailT: 0,
       returning: false,
     });
+    const sk = cast.skill;
+    gameBus.emit('projectileSpawn', { owner: 'player', obj: img, skillId: sk.id, skill: sk, element: sk.element, x: cast.origin.x, y: cast.origin.y, angle: a, speed, range, size });
   }
 
   private dash(cast: Cast, ang: number, distance: number, width: number, spin: boolean, color: number) {
@@ -751,6 +763,7 @@ export class SkillSystem {
     }
     const scene = this.host.world;
     const dur = 170;
+    gameBus.emit('dash', { owner: 'player', skillId: cast.skill.id, skill: cast.skill, element: cast.skill.element, from: { x: sx, y: sy }, to: { x: ex, y: ey }, durationMs: dur, width });
     p.path = [];
     p.lockedUntil = scene.time.now + dur + 30;
     for (let i = 0; i < 5; i++) {
@@ -761,7 +774,7 @@ export class SkillSystem {
         .setFlipX(p.facing < 0)
         .setTint(color)
         .setAlpha(0.5)
-        .setDepth(sy + (ey - sy) * t);
+        .setDepth(ySort(sy + (ey - sy) * t));
       scene.tweens.add({ targets: ghost, alpha: 0, duration: 350, delay: i * 25, onComplete: () => ghost.destroy() });
     }
     // Element trail along the dash line.
@@ -839,7 +852,7 @@ export class SkillSystem {
       .setAlpha(1)
       .setRotation(rot)
       .setBlendMode(o.add === false ? NORMAL : ADD)
-      .setDepth(o.depth ?? y + 30);
+      .setDepth(o.depth ?? ySort(y, Y_BIAS.PARTICLE));
     if (o.delay) img.setVisible(false);
     this.live++;
     const target = img;
@@ -923,7 +936,7 @@ export class SkillSystem {
   /** A soft additive flash disc (crits, glints, turn points). */
   fxFlash(x: number, y: number, r: number, color: number) {
     const scene = this.host.world;
-    const img = scene.add.image(x, y, 'fx_orb').setTint(color).setBlendMode(ADD).setDepth(100000).setScale((r * 2) / 32);
+    const img = scene.add.image(x, y, 'fx_orb').setTint(color).setBlendMode(ADD).setDepth(DEPTH.FX_GLOW).setScale((r * 2) / 32);
     scene.tweens.add({ targets: img, scale: (r * 3.2) / 32, alpha: 0, duration: 180, onComplete: () => img.destroy() });
   }
 
@@ -960,7 +973,7 @@ export class SkillSystem {
 
   fxStrike(x: number, y: number, ang: number, arc: number, range: number, color: number, flip: boolean, style: StrikeStyle, el?: ElementId) {
     const scene = this.host.world;
-    const g = scene.add.graphics({ x, y }).setDepth(y + 40).setBlendMode(ADD);
+    const g = scene.add.graphics({ x, y }).setDepth(ySort(y, Y_BIAS.ARC)).setBlendMode(ADD);
     const r = range * 0.75;
     let dur = 200;
     switch (style) {
@@ -1062,7 +1075,7 @@ export class SkillSystem {
 
   fxRing(x: number, y: number, radius: number, color: number, blades: boolean) {
     const scene = this.host.world;
-    const g = scene.add.graphics({ x, y }).setDepth(y + 40).setBlendMode(ADD);
+    const g = scene.add.graphics({ x, y }).setDepth(ySort(y, Y_BIAS.ARC)).setBlendMode(ADD);
     g.fillStyle(color, 0.16);
     g.fillEllipse(0, 0, radius * 2, radius * 1.3);
     g.lineStyle(3, color, 0.9);
@@ -1101,7 +1114,7 @@ export class SkillSystem {
   /** The player's own nova landing marker (subtle; monster telegraphs are red and live in MonsterSkills). */
   fxTelegraph(x: number, y: number, radius: number, color: number, delay: number) {
     const scene = this.host.world;
-    const g = scene.add.graphics({ x, y }).setDepth(y - 900);
+    const g = scene.add.graphics({ x, y }).setDepth(DEPTH.FX_GROUND);
     g.lineStyle(2, color, 0.8);
     g.strokeEllipse(0, 0, radius * 2, radius * 1.3);
     g.fillStyle(color, 0.12);
@@ -1126,7 +1139,7 @@ export class SkillSystem {
         break;
       case 'holy': {
         const scene = this.host.world;
-        const pillar = scene.add.image(cx, cy - 60, 'fx_orb').setTint(color).setBlendMode(ADD).setDepth(cy + 50).setScale(r / 22, 140 / 32).setAlpha(0.9);
+        const pillar = scene.add.image(cx, cy - 60, 'fx_orb').setTint(color).setBlendMode(ADD).setDepth(ySort(cy, Y_BIAS.PILLAR)).setScale(r / 22, 140 / 32).setAlpha(0.9);
         scene.tweens.add({ targets: pillar, scaleX: 0.2, alpha: 0, duration: 380, onComplete: () => pillar.destroy() });
         break;
       }
@@ -1143,7 +1156,7 @@ export class SkillSystem {
   /** Ground cracks radiating from an impact (earth/magma novas). */
   private fxCracks(cx: number, cy: number, r: number, color: number) {
     const scene = this.host.world;
-    const g = scene.add.graphics().setDepth(cy - 800);
+    const g = scene.add.graphics().setDepth(DEPTH.FX_GROUND);
     g.lineStyle(2, color, 0.9);
     for (let i = 0; i < 6; i++) {
       const a = (i / 6) * Math.PI * 2 + Math.random() * 0.5;
@@ -1178,7 +1191,7 @@ export class SkillSystem {
     const scene = this.host.world;
     const key = blade ? 'fx_blade' : CFX.knife;
     const scale = blade ? 1.1 : 1.35;
-    const img = scene.add.image(a.x, a.y, key).setScale(scale).setDepth(100000).setVisible(false);
+    const img = scene.add.image(a.x, a.y, key).setScale(scale).setDepth(DEPTH.FX_GLOW).setVisible(false);
     if (color !== 0xffffff) img.setTint(color);
     const dx = b.x - a.x;
     const dy = b.y - a.y;
@@ -1223,7 +1236,7 @@ export class SkillSystem {
   /** Jagged lightning through `pts`, with a few short forks. `weight` scales the stroke. */
   fxLightning(pts: { x: number; y: number }[], color: number, weight = 1) {
     const scene = this.host.world;
-    const g = scene.add.graphics().setDepth(100000).setBlendMode(ADD);
+    const g = scene.add.graphics().setDepth(DEPTH.FX_GLOW).setBlendMode(ADD);
     const forks: [number, number, number, number][] = [];
     const nodes: { x: number; y: number }[] = [pts[0]];
     for (let i = 1; i < pts.length; i++) {
@@ -1259,7 +1272,7 @@ export class SkillSystem {
   /** Arc rider zap: a thin, bright side-bolt to a nearby foe (distinct from chain lightning). */
   fxArcZap(a: { x: number; y: number }, b: { x: number; y: number }, color: number) {
     const scene = this.host.world;
-    const g = scene.add.graphics().setDepth(100000).setBlendMode(ADD);
+    const g = scene.add.graphics().setDepth(DEPTH.FX_GLOW).setBlendMode(ADD);
     const len = Math.hypot(b.x - a.x, b.y - a.y) || 1;
     const nx = -(b.y - a.y) / len;
     const ny = (b.x - a.x) / len;
@@ -1300,7 +1313,7 @@ export class SkillSystem {
       .setTint(color)
       .setBlendMode(ADD)
       .setAlpha(0.75)
-      .setDepth(p.y + 1);
+      .setDepth(ySort(p.y, Y_BIAS.GHOST));
     scene.tweens.add({ targets: ghost, alpha: 0, scaleX: 1.35, scaleY: 1.25, y: p.y - 6, duration: 420, onComplete: () => ghost.destroy() });
     this.fxRing(p.x, p.y - 6, 28, color, false);
   }
@@ -1310,7 +1323,7 @@ export class SkillSystem {
     const scene = this.host.world;
     for (let i = 0; i < n; i++) {
       if (this.live >= MAX_PARTICLES) return;
-      const img = scene.add.image(a.x + (Math.random() - 0.5) * 10, a.y + (Math.random() - 0.5) * 10, tex).setTint(color).setBlendMode(ADD).setScale(0.7).setDepth(100000);
+      const img = scene.add.image(a.x + (Math.random() - 0.5) * 10, a.y + (Math.random() - 0.5) * 10, tex).setTint(color).setBlendMode(ADD).setScale(0.7).setDepth(DEPTH.FX_GLOW);
       this.live++;
       scene.tweens.add({
         targets: img,
@@ -1360,11 +1373,11 @@ export class SkillSystem {
           .setTint(i % 2 ? 0xffe9a0 : 0xffffff)
           .setBlendMode(ADD)
           .setScale(len * 1.6, 1.4)
-          .setDepth(150001),
+          .setDepth(DEPTH.LIGHT),
       );
     }
     scene.tweens.add({ targets: rays, scaleX: '*=1.6', alpha: 0, duration: 420, ease: 'Quad.out', onComplete: () => rays.forEach((r) => r.destroy()) });
-    const star = scene.add.image(x, y, CFX.star).setTint(0xffd76a).setBlendMode(ADD).setDepth(150002).setScale(1.1);
+    const star = scene.add.image(x, y, CFX.star).setTint(0xffd76a).setBlendMode(ADD).setDepth(DEPTH.LIGHT_TOP).setScale(1.1);
     scene.tweens.add({ targets: star, scale: 2.2, rotation: 0.6, alpha: 0, duration: 520, ease: 'Cubic.out', onComplete: () => star.destroy() });
     this.fxFlash(x, y, 40, 0xfff3c0);
     for (let i = 0; i < 16; i++) {

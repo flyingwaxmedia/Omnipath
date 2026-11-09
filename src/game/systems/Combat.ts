@@ -19,6 +19,8 @@ import { ENRAGE, Monster } from '../entities/Monster';
 import type { PlayerDot } from '../entities/Player';
 import type { MapScene } from '../scenes/MapScene';
 import { type Buff, type Stats, expToNext } from '../session';
+import { gameBus } from '../events';
+import { DEPTH } from '../render/depths';
 import { TILE } from '../world/runtime';
 import { CFX, type Cast, type CombatHost, SkillSystem, clearShot, fxStyle, hex } from './SkillSystem';
 
@@ -438,7 +440,7 @@ export class Combat implements CombatHost {
     const sh = w.skill.shape;
     if (!w.preview) {
       if (sh.kind === 'buff') return;
-      w.preview = this.scene.add.graphics().setDepth(-40000);
+      w.preview = this.scene.add.graphics().setDepth(DEPTH.AIM_PREVIEW);
     }
     const g = w.preview;
     g.clear();
@@ -564,6 +566,7 @@ export class Combat implements CombatHost {
       p.path = [];
       this.windup = { skill, start: now, until: now + skill.castMs!, target, aim, preview: null };
       p.setCast(0, this.colorFor(skill));
+      gameBus.emit('castStart', { skillId: skill.id, skill, element: skill.element, x: p.x, y: p.y, aim, target, durationMs: skill.castMs!, auto });
       return true;
     }
     this.fire(skill, target, aim);
@@ -596,6 +599,7 @@ export class Combat implements CombatHost {
     const rank = Math.max(1, s.book.rank(skill.id));
     const cast = s.skills.newCast(skill, rank, { x: p.x, y: p.y });
     if (skill.shape.kind === 'buff' && this.inCombat(now)) s.book.recordBuffUse(skill.id, this.maxEngagedThreat());
+    gameBus.emit('castFire', { skillId: skill.id, skill, element: skill.element, x: p.x, y: p.y, shape: skill.shape.kind, aim, target, rank, basic, map: s.mapId });
     s.skills.execute(cast, aim, target);
     s.onCast(skill, aim);
     if (target && !this.target && skill.shape.kind !== 'dash') this.setTarget(target);
@@ -607,6 +611,7 @@ export class Combat implements CombatHost {
     const amount = sh.amount * (1 + 0.08 * (rank - 1));
     this.buffs = this.buffs.filter((b) => b.source !== skill.id);
     this.buffs.push({ stat: sh.stat, amount, until: this.scene.time.now + sh.duration, source: skill.id });
+    gameBus.emit('buffApplied', { target: 'player', skillId: skill.id, skill, element: skill.element, stat: sh.stat, amount, durationMs: sh.duration, x: this.player.x, y: this.player.y });
     this.scene.ui.log(`${skill.icon} <b>${esc(skill.name)}</b> active for ${sh.duration / 1000}s.`, 'good');
   }
 
@@ -686,6 +691,7 @@ export class Combat implements CombatHost {
     const top = m.y - m.sprite.displayHeight;
     const color = this.colorFor(skill);
     if (roll.resisted) {
+      gameBus.emit('hit', { source: 'player', target: m, skillId: skill.id, skill, element: skill.element, x: m.x, y: m.y, damage: 0, crit: false, resisted: true, multiplier: 0, killed: false, hitIndex: cast.tally.hits });
       s.floatText(m.x, top, 'Resist', '#9aa0aa', 12);
       if (!this.target && m.alive) this.setTarget(m);
       return roll;
@@ -715,6 +721,7 @@ export class Combat implements CombatHost {
       if (heal >= 1) {
         cast.leech.healed += heal;
         pl.hp = Math.min(st.maxHp, pl.hp + heal);
+        gameBus.emit('heal', { amount: heal, source: 'leech', x: this.player.x, y: this.player.y });
         s.floatText(this.player.x, this.player.y - 40, `+${Math.round(heal)}`, '#7fff9f', 11);
         s.skills.fxStream({ x: m.x, y: m.y - 14 }, { x: this.player.x, y: this.player.y - 20 }, 0x7fff9f, 3);
       }
@@ -722,6 +729,7 @@ export class Combat implements CombatHost {
 
     const killed = m.hp <= 0;
     const hitIndex = cast.tally.hits++;
+    gameBus.emit('hit', { source: 'player', target: m, skillId: skill.id, skill, element: skill.element, x: m.x, y: m.y, damage: roll.amount, crit: roll.crit, resisted: false, multiplier: roll.multiplier, combo: roll.combo?.name, killed, hitIndex });
     const instanceHits = m.hitGrants.get(skill.id) ?? 0;
     book.recordHit(skill.id, { monster: m.def, killed, hitIndex, instanceHits });
     if (hitIndex < MASTERY.maxHitsPerUse) m.hitGrants.set(skill.id, instanceHits + 1);
@@ -758,6 +766,7 @@ export class Combat implements CombatHost {
   private applyCombo(m: Monster, roll: DamageRoll, cast: Cast, top: number, now: number): void {
     const s = this.scene;
     const c = roll.combo!;
+    gameBus.emit('combo', { target: m, name: c.name, consumes: c.consumes, skillId: cast.skill.id, skill: cast.skill, element: cast.skill.element, x: m.x, y: m.y });
     delete m.status.marks[c.consumes];
     const y = m.y - Math.min(24, m.sprite.displayHeight * 0.45);
     if (c.consumes === 'freeze') {
@@ -845,11 +854,13 @@ export class Combat implements CombatHost {
         const pl = this.scene.session.player;
         const heal = Math.max(1, Math.round(dmg * 0.12));
         pl.hp = Math.min(this.scene.stats().maxHp, pl.hp + heal);
+        gameBus.emit('heal', { amount: heal, source: 'smite', x: this.player.x, y: this.player.y });
         this.scene.floatText(this.player.x, this.player.y - 40, `+${heal}`, '#7fff9f', 12);
         mark('smite', 1000);
         break;
       }
     }
+    gameBus.emit('statusApplied', { target: m, kind, x: m.x, y: m.y });
   }
 
   private damageMonsterRaw(m: Monster, amount: number, color: number): void {
@@ -921,6 +932,7 @@ export class Combat implements CombatHost {
       }
     }
     m.witnessed.clear();
+    gameBus.emit('kill', { monster: m, def: m.def, x: m.x, y: m.y, exp: m.def.exp, coins, elite: m.elite, warden: m.warden });
     s.requestSave();
   }
 
@@ -933,6 +945,7 @@ export class Combat implements CombatHost {
       pl.exp -= expToNext(pl.level);
       s.session.setLevel(pl.level + 1);
       leveled = true;
+      gameBus.emit('levelUp', { level: pl.level, x: this.player.x, y: this.player.y });
     }
     if (leveled) {
       const st = s.stats();
@@ -963,6 +976,7 @@ export class Combat implements CombatHost {
     pl.hp -= dmg;
     this.lastHurt = now;
     this.player.hurt();
+    gameBus.emit('playerHurt', { damage: dmg, hp: pl.hp, maxHp: st.maxHp, from, origin: opts.source, heavy: dmg >= st.maxHp * 0.15, x: this.player.x, y: this.player.y });
     s.floatText(this.player.x, this.player.y - 44, `-${dmg}`, '#ff5a5a', dmg >= st.maxHp * 0.15 ? 17 : 14);
     if (dmg >= st.maxHp * 0.15) s.cameras.main.shake(130, 0.005);
     s.interactions.onDamaged();
@@ -981,6 +995,7 @@ export class Combat implements CombatHost {
     const p = this.player;
     const now = s.time.now;
     const tier = opts.rank === 'warden' ? 2 : opts.rank === 'elite' ? 1 : 0;
+    const immune = now < p.ccImmuneUntil;
     const mark = (k: StatusKind, ms: number) => (p.marks[k] = Math.max(p.marks[k] ?? 0, now + ms));
     const dot = (dur: number, every: number, pct: number, color: number) => {
       p.dots = p.dots.filter((d) => d.kind !== kind);
@@ -1050,6 +1065,7 @@ export class Combat implements CombatHost {
       default:
         break;
     }
+    gameBus.emit('statusApplied', { target: 'player', kind, x: p.x, y: p.y, blocked: (kind === 'stun' || kind === 'freeze') && immune });
   }
 
   /** Player DoT ticks, status motes and knockback travel. */
@@ -1096,6 +1112,7 @@ export class Combat implements CombatHost {
     const pl = s.session.player;
     pl.hp -= d.dmg;
     this.lastHurt = now;
+    gameBus.emit('playerHurt', { damage: d.dmg, hp: pl.hp, maxHp: s.stats().maxHp, from: d.from, heavy: false, dot: d.kind, x: this.player.x, y: this.player.y });
     s.floatText(this.player.x + Phaser.Math.Between(-6, 6), this.player.y - 44, `-${d.dmg}`, hex(d.color), 11);
     s.interactions.onDamaged();
     if (pl.hp <= 0) this.die(d.from);
@@ -1134,6 +1151,7 @@ export class Combat implements CombatHost {
     this.pushDest = null;
     const lost = Math.floor(pl.exp * 0.05);
     pl.exp -= lost;
+    gameBus.emit('death', { from, expLost: lost, x: this.player.x, y: this.player.y });
     s.ui.log(`💀 You were defeated by ${esc(from)}. Lost ${lost} EXP.`, 'warn');
     this.player.sprite.setAngle(90).setAlpha(0.7);
     for (const m of this.monsters) m.provoked = false;
@@ -1165,6 +1183,7 @@ export class Combat implements CombatHost {
       for (const dot of m.status.dots) {
         if (now >= dot.next && now <= dot.until + 10) {
           dot.next += 500;
+          gameBus.emit('dotTick', { target: m, damage: dot.dmg, kind: dot.kind, x: m.x, y: m.y });
           this.damageMonsterRaw(m, dot.dmg, dot.color);
           if (!m.alive) return;
         }

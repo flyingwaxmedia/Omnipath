@@ -2,6 +2,7 @@ import Phaser from 'phaser';
 import type { BuffStat, ElementDef, MonsterDef, StatusKind } from '../../core/types';
 import { isBlockedPx } from '../../core/world/compile';
 import type { CompiledMap } from '../../core/world/types';
+import { DEPTH, ySort } from '../render/depths';
 
 export interface Dot {
   until: number;
@@ -109,10 +110,10 @@ export class Monster {
     let tex = def.texture ?? `mon_${def.id}`;
     if (!scene.textures.exists(tex)) tex = def.base && scene.textures.exists(`mon_${def.base}`) ? `mon_${def.base}` : 'mon_jellop';
     const big = def.rank === 'warden' ? 2.6 : def.rank === 'elite' ? 1.6 : 1;
-    this.shadow = scene.add.image(this.x, this.y, 'shadow').setScale(big * this.baseScale * 0.8 + 0.2);
-    this.aura = def.rank !== 'common' ? scene.add.graphics().setBlendMode(Phaser.BlendModes.ADD) : null;
+    this.shadow = scene.add.image(this.x, this.y, 'shadow').setScale(big * this.baseScale * 0.8 + 0.2).setDepth(DEPTH.SHADOW);
+    this.aura = def.rank !== 'common' ? scene.add.graphics().setBlendMode(Phaser.BlendModes.ADD).setDepth(DEPTH.AURA) : null;
     this.sprite = scene.add.image(this.x, this.y, tex).setOrigin(0.5, 0.9);
-    this.bar = scene.add.graphics();
+    this.bar = scene.add.graphics().setDepth(DEPTH.HP_BAR);
     // Name labels are created lazily (only targeted monsters and wardens show one): up to 60 monsters per map.
     if (this.warden) this.label.setVisible(true);
     this.restoreTint();
@@ -135,7 +136,7 @@ export class Monster {
         })
         .setOrigin(0.5, 1)
         .setResolution(2)
-        .setDepth(100000)
+        .setDepth(DEPTH.NAME_TAG)
         .setVisible(false);
     }
     return this._label;
@@ -241,10 +242,8 @@ export class Monster {
     this.sprite.setPosition(this.x, this.y);
     this.sprite.setScale(scale * this.facing * (1 / squash) * swell, scale * squash * swell);
     this.shadow.setPosition(this.x, this.y + 1);
-    const depth = this.y;
-    this.sprite.setDepth(depth);
-    this.shadow.setDepth(depth - 1000);
-    if (this.aura) this.drawAura(now, depth);
+    this.sprite.setDepth(ySort(this.y));
+    if (this.aura) this.drawAura(now);
     const top = this.y - this.sprite.displayHeight * 0.9 - 4;
     if (this._label?.visible) this._label.setPosition(this.x, top - 6);
     const g = this.bar;
@@ -263,10 +262,9 @@ export class Monster {
         g.fillStyle(0xfff3a0, 0.95).fillCircle(this.x + Math.cos(a) * r, top - 6 + Math.sin(a) * r * 0.3, 2.2);
       }
     }
-    g.setDepth(100000);
   }
 
-  private drawAura(now: number, depth: number): void {
+  private drawAura(now: number): void {
     const a = this.aura!;
     a.clear();
     const rx = this.radius * (this.warden ? 1.25 : 1.5);
@@ -289,7 +287,6 @@ export class Monster {
     if (this.charge > 0) {
       a.fillStyle(this.chargeColor, 0.2 + 0.35 * this.charge).fillEllipse(this.x, this.y, rx * 2 * (0.6 + 0.5 * this.charge), rx * 0.8 * (0.6 + 0.5 * this.charge));
     }
-    a.setDepth(depth - 999);
   }
 
   setVisible(v: boolean): void {

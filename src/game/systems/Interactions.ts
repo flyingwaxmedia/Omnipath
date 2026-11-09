@@ -7,6 +7,7 @@ import type { NpcDef } from '../../data/npcs';
 import { WEAPONS } from '../../data/weapons';
 import type { WeaponType } from '../../core/types';
 import { esc } from '../../ui/util';
+import { gameBus } from '../events';
 import type { MapScene } from '../scenes/MapScene';
 import {
   TILE,
@@ -167,6 +168,7 @@ export class Interactions {
   // ---------------------------------------------------------------- dispatch
 
   act(v: Interactable): void {
+    gameBus.emit('interact', { kind: v.kind, id: v.def.id, x: v.x, y: v.y, map: this.s.mapId });
     switch (v.kind) {
       case 'npc':
         return this.npc(v);
@@ -194,6 +196,7 @@ export class Interactions {
     const { book, ui } = s;
     const npc = v.def;
     const pl = s.session.player;
+    gameBus.emit('talk', { npcId: npc.id, map: s.mapId, x: v.x, y: v.y });
     switch (npc.role) {
       case 'smith': {
         if (!book.flag('brann_gift')) {
@@ -460,6 +463,7 @@ export class Interactions {
       world.nodes[nodeKey(s.mapId, d.id)] = Date.now() + NODE_RESPAWN_MS;
       s.refreshNodes();
       const total = s.session.addItem(info.item, 1);
+      gameBus.emit('gather', { node: d.kind, item: info.item, total, x: v.x, y: v.y, map: s.mapId });
       const n = book.incFlag(info.flag);
       const item = s.reg.item(info.item);
       s.skills.fxBurst(v.x, v.y - 8, 0xf0d070, 8);

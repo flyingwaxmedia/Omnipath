@@ -24,6 +24,8 @@ import { isBlockedPx } from '../../core/world/compile';
 import { esc } from '../../ui/util';
 import type { Monster } from '../entities/Monster';
 import type { MapScene } from '../scenes/MapScene';
+import { gameBus } from '../events';
+import { DEPTH, Y_BIAS, ySort } from '../render/depths';
 import { TILE } from '../world/runtime';
 import { clearShot, distToSegment, fxStyle } from './SkillSystem';
 
@@ -44,10 +46,6 @@ const ENRAGED_TEMPO = 0.75;
 /** First technique after engaging. */
 const OPENING: Record<MonsterRank, [number, number]> = { common: [900, 1800], elite: [700, 1400], warden: [600, 1000] };
 const ENRAGE_WEIGHT = 3;
-/** Ground decal depth: above the tilemap, under every y-sorted sprite. */
-const TELL_DEPTH = -40000;
-/** Overlay rim depth: above sprites and props, under floating text and the HUD-like labels. */
-const RIM_DEPTH = 99000;
 
 interface HitSpec {
   dmg: number;
@@ -75,6 +73,8 @@ interface Pending {
 }
 
 interface Shot {
+  /** The monster that fired it (event payloads). */
+  m: Monster;
   img: Phaser.GameObjects.Image;
   x: number;
   y: number;
@@ -224,6 +224,7 @@ export class MonsterSkills {
         const r = sh.radius;
         total = Math.max(NOVA_MIN, sh.delay ?? 0) + wind;
         this.tell(m, skill, now, total, true, (g, t, top) => this.zone(g, top, cx, cy, r, r * 0.65, t, color), () => {
+          gameBus.emit('novaBlast', { owner: m, skillId: skill.id, skill, element: skill.element, x: cx, y: cy, radius: r, heavy: skill.power >= 2 || skill.tags.includes('heavy') });
           s.skills.fxNova(cx, cy, r, color, skill.element, skill.power >= 2 || skill.tags.includes('heavy'));
           if (m.warden) s.cameras.main.shake(160, 0.007);
           if (Math.hypot((p.x - cx) / r, (p.y - cy) / (r * 0.65)) <= 1) this.hitPlayer(hit, { x: cx, y: cy });
@@ -294,6 +295,7 @@ export class MonsterSkills {
             const [ex, ey] = this.dashEnd(m.x, m.y, a, sh.distance);
             const len = Math.hypot(ex - m.x, ey - m.y);
             this.sweeps.push({ m, sx: m.x, sy: m.y, ex, ey, w, t: 0, dur: Math.max(140, len / 1.1), done: false, trailT: 0, hit });
+            gameBus.emit('dash', { owner: m, skillId: skill.id, skill, element: skill.element, from: { x: m.x, y: m.y }, to: { x: ex, y: ey }, durationMs: Math.max(140, len / 1.1), width: w });
           },
         );
         total += Math.max(140, sh.distance / 1.1);
@@ -359,6 +361,7 @@ export class MonsterSkills {
             const my = m.y - Math.min(30, m.sprite.displayHeight * 0.5);
             if (Math.hypot(p.x - m.x, p.y - m.y) <= range + PLAYER_R && clearShot(s.cm, m.x, m.y, p.x, p.y)) {
               s.skills.fxLightning([{ x: m.x, y: my }, { x: p.x, y: p.y - 18 }], color);
+              gameBus.emit('chainHop', { owner: m, skillId: skill.id, skill, element: skill.element, from: { x: m.x, y: my }, to: { x: p.x, y: p.y - 18 }, index: 0, target: 'player', knives: false });
               this.hitPlayer(hit, { x: m.x, y: m.y });
             } else s.skills.fxBurst(m.x, my, color, 6);
           },
@@ -383,6 +386,7 @@ export class MonsterSkills {
             const until = s.time.now + bs.duration;
             m.buffs = m.buffs.filter((b) => b.stat !== bs.stat);
             m.buffs.push({ stat: bs.stat, amount: bs.amount, until, color: bc });
+            gameBus.emit('buffApplied', { target: m, skillId: skill.id, skill, element: skill.element, stat: bs.stat, amount: bs.amount, durationMs: bs.duration, x: m.x, y: m.y });
             s.skills.fxRing(m.x, m.y, m.radius * 2 + 10, bc, false);
             s.floatText(m.x, this.headY(m, 14), `${skill.icon} ${bs.stat.toUpperCase()} ↑`, '#ffe9a0', 12);
           },
@@ -390,14 +394,20 @@ export class MonsterSkills {
         break;
       }
     }
+    const aimed = sh.kind !== 'spin' && sh.kind !== 'buff';
+    const radius = sh.kind === 'nova' ? sh.radius : sh.kind === 'spin' ? sh.radius + m.radius : sh.kind === 'chain' ? sh.range : undefined;
+    const windMs = (sh.kind === 'nova' ? Math.max(NOVA_MIN, sh.delay ?? 0) : TELL[sh.kind]) + wind;
+    gameBus.emit('monsterTelegraph', { monster: m, skillId: skill.id, skill, element: skill.element, shape: sh.kind, x: m.x, y: m.y, at: aimed ? { x: p.x, y: p.y } : { x: m.x, y: m.y }, durationMs: windMs, radius, echo: !!tech.echo });
     m.busyUntil = now + total + RECOVERY;
     m.nextAttack = Math.max(m.nextAttack, now + total + 400);
     return total;
   }
 
   private tell(m: Monster, skill: SkillDef, start: number, dur: number, windup: boolean, draw: Pending['draw'], resolve: () => void): void {
-    const gfx = this.s.add.graphics().setDepth(TELL_DEPTH);
-    const top = this.s.add.graphics().setDepth(RIM_DEPTH);
+    // Fills are ground decals (DEPTH.TELEGRAPH, under every y-sorted sprite); rims sit on DEPTH.RIM, above sprites,
+    // props and canopies but under name tags and floating text.
+    const gfx = this.s.add.graphics().setDepth(DEPTH.TELEGRAPH);
+    const top = this.s.add.graphics().setDepth(DEPTH.RIM);
     const at = start + dur;
     const p: Pending = { m, skill, start, at, gfx, top, draw, resolve, windup };
     if (start <= this.s.time.now) draw(gfx, 0, top);
@@ -473,8 +483,10 @@ export class MonsterSkills {
       .setTint(hit.color)
       .setScale(look.scale)
       .setRotation(a)
-      .setBlendMode(look.add ? Phaser.BlendModes.ADD : Phaser.BlendModes.NORMAL);
-    this.shots.push({ img, x: m.x, y: m.y, vx: Math.cos(a) * speed, vy: Math.sin(a) * speed, traveled: 0, range, size, spin: look.spin, trailT: 0, hit });
+      .setBlendMode(look.add ? Phaser.BlendModes.ADD : Phaser.BlendModes.NORMAL)
+      .setDepth(ySort(m.y, Y_BIAS.PROJECTILE));
+    this.shots.push({ m, img, x: m.x, y: m.y, vx: Math.cos(a) * speed, vy: Math.sin(a) * speed, traveled: 0, range, size, spin: look.spin, trailT: 0, hit });
+    gameBus.emit('projectileSpawn', { owner: m, obj: img, skillId: hit.skill.id, skill: hit.skill, element: hit.skill.element, x: m.x, y: m.y, angle: a, speed, range, size });
   }
 
   // ---------------------------------------------------------------- update
@@ -543,7 +555,7 @@ export class MonsterSkills {
       sh.x += sx;
       sh.y += sy;
       sh.traveled += Math.hypot(sx, sy);
-      sh.img.setPosition(sh.x, sh.y - 14).setDepth(sh.y + 20);
+      sh.img.setPosition(sh.x, sh.y - 14).setDepth(ySort(sh.y, Y_BIAS.PROJECTILE));
       if (sh.spin) sh.img.rotation += sh.spin * dt;
       sh.trailT -= dt;
       if (sh.trailT <= 0) {
@@ -556,6 +568,8 @@ export class MonsterSkills {
         dead = true;
       }
       if (dead) {
+        const sk = sh.hit.skill;
+        gameBus.emit('projectileEnd', { owner: sh.m, obj: sh.img, skillId: sk.id, skill: sk, element: sk.element, x: sh.x, y: sh.y, reason: sh.traveled >= sh.range ? 'range' : isBlockedPx(s.cm, sh.x, sh.y) ? 'wall' : 'hit' });
         s.skills.fxImpactAt(sh.x, sh.y - 14, sh.hit.skill, sh.hit.color, 3);
         sh.img.destroy();
         this.shots.splice(i, 1);

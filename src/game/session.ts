@@ -7,6 +7,7 @@ import type { Registry } from '../core/registry';
 import type { BuffStat, StatBonus, WeaponType } from '../core/types';
 import { WEAPON_TYPES } from '../core/types';
 import { WEAPONS } from '../data/weapons';
+import { gameBus } from './events';
 
 export const HOTBAR_SIZE = 6;
 export const SAVE_KEY = 'omnipath.save.v2';
@@ -243,6 +244,14 @@ export class Session {
       coins: () => this.player.coins,
       spend: (cost) => this.spend(cost),
     };
+    // The book lives as long as the session: forward the events the game bus mirrors (docs/INTEGRATION-v3.md §4).
+    const ev = this.book.events;
+    ev.on('learned', ({ skill, source }) => gameBus.emit('skillLearned', { skillId: skill.id, skill, element: skill.element, source }));
+    ev.on('spark', ({ from, to }) => gameBus.emit('spark', { from, to }));
+    ev.on('questAccepted', ({ quest }) => gameBus.emit('questChanged', { questId: quest.id, reason: 'accepted' }));
+    ev.on('questProgress', ({ quest }) => gameBus.emit('questChanged', { questId: quest.id, reason: 'progress' }));
+    ev.on('questReady', ({ quest }) => gameBus.emit('questChanged', { questId: quest.id, reason: 'ready' }));
+    ev.on('questCompleted', ({ quest }) => gameBus.emit('questChanged', { questId: quest.id, reason: 'completed' }));
   }
 
   static create(reg: Registry, name: string, weaponType: WeaponType, seed = randomSeed()): Session {
@@ -380,7 +389,10 @@ export class Session {
     const skill = this.reg.skill(id);
     if (!skill || skill.tags.includes('monster')) return;
     const i = this.player.hotbar.indexOf(null);
-    if (i >= 0) this.player.hotbar[i] = id;
+    if (i >= 0) {
+      this.player.hotbar[i] = id;
+      gameBus.emit('barChanged', { slots: [i] });
+    }
   }
 
   private ensureBasic(): void {

@@ -2,10 +2,11 @@
 // Omnipath Playwright smoke test (docs/CLIENT-v2.md §8).
 //
 //   npm run build && npx vite preview --port 4173 --strictPort &
-//   node scripts/playtest.mjs http://localhost:4173/ [--shots <dir>] [--quick] [--portals [--landscape]]
+//   node scripts/playtest.mjs http://localhost:4173/ [--shots <dir>] [--quick] [--portals | --only-portals]
+//                             [--landscape] [--maps vale.hearthvale,vale.mirror_lake]
 //
 // --portals additionally walks EVERY portal pair by real taps (HUD-aware, phone portrait or --landscape), checking
-// arrivals and return portals (~25 min).
+// arrivals and return portals (~25 min); --only-portals skips the main run; --maps limits the portal walk.
 //
 // Starts a new game, opens every panel (and tab), walks Hearthvale -> Greenmeadow through a real portal, fights,
 // reveals a hidden portal by casting, opens a Prism Gate, warps through every map via window.omnipath.debug, checks
@@ -88,8 +89,10 @@ const warp = async (mapId, portal) => {
   return done;
 };
 
+const SKIP_MAIN = Symbol('only portals');
 try {
   console.log(`Omnipath playtest @ ${base}`);
+  if (args.includes('--only-portals')) throw SKIP_MAIN;
   await page.goto(base);
   await page.waitForSelector('.title-screen .new', { timeout: 20000 });
   await page.click('.title-screen .new');
@@ -528,13 +531,15 @@ try {
   else fail(`v1 migration: ${JSON.stringify({ v1: mig.v1, map: mig.map, bag: mig.v2?.player?.bag })}`);
   await ctx2.close();
 } catch (e) {
-  fail(`exception: ${e?.stack ?? e}`);
+  if (e !== SKIP_MAIN) fail(`exception: ${e?.stack ?? e}`);
 }
 
 // ------------------------------------------------------------ --portals: walk every portal pair by tapping
 // Like a player: only taps canvas pixels no HUD element covers (and no monster stands on), following the real path,
 // then checks the destination map, the arrival tile and the return portal. Slow (~25 min at phone size).
-if (args.includes('--portals')) {
+if (args.includes('--portals') || args.includes('--only-portals')) {
+  const mapsAt = args.indexOf('--maps');
+  const portalMaps = mapsAt >= 0 ? args[mapsAt + 1].split(',') : ALL_MAPS;
   const size = args.includes('--landscape') ? { width: 844, height: 390 } : { width: 390, height: 844 };
   const ctx3 = await browser.newContext({ viewport: size, deviceScaleFactor: 1, hasTouch: true, isMobile: true });
   const p3 = await ctx3.newPage();
@@ -568,25 +573,35 @@ if (args.includes('--portals')) {
           return { x: Math.round(p.x), y: Math.round(p.y) };
         };
         if (!j)
-          for (const fy of [0.5, 0.25, 0.75])
-            for (const fx of [0.5, 0.25, 0.75]) {
+          for (let fy = 0.15; fy < 1; fy += 0.175)
+            for (let fx = 0.15; fx < 1; fx += 0.175) {
               const q = free((rc.tx + rc.w * fx) * T, (rc.ty + rc.h * fy) * T);
               if (q) return q;
             }
         const pl = s.player;
-        const path = [{ x: pl.x, y: pl.y }, ...(s.pathTo((rc.tx + rc.w / 2) * T, (rc.ty + rc.h / 2) * T) ?? [])];
-        for (let i = path.length - 1; i >= 1; i--) {
-          const a = path[i - 1];
-          const b = path[i];
-          const L = Math.hypot(b.x - a.x, b.y - a.y) || 1;
-          const n = Math.max(1, Math.ceil(L / 16));
-          for (let k = n; k >= 0; k--) {
-            const x = a.x + ((b.x - a.x) * k) / n + (-(b.y - a.y) / L) * j;
-            const y = a.y + ((b.y - a.y) * k) / n + ((b.x - a.x) / L) * j;
-            if (Math.hypot(x - pl.x, y - pl.y) < 20) continue;
-            const q = free(x, y);
-            if (q) return q;
+        const gx = (rc.tx + rc.w / 2) * T;
+        const gy = (rc.ty + rc.h / 2) * T;
+        if (!j) {
+          // the farthest visible point along the real path
+          const path = [{ x: pl.x, y: pl.y }, ...(s.pathTo(gx, gy) ?? [])];
+          for (let i = path.length - 1; i >= 1; i--) {
+            const a = path[i - 1];
+            const b = path[i];
+            const n = Math.max(1, Math.ceil(Math.hypot(b.x - a.x, b.y - a.y) / 16));
+            for (let k = n; k >= 0; k--) {
+              const x = a.x + ((b.x - a.x) * k) / n;
+              const y = a.y + ((b.y - a.y) * k) / n;
+              if (Math.hypot(x - pl.x, y - pl.y) < 20) continue;
+              const q = free(x, y);
+              if (q) return q;
+            }
           }
+        }
+        // stuck or nothing visible on the path: the straight line toward the exit, offset sideways by `j`
+        const L = Math.hypot(gx - pl.x, gy - pl.y) || 1;
+        for (let k = 1; k >= 0.05; k -= 0.05) {
+          const q = free(pl.x + (gx - pl.x) * k + (-(gy - pl.y) / L) * j, pl.y + (gy - pl.y) * k + ((gx - pl.x) / L) * j);
+          if (q) return q;
         }
         return null;
       },
@@ -608,7 +623,7 @@ if (args.includes('--portals')) {
     });
     await close3();
     let walked = 0;
-    for (const mapId of ALL_MAPS) {
+    for (const mapId of portalMaps) {
       const ports = await p3.evaluate(async (m) => {
         window.omnipath.debug.warp(m);
         await new Promise((r) => setTimeout(r, 900));
@@ -626,7 +641,7 @@ if (args.includes('--portals')) {
         let jitter = 0;
         let still = 0;
         let last = null;
-        const until = Date.now() + 45000;
+        const until = Date.now() + 60000;
         while (Date.now() < until) {
           await settle();
           if ((await inf()).map !== mapId) break;

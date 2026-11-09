@@ -1,10 +1,18 @@
-// GameController v2 (docs/CLIENT-v2.md §7): the only API the DOM may call. Implemented by MapScene; the same scene
-// instance survives map restarts, so the UI holds it once. Feature engineers may ADD methods only by asking.
+// GameController v3 (docs/CLIENT-v2.md §7, docs/INTEGRATION-v3.md §5): the only API the DOM may call. Implemented
+// by MapScene (most v3 views are built in src/game/views.ts); the same scene instance survives map restarts, so the
+// UI holds it once. Owned by the game lane: other lanes never edit this file — they ask for additions in their
+// report. Members are only ever ADDED (never renamed or re-typed) while lanes run in parallel.
+//
+// View types use plain-language fields (docs/UX-SIMPLE.md): every string meant for players is already friendly
+// ("Class Level", "Transform", "Seen 2/3"); ids appear only as keys for lookups and actions — never show them.
 import type { Registry } from '../core/registry';
 import type { FuseResult, SkillBook } from '../core/skillbook';
-import type { MonsterRank, WeaponType } from '../core/types';
+import type { ElementId, MonsterRank, WeaponType } from '../core/types';
 import type { CompiledMap, MapDef } from '../core/world/types';
+import type { IconKind } from '../game/art/icons';
 import type { Session, Stats, WorldState } from '../game/session';
+import type { DialogOption } from './dialogs';
+import type { StarChartData } from './starchart/data';
 
 export type Outcome = { ok: boolean; message?: string };
 
@@ -24,6 +32,241 @@ export interface TravelTargetView {
   name: string;
   region: string;
   cost: number;
+}
+
+// ====================================================================== v3 views
+
+/** What changed (onChange): re-render the parts that show it. */
+export type ChangeKind = 'bar' | 'class' | 'quests' | 'skills';
+
+/** One skill-bar slot. Slots 0..classSlots-1 are class slots while a class is worn; the rest are the player's own. */
+export interface BarSlotView {
+  index: number;
+  /** Skill in the slot, or null (empty). */
+  skillId: string | null;
+  /** 'class' = filled by the worn class (long-press → that skill's card); 'own' = the player's pick (→ picker). */
+  kind: 'class' | 'own';
+  /** Worn class (frame colour + emblem) — class slots only. */
+  classId?: string;
+  /** Hotkey label: '1'..'8'. */
+  key: string;
+}
+
+/** One choice in the own-slot picker grid (docs/UX-SIMPLE.md §3). */
+export interface PickerChoiceView {
+  skillId: string;
+  name: string;
+  /** Learned recently and never equipped (gold "new" dot). */
+  fresh: boolean;
+  /** Slot it already sits in (equipping moves it), or null. */
+  slot: number | null;
+}
+
+/** The own-slot picker: a grid of skill icons with names, newest first. */
+export interface SlotPickerView {
+  slot: number;
+  /** Skill in that slot now (null = empty: no "Remove" button). */
+  current: string | null;
+  choices: PickerChoiceView[];
+}
+
+/** The ONE primary action of a skill card. */
+export type SkillCardAction =
+  /** "Equip" → equipSkill(id) (no free own slot: open the picker with arg `skill:<id>`). */
+  | { kind: 'equip' }
+  /** "Equipped ✓" (disabled). `byClass` = sits in a class slot ("Equipped by Pyroblade"). */
+  | { kind: 'equipped'; slot: number; byClass?: string }
+  /** "Transform" → morph(id, to). */
+  | { kind: 'transform'; to: string; toName: string }
+  /** The one next step, shown as text ("Reach rank 10 to transform."). */
+  | { kind: 'step'; text: string }
+  /** Nothing to do (unknown skill, monster technique). */
+  | { kind: 'none' };
+
+/** The simple skill card (docs/UX-SIMPLE.md §3): big icon, name, ★ rank, one line, cooldown/SP, one action. */
+export interface SkillCardView {
+  id: string;
+  name: string;
+  /** One short line, written like a game ("Spin and slash everything around you."). */
+  line: string;
+  element?: ElementId;
+  known: boolean;
+  /** Stars: rank of maxRank. */
+  rank: number;
+  maxRank: number;
+  /** Fill of the rank bar toward the next star (or the Mastery bar after max rank), 0..1. */
+  progress: number;
+  /** Cooldown in seconds (0 = none) and SP cost. */
+  cooldown: number;
+  sp: number;
+  /** Ready to transform (✨). */
+  transformReady: boolean;
+  action: SkillCardAction;
+  /** The one next step toward a transform, shown small under the action ("Reach rank 10 to transform."). */
+  next?: string;
+  /** Behind "Details" (closed by default): plain label/value rows. */
+  details: { label: string; value: string }[];
+}
+
+/** One class on the Class screen. */
+export interface ClassCardView {
+  id: string;
+  name: string;
+  /** One short line. */
+  line: string;
+  state: 'current' | 'unlocked' | 'locked';
+  /** Class Level (0 while locked), its max, and the bar toward the next level (0..1). */
+  level: number;
+  maxLevel: number;
+  levelProgress: number;
+  /** Locked classes: ONE hint line (the first unmet goal, or the riddle). */
+  hint?: string;
+  /** Frame / accent colour, '#rrggbb'. */
+  color: string;
+  /** Skills this class would equip into the class slots (ids, best first). */
+  skills: string[];
+}
+
+/** The Class screen: current class on top, unlocked cards with Become, locked silhouettes. */
+export interface ClassScreenView {
+  current: ClassCardView | null;
+  unlocked: ClassCardView[];
+  /** Locked classes worth showing (riddle heard or close), nearest first. */
+  locked: ClassCardView[];
+  /** Changing class works here (safe towns only). */
+  canChange: boolean;
+  /** Why not, in one line ("Change class in a town."). */
+  changeHint?: string;
+}
+
+export interface QuestObjectiveView {
+  /** "Defeat Jellops 3/8", "Bring 5 Lake Fish (4 in bag)", "Visit Mirror Lake ✓". */
+  text: string;
+  have: number;
+  need: number;
+  done: boolean;
+}
+
+export interface QuestRewardView {
+  coins: number;
+  exp: number;
+  items: { id: string; name: string; count: number }[];
+  /** What it teaches: skills, passives (Mastery bonus), elements, essences — friendly names. */
+  learn: { kind: 'skill' | 'passive' | 'element' | 'essence'; id: string; name: string }[];
+  /** Reveals a class secret (whisper). */
+  secret: boolean;
+}
+
+export type QuestStatusView = 'locked' | 'available' | 'active' | 'ready' | 'done' | 'cooldown';
+
+export interface QuestCardView {
+  id: string;
+  name: string;
+  /** One line for the log / tracker. */
+  summary: string;
+  status: QuestStatusView;
+  giverId: string;
+  giverName: string;
+  turnInId: string;
+  turnInName: string;
+  /** Map the giver stands in (log: "available — from Brann in Hearthvale"). */
+  where?: string;
+  /** Chain name for grouping in the log (plain words). */
+  chain?: string;
+  objectives: QuestObjectiveView[];
+  rewards: QuestRewardView;
+  tracked: boolean;
+  repeatable: boolean;
+}
+
+/** An NPC's quest as their dialog shows it. */
+export interface NpcQuestView extends QuestCardView {
+  /** The NPC's line for this status: offer (available), progress (active), complete (ready). */
+  dialog: string;
+}
+
+/** What talking to an NPC shows (the quest list part of the NPC dialog / trainer panel). */
+export interface NpcQuestsView {
+  npcId: string;
+  name: string;
+  title: string;
+  portrait: string;
+  /** Ready first, then available, active, cooldown, done (core order). */
+  quests: NpcQuestView[];
+}
+
+export interface QuestLogView {
+  active: QuestCardView[];
+  available: QuestCardView[];
+  done: QuestCardView[];
+}
+
+/** Result of turning a quest in, with the reward card's content. */
+export interface QuestTurnInView extends Outcome {
+  rewards?: QuestRewardView;
+}
+
+/** One row of the Pursuits tracker: tracked quests first, then at most 2 goals. */
+export interface PursuitView {
+  /** Stable key: 'quest:<id>' or 'goal:<kind>:<id>'. */
+  key: string;
+  kind: 'quest' | 'goal';
+  title: string;
+  /** ONE next-step line ("Defeat Jellops 3/8", "Reach rank 10 to transform", "Seen 2/3"). */
+  line: string;
+  /** Optional bar, 0..1. */
+  progress?: number;
+  /** Quest ready to turn in (gold). */
+  ready?: boolean;
+  /** Icon for the row. */
+  icon?: { kind: IconKind; id: string };
+  /** Tap → ui.open(panel, arg). */
+  open: { panel: string; arg?: string };
+}
+
+/** Top-centre zone plate. */
+export interface ZoneView {
+  name: string;
+  /** Safety tag shown on the plate. */
+  tag: 'Safe' | 'Hunting' | 'Dungeon' | 'Warden';
+  /** "Lv 3–6", or '' for towns. */
+  band: string;
+  /** Explored share of the map, 0..100. */
+  explored: number;
+  /** Element sources here (element ids: forge fire, lake water, …). */
+  sources: ElementId[];
+  /** Warden of this map: alive, defeated, or none. */
+  warden: 'alive' | 'defeated' | null;
+}
+
+/** The worn class for the HUD stat strip ("Pyroblade · Class Level 4"). */
+export interface WornClassView {
+  id: string;
+  name: string;
+  level: number;
+  maxLevel: number;
+  /** Toward the next Class Level, 0..1. */
+  progress: number;
+  color: string;
+}
+
+/** Left-edge quick buttons: what they would use, and how many are left. */
+export interface QuickSlotsView {
+  heal: { itemId: string; count: number } | null;
+  recall: { itemId: string; count: number } | null;
+  potion: { itemId: string; count: number } | null;
+}
+
+/** What Interactions hands the UI when the player talks to an NPC (src/ui/panels/npc.ts renders it). */
+export interface NpcDialogView {
+  npcId: string;
+  name: string;
+  title: string;
+  portrait: string;
+  /** The NPC's line (HTML-escaped; may contain <b>/<small>). */
+  line: string;
+  /** Role actions (Forge, Buy a Dagger, Travel, Sell, Leave…) — the quest list is added by the dialog itself. */
+  options: DialogOption[];
 }
 
 export interface GameController {
@@ -66,4 +309,76 @@ export interface GameController {
   newGame(): void;
   /** Fighting right now (dealt or took damage in the last few seconds). Discovery cards wait until it is false. */
   inCombat?(): boolean;
+
+  // -------------------------------------------------------------------- v3: change feed
+
+  /** Subscribes to bar / class / quest / skill changes (run-wide; call the returned function to stop). */
+  onChange(fn: (what: ChangeKind) => void): () => void;
+
+  // -------------------------------------------------------------------- v3: skill bar & skills
+
+  /** Every skill-bar slot (HOTBAR_SIZE), class slots first while a class is worn. */
+  barSlots(): BarSlotView[];
+  /** Puts a skill into one of the player's own slots (`slot`, else the first empty own slot). */
+  equipSkill(skillId: string, slot?: number): Outcome;
+  /** Empties one of the player's own slots (class slots are managed by the class). */
+  clearSlot(slot: number): void;
+  /** The own-slot picker for `slot`: every bar-eligible known skill, newest first. */
+  slotPicker(slot: number): SlotPickerView;
+  /** The simple skill card of any skill id (known or not). */
+  skillCard(skillId: string): SkillCardView;
+  /** Everything the Star Chart draws (built by src/ui/starchart/data.ts from the registry and the book). */
+  starChartData(): StarChartData;
+
+  // -------------------------------------------------------------------- v3: classes
+
+  /** The Class screen. */
+  classCards(): ClassScreenView;
+  /** Becomes a class (null = "No class"): wears it, refills the class slots, banner + outfit change. */
+  becomeClass(id: string | null): Outcome;
+  /** The worn class for the HUD stat strip, or null. */
+  wornClass(): WornClassView | null;
+
+  // -------------------------------------------------------------------- v3: quests
+
+  /** An NPC's quests for its dialog / trainer panel. */
+  npcQuests(npcId: string): NpcQuestsView;
+  /** Accepts an available quest from NPC `npcId` (the one the player is talking to). */
+  acceptQuest(id: string, npcId: string): Outcome;
+  /** Turns a ready quest in at NPC `npcId`; applies coins, items and exp; returns the reward card content. */
+  turnInQuest(id: string, npcId: string): QuestTurnInView;
+  /** Drops an active quest (progress lost). */
+  abandonQuest(id: string): Outcome;
+  /** Shows / hides a quest in the Pursuits tracker. */
+  trackQuest(id: string, on: boolean): Outcome;
+  /** The quest log (Codex Quests tab): active, available (where / from whom), completed. */
+  questLog(): QuestLogView;
+  /** The Pursuits tracker rows: tracked quests first, then at most 2 goals. */
+  pursuits(): PursuitView[];
+  /** Marker over an NPC's head: '!' available, '?' ready to turn in, '…' in progress, null. */
+  questMarker(npcId: string): '!' | '?' | '…' | null;
+
+  // -------------------------------------------------------------------- v3: HUD helpers
+
+  /** Zone plate data for the current map. */
+  zone(): ZoneView;
+  /** Left-edge quick buttons (heal, recall, potion) with counts. */
+  quickSlots(): QuickSlotsView;
+  /** Uses a quick button: heal / recall / potion items, or 'rest' (sit and recover). */
+  useQuick(kind: 'heal' | 'recall' | 'potion' | 'rest'): Outcome;
+  /** Target button: cycles to the next nearest enemy (none nearby → toast). */
+  cycleTarget(): void;
+
+  // -------------------------------------------------------------------- v3: art for the DOM (data URLs, cached)
+
+  /** 32×32 pixel icon: kind 'skill' | 'el' | 'mod' | 'item' | 'cls' | 'passive'. Unknown ids → the generic icon. */
+  iconUrl(kind: IconKind, id: string): string;
+  /** 12×12 element / essence pip ('' when unknown). */
+  pipUrl(kind: 'el' | 'mod', id: string): string;
+  /** Any UI art texture by key (ui_frame_*, ui_round_*, ui_ico_*, ui_chevron…); '' when missing. */
+  uiUrl(key: string): string;
+  /** The player's current look (40×48 idle frame, worn class outfit) for the portrait medallion. */
+  portraitUrl(): string;
+  /** Outfit preview of a class with the current weapon (null = no class); the Class screen and class cards. */
+  outfitUrl(classId: string | null): string;
 }

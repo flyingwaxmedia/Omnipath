@@ -4,11 +4,12 @@ import type Phaser from 'phaser';
 import type { CompiledMap } from '../../core/world/types';
 import { ensureEdgeFamilies } from '../art/tiles';
 import { EDGE_VARIANTS, TILE_PX, computeTerrainLayers } from './autotile';
+import { DEPTH } from './depths';
 
 /** Chunk size in tiles (32 x 32 px = 1024 px, safely under mobile texture limits). */
 export const GROUND_CHUNK_TILES = 32;
 /** Same depth as the v2 tilemap layer: under every y-sorted sprite and ground decal. */
-export const GROUND_DEPTH = -100000;
+export const GROUND_DEPTH = DEPTH.GROUND;
 
 export interface BakedGround {
   /** Destroys every chunk (and its GPU texture). */

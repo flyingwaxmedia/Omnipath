@@ -41,6 +41,8 @@ import {
   travelTargets,
 } from '../world/runtime';
 import { statPct } from '../../core/passives';
+import { gameBus } from '../events';
+import { DEPTH, Y_BIAS, ySort } from '../render/depths';
 
 export type Arrival = string | { waystone: string };
 
@@ -54,7 +56,6 @@ export interface MapSceneData {
 
 /** Prop culling chunk size in tiles. */
 const CHUNK = 16;
-const DECAL_DEPTH = -60000;
 const SPAWN_PROTECT_MS = 2000;
 const SOCKET_GREY = 0x4a4f5e;
 
@@ -166,15 +167,15 @@ export class MapScene extends Phaser.Scene implements GameController {
     this.buildNpcs();
     this.buildPortals();
     this.applyPortalBlocks();
-    if (this.def.flags?.includes('dark')) this.dark = this.add.image(0, 0, this.darkTexture()).setDepth(150000).setScale(6);
+    if (this.def.flags?.includes('dark')) this.dark = this.add.image(0, 0, this.darkTexture()).setDepth(DEPTH.DARKNESS).setScale(6);
 
     const start = this.arrivalPoint();
     this.player = new Player(this, start.x, start.y, s.player.name, s.player.weapon);
     s.world.mapId = this.mapId;
     s.world.x = start.x;
     s.world.y = start.y;
-    this.targetRing = this.add.image(0, 0, 'target_ring').setVisible(false);
-    this.moveMarker = this.add.image(0, 0, 'move_marker').setVisible(false).setDepth(-50000);
+    this.targetRing = this.add.image(0, 0, 'target_ring').setVisible(false).setDepth(DEPTH.TARGET_RING);
+    this.moveMarker = this.add.image(0, 0, 'move_marker').setVisible(false).setDepth(DEPTH.MOVE_MARKER);
 
     this.combat.spawn();
     this.combat.protectUntil = this.time.now + SPAWN_PROTECT_MS;
@@ -335,7 +336,7 @@ export class MapScene extends Phaser.Scene implements GameController {
     for (let y = 0; y < h; y++) data.push(Array.from(ground.subarray(y * w, (y + 1) * w)));
     const tm = this.make.tilemap({ data, tileWidth: TILE, tileHeight: TILE });
     const ts = tm.addTilesetImage('tiles', 'tiles', TILE, TILE, TILE_MARGIN, TILE_SPACING)!;
-    tm.createLayer(0, ts, 0, 0)!.setDepth(-100000);
+    tm.createLayer(0, ts, 0, 0)!.setDepth(DEPTH.GROUND);
     this.tilemap = tm;
   }
 
@@ -348,7 +349,7 @@ export class MapScene extends Phaser.Scene implements GameController {
       if (!this.textures.exists(pr.kind)) continue;
       const x = pr.tx * TILE + TILE / 2;
       const y = (pr.ty + 1) * TILE;
-      const img = this.add.image(x, y, pr.kind).setOrigin(0.5, 1).setDepth(y - 4).setVisible(false);
+      const img = this.add.image(x, y, pr.kind).setOrigin(0.5, 1).setDepth(ySort(y, Y_BIAS.PROP)).setVisible(false);
       this.chunks[Math.floor(pr.ty / CHUNK) * cols + Math.floor(pr.tx / CHUNK)].push(img);
     }
   }
@@ -401,7 +402,7 @@ export class MapScene extends Phaser.Scene implements GameController {
       if (!fp || !this.textures.exists(key)) continue;
       const x = (st.tx + fp.w / 2) * TILE;
       const y = (st.ty + fp.h) * TILE;
-      this.add.image(x, y + 4, key).setOrigin(0.5, 1).setDepth(y);
+      this.add.image(x, y + 4, key).setOrigin(0.5, 1).setDepth(ySort(y));
     }
   }
 
@@ -417,7 +418,7 @@ export class MapScene extends Phaser.Scene implements GameController {
       })
       .setOrigin(0.5, 1)
       .setResolution(2)
-      .setDepth(100000);
+      .setDepth(DEPTH.NAME_TAG);
   }
 
   private buildObjects(): void {
@@ -429,7 +430,7 @@ export class MapScene extends Phaser.Scene implements GameController {
       let tex = `obj_${def.kind}`;
       if (def.kind === 'waystone' && world.waystones.includes(key)) tex = 'obj_waystone_lit';
       if (def.kind === 'chest' && world.chests.includes(key)) tex = 'obj_chest_open';
-      const sprite = this.add.image(x, y, this.textures.exists(tex) ? tex : 'obj_signpost').setOrigin(0.5, 1).setDepth(y);
+      const sprite = this.add.image(x, y, this.textures.exists(tex) ? tex : 'obj_signpost').setOrigin(0.5, 1).setDepth(ySort(y));
       const name = OBJECT_LABELS[def.kind];
       const label = name ? this.label(x, y - sprite.displayHeight - 2, name, '#d8f0ff') : null;
       this.objects.push({ kind: 'object', def, x, y: def.ty * TILE + TILE / 2, sprite, label });
@@ -451,11 +452,11 @@ export class MapScene extends Phaser.Scene implements GameController {
       let sprite: Phaser.GameObjects.Image;
       let bobber: Phaser.GameObjects.Image | null = null;
       if (def.kind === 'fishing') {
-        sprite = this.add.image(x, cy, 'node_fishing').setDepth(DECAL_DEPTH);
-        bobber = this.add.image(x + 4, cy - 6, 'bobber').setDepth(cy);
+        sprite = this.add.image(x, cy, 'node_fishing').setDepth(DEPTH.GROUND_DECAL);
+        bobber = this.add.image(x + 4, cy - 6, 'bobber').setDepth(ySort(cy));
       } else {
         const y = def.ty * TILE + TILE - 4;
-        sprite = this.add.image(x, y, `node_${def.kind}`).setOrigin(0.5, 1).setDepth(y);
+        sprite = this.add.image(x, y, `node_${def.kind}`).setOrigin(0.5, 1).setDepth(ySort(y));
       }
       const v: NodeView = { kind: 'node', def, x, y: cy, sprite, bobber, ready: true };
       this.nodes.push(v);
@@ -488,8 +489,8 @@ export class MapScene extends Phaser.Scene implements GameController {
       if (!def) continue;
       const x = place.tx * TILE + TILE / 2;
       const y = place.ty * TILE + TILE - 6;
-      this.add.image(x, y, 'shadow').setDepth(y - 1000);
-      const sprite = this.add.image(x, y + 2, this.textures.exists(def.texture) ? def.texture : 'npc_hermit').setOrigin(0.5, 1).setDepth(y);
+      this.add.image(x, y, 'shadow').setDepth(DEPTH.SHADOW);
+      const sprite = this.add.image(x, y + 2, this.textures.exists(def.texture) ? def.texture : 'npc_hermit').setOrigin(0.5, 1).setDepth(ySort(y));
       const label = this.label(x, y - sprite.displayHeight - 2, `${def.name}\n${def.title}`, '#ffe9a0');
       label.setLineSpacing(-2);
       this.tweens.add({ targets: sprite, scaleY: 1.03, yoyo: true, repeat: -1, duration: 1100 + Math.random() * 300, ease: 'Sine.inOut' });
@@ -539,8 +540,8 @@ export class MapScene extends Phaser.Scene implements GameController {
       const tex = look === 'rift' ? 'hide_shimmer' : `hide_${look}`;
       const decal = look === 'shimmer' || look === 'fog' || look === 'glyph' || look === 'rift';
       const img = decal
-        ? this.add.image(cx, cy, this.textures.exists(tex) ? tex : 'hide_shimmer').setDepth(DECAL_DEPTH + 10)
-        : this.add.image(cx, y0 + h, this.textures.exists(tex) ? tex : 'hide_shimmer').setOrigin(0.5, 1).setDepth(y0 + h);
+        ? this.add.image(cx, cy, this.textures.exists(tex) ? tex : 'hide_shimmer').setDepth(DEPTH.HIDDEN_DECAL)
+        : this.add.image(cx, y0 + h, this.textures.exists(tex) ? tex : 'hide_shimmer').setOrigin(0.5, 1).setDepth(ySort(y0 + h));
       if (look === 'rift') img.setTint(0xb070ff);
       if (look === 'shimmer' || look === 'rift') img.setAlpha(0);
       v.overlay = img;
@@ -560,7 +561,7 @@ export class MapScene extends Phaser.Scene implements GameController {
     if (p.gate) {
       const gx = Phaser.Math.Clamp(cx, PRISM_GATE_SIZE.w / 2, this.cm.w * TILE - PRISM_GATE_SIZE.w / 2);
       const gy = y0 + h;
-      const gate = this.add.image(gx, gy, 'gate_prism').setOrigin(0.5, 1).setDepth(gy);
+      const gate = this.add.image(gx, gy, 'gate_prism').setOrigin(0.5, 1).setDepth(ySort(gy));
       v.parts.push(gate);
       const sockets = gateSockets(this.book, p.gate);
       gate.setData('sockets', JSON.stringify(sockets));
@@ -570,12 +571,12 @@ export class MapScene extends Phaser.Scene implements GameController {
         if (!at) return;
         const gem = this.add
           .image(gx - PRISM_GATE_SIZE.w / 2 + at[0], gy - PRISM_GATE_SIZE.h + at[1], 'gate_socket')
-          .setDepth(gy + 1)
+          .setDepth(ySort(gy, Y_BIAS.GEM))
           .setTint(sk.color ?? SOCKET_GREY)
           .setAlpha(sk.color === null ? (sk.need ? 0.9 : 0.5) : 1);
         v.parts.push(gem);
         if (sk.color !== null) {
-          const glow = this.add.image(gem.x, gem.y, 'fx_dot').setTint(sk.color).setBlendMode(Phaser.BlendModes.ADD).setDepth(gy + 2);
+          const glow = this.add.image(gem.x, gem.y, 'fx_dot').setTint(sk.color).setBlendMode(Phaser.BlendModes.ADD).setDepth(ySort(gy, Y_BIAS.GEM_GLOW));
           this.tweens.add({ targets: glow, alpha: { from: 0.9, to: 0.35 }, yoyo: true, repeat: -1, duration: 900 + i * 60 });
           v.parts.push(glow);
         }
@@ -586,7 +587,7 @@ export class MapScene extends Phaser.Scene implements GameController {
           .setTint(0xbfe8ff)
           .setScale(2.2, 3)
           .setBlendMode(Phaser.BlendModes.ADD)
-          .setDepth(gy - 1);
+          .setDepth(ySort(gy, Y_BIAS.BEHIND));
         this.tweens.add({ targets: orb, alpha: { from: 0.75, to: 0.3 }, yoyo: true, repeat: -1, duration: 1200 });
         v.parts.push(orb);
       }
@@ -603,7 +604,7 @@ export class MapScene extends Phaser.Scene implements GameController {
         const t = (i + 0.5) / n;
         const x = horizontal ? x0 + w * t : cx;
         const y = horizontal ? cy : y0 + h * t;
-        const chev = this.add.image(x, y, 'portal_edge').setAngle(angle).setTint(0xffd76a).setDepth(DECAL_DEPTH + 5);
+        const chev = this.add.image(x, y, 'portal_edge').setAngle(angle).setTint(0xffd76a).setDepth(DEPTH.PORTAL_DECAL);
         this.tweens.add({ targets: chev, alpha: { from: 1, to: 0.45 }, yoyo: true, repeat: -1, duration: 800, delay: i * 120 });
         v.parts.push(chev);
       }
@@ -615,16 +616,16 @@ export class MapScene extends Phaser.Scene implements GameController {
         else [lx, ly, ox, oy] = [x0, y0 - 4, 0, 1];
       }
     } else if (style === 'door' && !p.gate) {
-      const door = this.add.image(cx, y0 + h, 'portal_door').setOrigin(0.5, 1).setDepth(y0 + h - 2);
+      const door = this.add.image(cx, y0 + h, 'portal_door').setOrigin(0.5, 1).setDepth(ySort(y0 + h, Y_BIAS.DOOR));
       v.parts.push(door);
       ly = y0 + h - door.displayHeight - 2;
     } else if (style === 'stairs') {
       if (p.id === 'up' || p.id === 'ladder') {
-        const st = this.add.image(cx, y0 + h, 'portal_stairs_up').setOrigin(0.5, 1).setDepth(y0 + h - 2);
+        const st = this.add.image(cx, y0 + h, 'portal_stairs_up').setOrigin(0.5, 1).setDepth(ySort(y0 + h, Y_BIAS.DOOR));
         v.parts.push(st);
         ly = y0 + h - st.displayHeight - 2;
       } else {
-        v.parts.push(this.add.image(cx, cy, 'portal_stairs_down').setDepth(DECAL_DEPTH + 5));
+        v.parts.push(this.add.image(cx, cy, 'portal_stairs_down').setDepth(DEPTH.PORTAL_DECAL));
         ly = y0 - 2;
       }
     }
@@ -708,6 +709,7 @@ export class MapScene extends Phaser.Scene implements GameController {
     const band = bandText(this.def);
     this.ui.banner(this.def.name, band || (this.def.safety === 'safe' ? 'Safe haven' : ''));
     if (first) this.ui.log(`🗺️ Discovered <b>${esc(this.def.name)}</b>.`, 'info');
+    gameBus.emit('mapEnter', { map: this.mapId, first, x: this.player.x, y: this.player.y });
   }
 
   // =================================================================== events
@@ -793,6 +795,7 @@ export class MapScene extends Phaser.Scene implements GameController {
     );
     add(
       ev.on('classDiscovered', ({ cls, worn }) => {
+        if (worn) gameBus.emit('classChanged', { classId: cls.id, prev: null, reason: 'discovered' });
         ui.log(`🏛️ Class discovered: <b>${esc(cls.name)}</b>`, 'rare');
         ui.discovery({
           icon: cls.icon,
@@ -965,12 +968,12 @@ export class MapScene extends Phaser.Scene implements GameController {
       dt,
       this.combat.buffs.map((b) => this.combat.buffColor(b.stat)),
     );
-    if (this.combat.windup) p.castBar.setDepth(100001);
+    if (this.combat.windup) p.castBar.setDepth(DEPTH.CAST_BAR);
     for (const m of this.combat.monsters) if (m.alive) m.sync(dt);
     this.dark?.setPosition(p.x, p.y - 16);
     const t = this.combat.target;
     if (t?.alive) {
-      this.targetRing.setPosition(t.x, t.y + 2).setDepth(t.y - 999);
+      this.targetRing.setPosition(t.x, t.y + 2);
       this.targetRing.setScale(t.warden ? 2.4 : t.elite ? 1.5 : 1);
     } else if (t) this.combat.setTarget(null);
     for (const v of this.portals) {
@@ -1060,6 +1063,7 @@ export class MapScene extends Phaser.Scene implements GameController {
   warp(mapId: string, arrive?: Arrival): void {
     if (this.warping || !mapById(mapId)) return;
     this.warping = true;
+    gameBus.emit('warp', { from: this.mapId, to: mapId });
     this.player.path = [];
     this.interactions.cancelChannel();
     this.interactions.pending = null;
@@ -1176,7 +1180,7 @@ export class MapScene extends Phaser.Scene implements GameController {
         })
         .setOrigin(0.5)
         .setResolution(2)
-        .setDepth(200000);
+        .setDepth(DEPTH.WORLD_TEXT);
     }
     const txt = t;
     txt.setText(text).setColor(color).setFontSize(size).setPosition(x, y).setAlpha(1).setVisible(true);
@@ -1241,11 +1245,10 @@ export class MapScene extends Phaser.Scene implements GameController {
   assignSlot(i: number, id: string | null): void {
     const bar = this.session.player.hotbar;
     if (i < 0 || i >= bar.length) return;
-    if (id) {
-      const at = bar.indexOf(id);
-      if (at >= 0) bar[at] = null;
-    }
+    const moved = id ? bar.indexOf(id) : -1;
+    if (moved >= 0) bar[moved] = null;
     bar[i] = id;
+    gameBus.emit('barChanged', { slots: moved >= 0 && moved !== i ? [moved, i] : [i] });
     this.ui.renderHotbar();
     this.save();
   }
@@ -1298,7 +1301,9 @@ export class MapScene extends Phaser.Scene implements GameController {
 
   wearClass(id: string): Outcome {
     if (!this.isSafe()) return { ok: false, message: 'You can only change classes in a safe town.' };
+    const prev = this.book.state.worn;
     const r = this.book.wear(id);
+    if (r.ok && this.book.state.worn !== prev) gameBus.emit('classChanged', { classId: this.book.state.worn, prev, reason: 'wear' });
     this.clampVitals();
     this.save();
     return r;

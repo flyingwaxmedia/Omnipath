@@ -8,6 +8,7 @@ import { hashSeed, mulberry32 } from '../../core/rng';
 import { STRUCTURE_FOOTPRINT, TILE } from '../../core/world/compile';
 import { T, WATER_TILES } from '../../core/world/tiles';
 import { COLL, type Biome, type CompiledMap, type StructureKind } from '../../core/world/types';
+import { DEPTH, ySort } from './depths';
 
 export interface DressingItem {
   /** Texture key ('dr_*'). Origin is bottom-centre (0.5, 1). */
@@ -21,7 +22,7 @@ export interface DressingItem {
 }
 
 /** Depth for flat decals (pebbles, cracks, bones, cobwebs): above the ground layer, below every y-sorted sprite. */
-export const DRESSING_DECAL_DEPTH = -50000;
+export const DRESSING_DECAL_DEPTH = DEPTH.DRESSING_FLAT;
 
 /** Keys drawn flat on the ground (no y-sorting). */
 export const DRESSING_FLAT: ReadonlySet<string> = new Set(['dr_pebbles', 'dr_ember_crack', 'dr_bones', 'dr_cobweb']);
@@ -315,7 +316,7 @@ export function planDressing(cm: CompiledMap): DressingItem[] {
   const put = (key: string, x: number, y: number, flipX = false, tx = -1, ty = -1) => {
     const xi = Math.round(x);
     const yi = Math.round(y);
-    out.push({ key, x: xi, y: yi, depthY: DRESSING_FLAT.has(key) ? DRESSING_DECAL_DEPTH : yi, ...(flipX ? { flipX: true } : {}) });
+    out.push({ key, x: xi, y: yi, depthY: DRESSING_FLAT.has(key) ? DRESSING_DECAL_DEPTH : ySort(yi), ...(flipX ? { flipX: true } : {}) });
     if (tx >= 0 && ty >= 0 && inB(tx, ty)) used[idx(tx, ty)] = 1;
   };
 
