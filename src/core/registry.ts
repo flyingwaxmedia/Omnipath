@@ -511,13 +511,15 @@ export class Registry {
       if (i.kind === 'shard' && !this.elements.has(i.element)) errs.push(`item ${i.id}: unknown shard element ${i.element}`);
     }
 
-    errs.push(...this.validateQuests(checkReqs));
+    this.validateQuests(errs, checkReqs);
     return errs;
   }
 
-  /** Quest checks of validate(); `checkReqs` is validate's requirement checker (it pushes to its own list). */
-  private validateQuests(checkReqs: (where: string, reqs: readonly Requirement[] | undefined) => void): string[] {
-    const errs: string[] = [];
+  /** Quest checks of validate(), pushed to `errs`; `checkReqs` is validate's requirement checker. */
+  private validateQuests(
+    errs: string[],
+    checkReqs: (where: string, reqs: readonly Requirement[] | undefined) => void,
+  ): void {
     const quests = this.data.quests ?? [];
     const skillOk = (id: string): boolean => !!this.skill(id);
     const checkFlags = (where: string, reqs: readonly Requirement[]): void => {
@@ -625,6 +627,5 @@ export class Registry {
         errs.push(`lesson ${lesson}: reward of ${once.length} non-repeatable quests (${once.map((q) => q.id).join(', ')})`);
       }
     }
-    return errs;
   }
 }

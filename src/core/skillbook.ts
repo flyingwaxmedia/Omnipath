@@ -1,6 +1,6 @@
 // SkillBook v2 (docs/SPEC-v2.md §6): the player's living grimoire. It owns the persisted
 // SkillBookState and orchestrates every rule module — mastery, sparks, echoes, fusion, trainers,
-// passives, classes and the bestiary — emitting typed events for the client. The rule modules are
+// passives, classes, quests (docs/QUESTS.md) and the bestiary — emitting typed events for the client. The rule modules are
 // pure; every state mutation and every event happens here. Engine-agnostic: game time comes from
 // `now()` (or an explicit argument), randomness from rng.ts, and the bag from `inv`.
 import {
@@ -1022,7 +1022,8 @@ export class SkillBook {
   /**
    * Takes a lesson: it must be unowned, available and affordable; the cost is paid through `inv`,
    * then the grant applied (skill / passive rank / essences / element, source `lesson:<id>`), the
-   * lesson recorded and 'lesson' emitted. A skill grant also whispers a related class.
+   * lesson recorded and 'lesson' emitted. A skill grant also whispers a related class. A `questOnly`
+   * lesson is refused with 'Learned through <quest name>': it is taught only as a quest reward.
    */
   takeLesson(lessonId: string): BookOutcome {
     const entry = this.reg.lesson(lessonId);

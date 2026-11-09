@@ -564,9 +564,8 @@ export function acceptQuest(reg: Registry, state: SkillBookState, ctx: QuestCont
 /** Drops an active quest: its counters are lost and it leaves the tracker (no cooldown is started). */
 export function abandonQuest(reg: Registry, state: SkillBookState, _ctx: QuestContext, id: string): QuestOutcome {
   const quest = reg.quest(id);
-  const qs = write(state);
-  if (!quest || !own(qs.active, id)) return { ok: false, message: 'You are not on that quest.' };
-  delete qs.active[id];
+  if (!quest || !own(read(state).active, id)) return { ok: false, message: 'You are not on that quest.' };
+  delete write(state).active[id];
   trackQuest(state, id, false);
   return { ok: true, message: `Abandoned ${quest.name}.` };
 }
@@ -603,5 +602,9 @@ export function turnInQuest(
   qs.done[id] = (own(qs.done, id) ?? 0) + 1;
   if (quest.repeatable) qs.cooldown[id] = ctx.now() + Math.max(0, quest.repeatable.cooldownMs);
   trackQuest(state, id, false);
-  return { ok: true, message: `Completed ${quest.name}!`, rewards: quest.rewards };
+  const r = quest.rewards;
+  const rewards: QuestReward = { ...r };
+  if (r.items) rewards.items = { ...r.items };
+  if (r.essences) rewards.essences = { ...r.essences };
+  return { ok: true, message: `Completed ${quest.name}!`, rewards };
 }

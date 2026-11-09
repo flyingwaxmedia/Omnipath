@@ -7,6 +7,7 @@ import { ITEMS } from './items';
 import { MONSTERS } from './monsters';
 import { MORPHS } from './morphs';
 import { PASSIVES } from './passives';
+import { QUESTS } from './quests';
 import { RECIPES } from './recipes';
 import { SKILLS } from './skills';
 import { TRAINERS } from './trainers';
@@ -23,6 +24,7 @@ export const GAME_DATA: GameData = {
   trainers: TRAINERS,
   monsters: MONSTERS,
   items: ITEMS,
+  quests: QUESTS,
 };
 
 export function createRegistry(): Registry {
