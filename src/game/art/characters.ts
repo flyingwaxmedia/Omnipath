@@ -220,6 +220,8 @@ interface Pose {
   behind?: boolean;
   /** Front arm painted behind the head (arm raised behind it). */
   armBehind?: boolean;
+  /** How far the hand slides up a staff toward its head (px). */
+  grip?: number;
   fx?: 'slash' | 'stab' | 'cast' | 'charge' | 'glint';
   /** Cloth/prop phase (0..3). */
   t: number;
@@ -1033,11 +1035,11 @@ function paintProp(c: Ctx, R: Rig, over: boolean): void {
     case 'staff': {
       if (over) return;
       const ang = P.ang ?? -1.42;
-      const len = 20;
-      along(c, hx, hy, ang, -9, len - 3, 1, (a, s) => {
+      const len = 20 - (P.grip ?? 0);
+      along(c, hx, hy, ang, len - 29, len - 3, 1, (a, s) => {
         if (Math.abs(s) > 0.6) return null;
         if (a > len - 6) return GOLD[a > len - 5 ? 2 : 1];
-        return Math.floor(a) % 6 === 0 ? LEATHER[3] : s < 0 ? LEATHER[2] : LEATHER[1];
+        return Math.floor(a - len) % 6 === 0 ? LEATHER[3] : s < 0 ? LEATHER[2] : LEATHER[1];
       });
       const [ox, oy] = axisPt(hx, hy, ang, len);
       // orb in a claw
@@ -1275,7 +1277,8 @@ function paintFx(c: Ctx, R: Rig): void {
   }
   if (L.prop === 'staff') {
     const ang = P.ang ?? -1.42;
-    const [ox, oy] = axisPt(hx, hy, ang, 20);
+    const len = 20 - (P.grip ?? 0);
+    const [ox, oy] = axisPt(hx, hy, ang, len);
     const pts = P.t % 2 ? [[-3, -2], [3, 2]] : [[3, -3], [-3, 2]];
     if (P.fx !== 'cast') for (const [dx, dy] of pts) px(c, ox + dx, oy + dy, '#e8fbff');
     if (P.fx === 'charge') {
@@ -1283,21 +1286,20 @@ function paintFx(c: Ctx, R: Rig): void {
       for (const [dx, dy] of [[-3, -3], [3, -3], [3, 3], [-3, 3]]) px(c, ox + dx, oy + dy, '#7fd6ff');
     }
     if (P.fx === 'cast') {
+      // arc trail from the raised position down to the orb
+      for (let a = -1.95; a < ang - 0.2; a += 0.11) {
+        const x = Math.round(hx + Math.cos(a) * len);
+        const y = Math.round(hy + Math.sin(a) * len);
+        px(c, x, y, a > ang - 0.5 ? '#bfe8ff' : '#7fd6ff');
+      }
       // starburst at the orb
       for (let k = 0; k < 8; k++) {
-        const a = (k / 8) * Math.PI * 2;
-        const r0 = 3.5;
-        const r1 = k % 2 ? 5.5 : 7.5;
-        for (let r = r0; r <= r1; r += 1) px(c, Math.round(ox + Math.cos(a) * r), Math.round(oy + Math.sin(a) * r), r > r1 - 1.2 ? '#7fd6ff' : '#e8fbff');
+        const a = (k / 8) * Math.PI * 2 + 0.2;
+        const r1 = k % 2 ? 4.5 : 6.5;
+        for (let r = 3.5; r <= r1; r += 1) px(c, Math.round(ox + Math.cos(a) * r), Math.round(oy + Math.sin(a) * r), r > r1 - 1.2 ? '#7fd6ff' : '#e8fbff');
       }
-      // arc trail of the swing
-      for (let k = 0; k <= 10; k++) {
-        const a = -2.6 + (k / 10) * 1.6;
-        const rr = 15;
-        const x = Math.round(hx + Math.cos(a) * rr);
-        const y = Math.round(hy + Math.sin(a) * rr);
-        if (k > 1) px(c, x, y, k > 7 ? '#bfe8ff' : 'rgba(127,214,255,0.7)');
-      }
+      px(c, ox, oy, '#ffffff');
+      px(c, ox - 1, oy, '#ffffff');
     }
   }
   if (P.fx === 'slash') {
@@ -1395,7 +1397,7 @@ const ATTACK: Record<Weapon, Pose[]> = {
     // raise: staff lifted back, orb charging
     { ...REST, lean: -1, bob: 0, backFoot: [-1, 0], frontFoot: [2, 0], frontHand: [1, -8], backHand: [2, -3], ang: -1.62, fx: 'charge', t: 1 },
     // cast: staff thrust forward, starburst
-    { ...REST, lean: 2, bob: 1, backFoot: [-3, 0], frontFoot: [3, 0], frontHand: [3, -4], backHand: [-2, -1], ang: -0.42, fx: 'cast', t: 0 },
+    { ...REST, lean: 1, bob: 1, backFoot: [-3, 0], frontFoot: [3, 0], frontHand: [0, -4], backHand: [-2, -1], ang: -1.0, grip: 7, fx: 'cast', t: 0 },
   ],
 };
 

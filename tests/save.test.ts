@@ -7,8 +7,8 @@ import { hashSeed } from '../src/core/rng';
 import { BOOK_FLAGS, migrateBookState } from '../src/core/save';
 import { SkillBook } from '../src/core/skillbook';
 import { SPARK } from '../src/core/spark';
-import { emptyState, type SkillBookState } from '../src/core/state';
-import type { ClassDef, GameData, PassiveDef, SkillDef } from '../src/core/types';
+import { emptyQuestState, emptyState, type SkillBookState } from '../src/core/state';
+import type { ClassDef, GameData, PassiveDef, QuestDef, SkillDef } from '../src/core/types';
 
 // ------------------------------------------------------------------ inline fixture
 
@@ -52,6 +52,21 @@ const DATA: GameData = {
   trainers: [],
   monsters: [],
   items: [],
+  quests: [
+    {
+      id: 'gus_dust',
+      name: 'Dust and Stone',
+      giver: 'gus',
+      summary: '',
+      dialog: { offer: '', progress: '', complete: '' },
+      objectives: [
+        { kind: 'gather', node: 'ore', count: 5 },
+        { kind: 'visit', map: 'vale.greystone_quarry' },
+        { kind: 'state', requires: { type: 'skill', id: 'whirlwind' }, label: 'Learn Whirlwind' },
+      ],
+      rewards: { coins: 10 },
+    } satisfies QuestDef,
+  ],
 };
 
 const reg = new Registry(DATA);
@@ -106,6 +121,7 @@ describe('v1 migration', () => {
       spark: { pity: {}, lastAt: emptyState().spark.lastAt, seed: V1_SEED, counter: 0 },
       bestiary: {},
       whispered: [],
+      quests: emptyQuestState(),
     } satisfies SkillBookState);
   });
 
@@ -157,6 +173,12 @@ describe('v2 fill-ins', () => {
     saved.bestiary = { pip: 3 };
     saved.witness = { bubble_lance: 2 };
     saved.whispered = ['pyroblade'];
+    saved.quests = {
+      active: { gus_dust: { progress: [3, 1, 0], acceptedAt: 40 } },
+      done: { old_quest: 2 },
+      cooldown: { old_quest: 9000 },
+      tracked: ['gus_dust'],
+    };
     expect(migrateBookState(saved, reg)).toEqual(saved);
     expect(migrateBookState(migrateBookState(saved, reg), reg)).toEqual(saved);
   });
@@ -220,6 +242,52 @@ describe('v2 fill-ins', () => {
     expect(s.worn).toBe('blademaster');
     expect(s.imprints).toEqual([]);
     expect(s.spark).toMatchObject({ pity: { 'a>b': SPARK.pityCap }, counter: 0 });
+  });
+
+  it('fills a save from before quests with an empty quest state', () => {
+    const book = new SkillBook(reg);
+    book.learn('slash', 'start');
+    const saved: Partial<SkillBookState> = book.serialize();
+    delete saved.quests;
+    expect(migrateBookState(saved).quests).toEqual(emptyQuestState());
+    expect(new SkillBook(reg, saved as SkillBookState).state.quests).toEqual(emptyQuestState());
+  });
+
+  it('repairs quest state and fits counters to the current objectives', () => {
+    const raw = {
+      version: 2,
+      quests: {
+        active: {
+          gus_dust: { progress: [99, 'x', 4, 7, -2], acceptedAt: 'soon' },
+          gone_quest: { progress: [5, 2.6, -1], acceptedAt: 12 },
+          junk: 4,
+        },
+        done: { gus_dust: 1, bad: -2, frac: 2.5 },
+        cooldown: { gus_dust: 500, bad: 'x' },
+        tracked: ['gone_quest', 'nope', 'gus_dust', 'gone_quest', 7],
+      },
+    };
+    const structural = migrateBookState(raw);
+    expect(structural.quests).toEqual({
+      active: {
+        gus_dust: { progress: [99, 0, 4, 7, 0], acceptedAt: 0 },
+        gone_quest: { progress: [5, 2, 0], acceptedAt: 12 },
+      },
+      done: { gus_dust: 1, frac: 2 },
+      cooldown: { gus_dust: 500 },
+      tracked: ['gone_quest', 'gus_dust'],
+    });
+    // With the registry: one counter per objective, capped (ore 5, visit 1, state keeps none). Unknown
+    // quests are kept untouched (content may come back).
+    expect(migrateBookState(raw, reg).quests?.active).toEqual({
+      gus_dust: { progress: [5, 0, 0], acceptedAt: 0 },
+      gone_quest: { progress: [5, 2, 0], acceptedAt: 12 },
+    });
+    expect(migrateBookState({ quests: { tracked: ['a', 'b', 'c', 'd'], active: { a: {}, b: {}, c: {}, d: {} } } }).quests?.tracked).toEqual([
+      'a',
+      'b',
+      'c',
+    ]);
   });
 
   it('clamps classes, elements and imprints with the registry', () => {
