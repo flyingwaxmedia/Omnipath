@@ -468,10 +468,15 @@ export class Hud {
     const room = left - 2 * m;
     this.logEl.classList.toggle('stacked', room < 170);
     this.setVar('--log-w', `${Math.round(room < 170 ? Math.min(320, W * 0.62) : Math.min(340, room))}px`);
+    // Stat strip: when the buttons stack into rows beside it (portrait phones), its text stops short of them (only the
+    // fading right padding may slide under the buttons).
+    const menu = this.menuEl.getBoundingClientRect();
+    const st = this.v.stats.getBoundingClientRect();
+    const statsRoom = menu.width > 0 && menu.bottom > st.top && menu.left > st.left ? `${Math.max(80, Math.floor(menu.left + 8 - st.left))}px` : '9999px';
+    this.setVar('--stats-room', statsRoom);
     // Zone plate (+ target / toasts under it): centred in the top row if it fits, else on a second row.
     const me = this.me.getBoundingClientRect();
     const plate = $(this.me, '.me-plate').getBoundingClientRect();
-    const menu = this.menuEl.getBoundingClientRect();
     const zw = this.zoneEl.offsetWidth;
     const zh = this.zoneEl.offsetHeight;
     const topRowRight = Math.max(plate.right, me.left + 8);

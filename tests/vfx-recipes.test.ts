@@ -438,7 +438,6 @@ describe('vfx recipes: variants', () => {
         expect(['normal', 'heavy', 'ultimate'].includes(b.weight), v.id).toBe(true);
         expect(ofPhase(b, 'status').some((p) => p.component === 'status' && p.params.kind === 'knockback'), v.id).toBe(true);
       }
-      expect(b.riders.knockback, v.id).toBeUndefined();
       if (mods.includes('haste')) expect(ofPhase(b, 'cast').some((p) => p.component === 'motes' && p.params.kind === 'line'), v.id).toBe(true);
       if (mods.includes('expanse') && v.shape.kind !== 'strike') expect(recipePieces(b).some((p) => p.component === 'ring' && p.params.ink === 'dim'), v.id).toBe(true);
       if (v.shape.kind === 'strike') {

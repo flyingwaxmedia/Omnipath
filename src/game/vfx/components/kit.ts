@@ -188,18 +188,6 @@ export function clampMs(ms: number): number {
   return quantMs(Math.max(17, Math.min(200, ms)));
 }
 
-/** Push `total` ms of a held frame as <= 200 ms pieces (VSYNC). */
-export function holdMs(total: number): number[] {
-  const out: number[] = [];
-  let left = total;
-  while (left > 0) {
-    const v = clampMs(Math.min(200, left));
-    out.push(v);
-    left -= v;
-  }
-  return out;
-}
-
 // ------------------------------------------------------------------ easing
 
 export const outCubic = (u: number) => 1 - (1 - u) ** 3;
@@ -208,7 +196,6 @@ export const outBack = (u: number) => {
   return 1 + (c + 1) * (u - 1) ** 3 + c * (u - 1) ** 2;
 };
 export const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
-export const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 
 // ------------------------------------------------------------------ small shared marks (local space)
 

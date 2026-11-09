@@ -100,16 +100,6 @@ export class Painter {
     return Math.atan2(this.s, this.c);
   }
 
-  /** Run `fn` with a temporary heading (e.g. screen-upright marks inside a rotated template). */
-  with(rad: number, fn: () => void): void {
-    const c = this.c,
-      s = this.s;
-    this.heading(rad);
-    fn();
-    this.c = c;
-    this.s = s;
-  }
-
   /** Frame x of a local point. */
   X(lx: number, ly: number): number {
     return this.ox + Math.round(lx * this.c - ly * this.s);
@@ -163,22 +153,11 @@ export class Painter {
     if (this.inside(fx, fy) && !this.body[fy * this.w + fx]) this.put(fx, fy, i, a);
   }
 
-  glowPx(fx: number, fy: number, lvl: number): void {
-    if (!this.inside(fx, fy)) return;
-    const k = fy * this.w + fx;
-    if (lvl > this.glow[k]) this.glow[k] = Math.min(3, lvl);
-  }
-
   // ---------------------------------------------------------------- points and lines (forward-mapped)
 
   /** A local point. */
   dot(lx: number, ly: number, i: number, a = 1): void {
     this.put(this.X(lx, ly), this.Y(lx, ly), i, a);
-  }
-
-  /** A screen-space point relative to the anchor (ignores the heading: upright marks). */
-  sdot(sx: number, sy: number, i: number, a = 1): void {
-    this.put(this.ox + Math.round(sx), this.oy + Math.round(sy), i, a);
   }
 
   /** Bresenham line between two local points; `i` may vary along t in [0, 1]. */

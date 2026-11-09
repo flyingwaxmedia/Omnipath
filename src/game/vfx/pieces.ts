@@ -371,7 +371,6 @@ export function recipePieces(r: VfxRecipe): VfxPiece[] {
   if (rd.reprise) out.push(...rd.reprise.ghost);
   if (rd.arc) out.push(...rd.arc.zap);
   if (rd.leech) out.push(...rd.leech.stream, ...rd.leech.arrive);
-  if (rd.knockback) out.push(...rd.knockback.push);
   if (rd.pierce) out.push(...rd.pierce.mark);
   if (rd.merge) out.push(...rd.merge.pieces);
   return out;

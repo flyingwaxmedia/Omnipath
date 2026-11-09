@@ -35,6 +35,8 @@ let focus: { kind: 'star'; id: string } | { kind: 'const'; c: ConstellationId } 
 let opened = false;
 /** A fresh transform: its star bursts the next time the chart is on screen (a "Transformed" card may cover it now). */
 let burst: string | null = null;
+/** The chart stage being watched for size changes (the card, the screen). */
+let watched: { stage: HTMLElement; obs: ResizeObserver } | null = null;
 gameBus.on('uiOpen', (e) => {
   if (e.panel === 'skills') opened = true;
 });
@@ -228,13 +230,17 @@ function renderChart(host: PanelHost, data: StarChartData, tabs: [Tab, string][]
       const el = ctrl.reg.element(id as never);
       return el ? hex(el.color) : '';
     },
+    centred: (c) => {
+      for (const b of $$<HTMLButtonElement>(root, '.sc-chip')) b.classList.toggle('on', b.dataset.c === c);
+    },
   });
   sky.setData(data, layout);
   sky.setSelected(m ? m.id : null);
   const sync = () => sky.setInsets(measureInsets(stage));
   sync();
-  if (!(stage as unknown as { __obs?: ResizeObserver }).__obs) {
-    // The card grows (Details) or the screen turns: keep the picked star out from under it.
+  if (watched?.stage !== stage) {
+    // The card grows (Details) or the screen turns: keep the picked star out from under it. One observer at a time.
+    watched?.obs.disconnect();
     const obs = new ResizeObserver(() => {
       sync();
       const id = host.state[SEL] as string | undefined;
@@ -242,7 +248,7 @@ function renderChart(host: PanelHost, data: StarChartData, tabs: [Tab, string][]
     });
     obs.observe(stage);
     obs.observe(wrap);
-    (stage as unknown as { __obs?: ResizeObserver }).__obs = obs;
+    watched = { stage, obs };
   }
   const f = focus;
   focus = null;

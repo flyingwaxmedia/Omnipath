@@ -11,7 +11,7 @@ import type { ComboId } from '../../core/combat';
 import type { BuffStat, ElementId, Family, MonsterRank, ShapeKind, Size, SkillDef, StatusKind } from '../../core/types';
 
 /** Bump when a template or recipe rule changes output (cache keys, gallery captures). */
-export const VFX_VERSION = 1;
+export const VFX_VERSION = 2;
 
 // ------------------------------------------------------------------ index frames
 
@@ -724,16 +724,19 @@ export type Carrier =
 /** Accent a shape merge's secondary parent adds, from the mechanical difference compose() made. */
 export type MergeAccent = 'extra' | 'radial' | 'spinDash' | 'knockback' | 'arc' | 'none';
 
-/** Rider and essence effects outside the main phases. */
+/** Rider and essence effects outside the main phases (knockback is a status: phases.status draws it). */
 export interface RiderFx {
   returns?: { turn: readonly VfxPiece[]; tether: readonly VfxPiece[]; catch: readonly VfxPiece[] };
   /** Replay: same geometry and buckets, LUT 'shift', no hero frames, no juice. */
   reprise?: { ghost: readonly VfxPiece[] };
   arc?: { zap: readonly VfxPiece[] };
   leech?: { stream: readonly VfxPiece[]; arrive: readonly VfxPiece[] };
-  knockback?: { push: readonly VfxPiece[] };
   /** Pass-through marks (pierce essence or authored pierce > 0). */
   pierce?: { mark: readonly VfxPiece[] };
+  /**
+   * Shape merge accent. `pieces` holds the extra hit's carrier ('extra') or the echo muzzle ring ('radial'); the
+   * other accents re-ink pieces already in the recipe (spin band, knockback status, arc zap) in the echo family.
+   */
   merge?: { accent: MergeAccent; family: FamilyId; pieces: readonly VfxPiece[] };
 }
 
@@ -1093,7 +1096,11 @@ export const VFX_BUDGET = {
   cueMinPx: 2,
   statusPipPx: 7,
   bootBakeMs: 150,
-  mapBakeMs: 60,
+  /**
+   * Map warm set (8 equipped skills + the map's techniques, statuses, sparks), baked behind the map fade one strip
+   * direction at a time. Measured in Node for the worst loadout + densest map: about 0.45 s (tests/vfx-pipeline).
+   */
+  mapBakeMs: 600,
 } as const;
 
 /** Quality governor thresholds on an EMA of the frame delta (docs/VFX.md §9). */

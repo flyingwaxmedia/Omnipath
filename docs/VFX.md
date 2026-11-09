@@ -255,10 +255,12 @@ eraser), `glow.ts` (emissive dilation, glow discs, matter rim), `ramps.ts` (`RAM
 - **Bolts.** The canvas is the path box plus the displacement margin, capped at 512 px (the largest pooled texture).
 - **Seeds.** Every strip is seeded by `hashSeed('vfx', geometryKey, u)`; bolts additionally use `params.seed` for the
   two path shapes. Bake order never changes output (tested by hash in shuffled order).
+- **Whirls.** A slash with arc ≥ 240° (a sweep round the caster whose gap faces away) bakes 8 headings (3 unique,
+  within 22.5°) and no heavy contrast frame. Claw rakes (monster auto-attacks, which hit all round) bake 8 headings.
 - **Measured (Node, this container).** Boot set (75 pieces: motes, puffs, danger ring pieces, steel bursts, tells)
-  20 ms; 0.17–0.26 ms per 48² orb frame; slash r56 (5 dirs) 17 ms; heavy blast core c56 16 ms; decal r176 35 ms;
-  slash r128 at 360° 170 ms (the worst case; it is also 1.7 Mpx, so bake it lazily). All 1,555 distinct pieces of
-  the current authored recipes (player and monster) bake without error in about 6 s and 26 Mpx in total.
+  30–40 ms; 0.17–0.26 ms per 48² orb frame; slash r56 (5 dirs) 17 ms; heavy blast core c56 16 ms; the widest smear
+  (tidal_crescent, r104 at 270°, 3 dirs) 96 ms. The worst loadout + the densest map's warm set (§8.5) bakes in about
+  0.45 s and stores 2.97 atlas pages (tests/vfx-pipeline logs both).
 
 ### 4.2 Sheet review pass (QA loop over the contact sheets)
 
@@ -283,6 +285,29 @@ The §11.2 sheets were reviewed at device scale against §2, §3.3 and ART-DIREC
 - **Erupt units:** `rock-spike` is a broken, notched basalt spire (S ramp, stratum line, ochre catch-light) instead of
   an orange cone; `smoke-sheet` is a low cumulus bank instead of flat striped capsules.
 - **Monster zone tells:** sequential danger fills and a 12.5 % family hint (§6.5).
+### 4.3 Adversarial review pass (VFX_VERSION 2)
+
+A review against the data, the hit tests and the budgets found and fixed:
+- **Atlas budget.** The worst 8-skill loadout + the densest map needed about 7.7 pages against a 4-page cap, and no
+  test checked it. Fixes: aftermath decals mark the core only (≤ 96 px, coarse buckets); the arcane nova marker sigil
+  is r ≤ 32 and starfall_lattice no longer adds a second one; inner shock rings hidden under the nova core are skipped;
+  a contract ring from r0 > 64 bakes as pieces; whirls (arc ≥ 240°) and claw rakes bake 8 headings and whirls skip the
+  contrast frame; wardens share the elite death pop. The warm set is now 2.97 pages (tested, §8.5).
+- **Merges.** The `extra` accent was built before the signature patch, so 427 merges repeated a pre-patch body (e.g.
+  an arcane shard missile under glacial_orb's orb, a plain ring under tornado's funnel). Arc, knockback, spin-dash and
+  `none` accents drew their pieces twice (1,808 merges had two arc zaps). Accents are now applied once, after the
+  patch, in the echo family (§7.3).
+- **Knockback** was drawn twice (status phase + `riders.knockback`); it is a status only.
+- **Monster strikes** drew their smear at `range`, short of the real `range + m.radius`; smears now take their reach
+  from the event like the cone rims.
+- **Guard.** `tests/vfx-guard.test.ts` (no clock, randomness, rotation, DOM or Phaser in the core; no image or font
+  files; credits kept) did not exist; it does now. Dead helpers (painter `with` / `glowPx` / `sdot`, `covered`,
+  `holdMs`, `lerp`, a duplicate bake-API pin) were removed.
+
+Not changed, by design: staff strikes draw a shorter smear (0.8 R, 60 % of the arc) plus a sigil at the tip, and fist
+strikes a ki burst at 0.8 R, as §6.2 specifies; monster area cores keep the monster LUT (accent → danger R3), so a
+monster blast reads as hostile.
+
 ## 5. Components (17)
 
 Frame times are `VSYNC_MS` values. "Key params" are the bake params in `types.ts` (`ComponentParams`). Runtime
@@ -290,7 +315,7 @@ placement (counts, patterns, speeds) lives in `VfxPiece.place` and is never part
 
 | id | purpose | frames · timing | key params | dirs | layer · blend |
 |---|---|---|---|---|---|
-| **slash** | melee crescents; claws (`rakes: 3`, monster auto-attacks); execute chops (`form: 'chop'`) | 33 snap · 33 hero · 50 hold · 50 tail-eats-40% · 67 split + sparks · 67 dotted trace · 83 dots · empty (≈ 400 ms). Heavy: +33 contrast first, hold ×2, +2 decay frames | r (REACH 40–128/8), arc (ARC 60–360/30), rakes, form, weight, tier, sense, rune | 16 | body NORMAL; glow head on hero/hold |
+| **slash** | melee crescents; claws (`rakes: 3`, monster auto-attacks); execute chops (`form: 'chop'`) | 33 snap · 33 hero · 50 hold · 50 tail-eats-40% · 67 split + sparks · 67 dotted trace · 83 dots · empty (≈ 400 ms). Heavy: +33 contrast first (not on whirls), hold ×2, +2 decay frames | r (REACH 40–128/8), arc (ARC 60–360/30), rakes, form, weight, tier, sense, rune | 16; 8 for whirls (arc ≥ 240°) and claw rakes; chop 1 | body NORMAL; glow head on hero/hold |
 | **thrust** | pierce lunge streak + X-cut at the tip | 33 half streak · 33 hero + 1st stroke · 50 2nd stroke · 67 fragments + 4 sparks · 67 dots · empty | len (REACH), weight, tier, slit | 16 | body; glow on tip only |
 | **orb** | energy projectile bodies (`OrbForm`); hand charge orb (`mode: 'charge'`, 3 sizes) | loop 4 × 67 ms; big orbs (`orbit`) 8 × 83 | form, cell (16/24/32/48), orbit, halo, mode | 16 directional · 1 radial/charge | body NORMAL + glow twin |
 | **missile** | thrown matter (`MissileForm`), always outlined | spinning: 8 × 50 (4 rotations + 4 smear frames, ≈ 15.7 rad/s); directional: 2 × 67 + glint every 4th tick; `pose: 'wrap'` held on the target | form, cell, halo, pose | 1 spinning · 16 directional | body NORMAL; imbue glow rim |
@@ -298,7 +323,7 @@ placement (counts, patterns, speeds) lives in `VfxPiece.place` and is never part
 | **burst** | hit sparks by class, muzzle flash, split star, glint, fizzle, spark-moment star | 50 · 50 · 67 · 67 · 67 · empty (tick: 33 · 50 · 50 · empty) | cls, size (s 16 / m 24 / l 32; star 64), glyph | 8 for slash/pierce, else 1 | body (target.y + 2); glow core |
 | **motes** | the mote kit: spark, ember, mote, streak, flake, droplet, chip, bubble, leaf, glint, glyph, wisp, line, bead, disc, star | 1–4 frames per kind; colour steps through the ramp by age | kind, size (1–3) | 16 for spark/line/streak, else 1 | emitters: body / glow / ground |
 | **puff** | smoke, dust, vapour, veil, gas, cloud, steam | 8 × 83: grow, lit cap while age < 0.5, one ramp step darker every 2 frames, crescent erosion in the last 3 | kind, r (3/5/7/10) | 1 | ground or body |
-| **ring** | shockwaves, spin bands, rims, fill fronts, cone edges, accretion arcs | expand/contract 6 × 50–67. sweep/march are stepped by the runtime at 33 ms ticks: ink by age since the head passed (hot 1 tick → lit 2 → mid 4 → dim → gone) | r, r0, aspect, thick, style, ink, anim, arc, heads, ms | 1 whole (r ≤ 64) · **pieces** (r > 64: 16 tangent buckets × thick × style × ink) | ground / preview / tell / rim; back/front halves |
+| **ring** | shockwaves, spin bands, rims, fill fronts, cone edges, accretion arcs | expand/contract 6 × 50–67. sweep/march are stepped by the runtime at 33 ms ticks: ink by age since the head passed (hot 1 tick → lit 2 → mid 4 → dim → gone) | r, r0, aspect, thick, style, ink, anim, arc, heads, ms | 1 whole (r and an expand / contract r0 ≤ 64) · **pieces** (otherwise: 16 outward-normal buckets × thick × style × ink) | ground / preview / tell / rim; back/front halves |
 | **decal** | telegraph fills, scorch, frost, wet, ink, rune glow, cracks, cooling pool, rift slit, falling shadow | static at density 12.5/25/50%; dissolve 50 → 25 → 12.5 → 0 every 100 ms; life ≤ 1000 ms (pool 1600) | kind, r (DECAL 16–176/8, floor), aspect, density, shape (disc/line) | 1 (line: 16) | ground / tell / glow; MULTIPLY for scorch and ink |
 | **sigil** | rune circle: 2 rings + star polygon + glyphs drawn in sequence | draw 8 × 50 then hold; flash 2 × 33 | r (16/24/32/48), points, glyphs, anim | 1 | preview / ground / glow |
 | **nova** | release core: blast, ripple, implode, radiant, sky, rune, cloud, goo; death pops; dash landings | (33 contrast if heavy) · 50 hero · 100 hold · 67 × 6 · empty | core, c (24/40/56), heavy | 1 | body (cy + 1) + glow |
@@ -456,6 +481,9 @@ slash: `r = nearestBucket(range, REACH)`, `arc = nearestBucket(arc, ARC)`, and `
   Exceptions: sky-bolt counts 1 / 2 / 3 for R < 100 / < 150 / else, and light-pillar is 1 at the centre.
 - Placement: Poisson with 18 px spacing inside the hit area, popping as the wavefront arrives.
 - `c = floorBucket(min(R, 56), CORE)`.
+- Inner shock rings that would end under the core (r ≤ c + 8) are skipped: the core hides them.
+- The aftermath decal marks the core, not the area: r = `aftermathR(R)` (≤ 96 px, buckets 16 / 32 / 48 / 64 / 96).
+  The rim, rings and units carry the true radius.
 
 **chain**
 
@@ -478,7 +506,7 @@ slash: `r = nearestBucket(range, REACH)`, `arc = nearestBucket(arc, ARC)`, and `
 | spin | monster: zone | " + preview ring | §6.2 spin ring + family motes | — | — | burst (tick after the first hit) | floor band: ring on ground, 0 → R outCubic over 300 ms, ink mid → dim (flares R5 on the first and last pulse only) |
 | projectile | monster: aim | " | burst muzzle s; count ≥ 5 or radial → one ring r12→28 instead; split essence → burst split | orb / missile | family motes by distance (every 5 px, 3 for fast blades); orbs also leave 5 ghost discs; knives leave afterimages | burst | — |
 | dash | monster: lane | " + preview lane | afterimage (ghost / blink) + 3 dust puffs | roll: missile rock 32 | afterimage every 10 px (≤ 6) + 4–6 line motes + family trail motes | burst (hit at 60% of the dash) | end: charge → nova blast c24 + ring + cracks · dive → family core c24 + ring · spin → ring sweep re-anchored every 67 ms |
-| nova | player: ring solid 2 px at R + decal fill 12.5% growing in 8 steps (rim ink hot in the last 117 ms); arcane → + sigil. Monster: zone | " | — | — | — | burst | nova core + erupt units (wave) + ring shocks (outer 0.45R → R in 333 ms, thick 3 → 1; inner 0.3R → 0.6R in 217 ms; heavy adds a 3rd) + family decal + light pool (decal fill in the glow layer, 2 frames) |
+| nova | player: ring solid 2 px at R + decal fill 12.5% (rim ink hot in the last 117 ms); arcane → + a centre sigil r ≤ 32. Monster: zone | " | — | — | — | burst | nova core + erupt units (wave) + ring shocks (outer 0.45R → R in 333 ms, thick 3 → 1; inner 0.3R → 0.6R in 217 ms; heavy adds a 3rd at 0.35R; inner rings ending under the core are skipped) + family decal (core only, ≤ 96 px) + light pool (decal fill in the glow layer, 2 frames) |
 | chain | monster: range + aim beads | " | burst muzzle s at the chest | bolt / missile per hop | knives: 2 afterimages + arrival glint | burst tick + status node | — |
 | buff | monster: aura | " | aura activate + activation piece | — | — | — | — (aura phase: loop until `untilMs`, then break) |
 
@@ -596,7 +624,7 @@ Each patch uses only §5 components. A test fails on an unknown id or a non-root
 | meteor | missile `glob` cell 24 (fire ramp) falls from (−60, −160) over the delay with a smoke puff trail; a decal `shadow` grows under it; release blast c56 + flame-columns |
 | thunderstorm | 4 cloud puffs stack at dy −64 during the delay; at release 3 sky-bolts at 0 / 117 / 233 ms, of which only the first carries contrast and white (one flash transition); rain line motes |
 | ascendant_sig | the thunderstorm patch + 6 missile blades on an `orbit` halo at release |
-| starfall_lattice | 10 star-shard units on `lattice` points falling, joined by bead `path` lines during the delay; sigil r48 at the centre |
+| starfall_lattice | 10 star-shard units on `lattice` points falling, joined by bead `path` lines during the delay, over the arcane nova's centre sigil |
 | halo_ward | aura `ward` + `halo` |
 | astral_form | aura `runes` + star motes twinkling (loop) |
 | blade_aura | aura `blades` (3 orbiting spectral blades) |
@@ -627,15 +655,20 @@ Files: `families.ts` (familyOf + each family's motif language as data), `pieces.
   `hop` anchors start at the hop's `from` point. A decal with `shape: 'line'` has `r` = half its length and is
   anchored at its midpoint (`along`).
 - **Pulses.** Every swing or pulse re-plays the cast phase. The runtime flips `slash.sense` on odd indices. A
-  multi-hit cast also plays its `lastHit` pieces on the final swing, and a merge's `extra` accent
-  (`riders.merge.pieces`) on its final swing, pulse, shot or hop.
+  multi-hit cast also plays its `lastHit` pieces on the final swing. A merge's `extra` accent
+  (`riders.merge.pieces`) replaces the carrier piece on the final swing, pulse, shot or hop.
+- **Monster strikes** reach `range + m.radius` (MonsterSkills), so their smears (slash, thrust) carry
+  `geometryFromEvent`: the runtime bakes `reachBucket(tell.r)` from the cone, like the cone rims.
+- **Knockback** is a status (Combat.applyStatus emits `statusApplied` for it), so `phases.status` draws it once;
+  `RiderFx` has no knockback entry.
 - **What never hits.** Buffs and zero-power skills (quickstep) have no impact phase, no statuses and light juice.
 - **Strike ground impact** (ring shock + cracks + chips) needs the `heavy` or `execute` tag or the heavy essence.
   Power alone is not enough, so a heavy backstab stays a stab.
 - **Echo techniques** keep their player silhouette when a monster casts them: no cell bump and no halo. They get only
   the monster LUT, the tells and the quota (§6.5). The hit-test aspect (0.65 zones) still applies.
 - **Merges.** `spinDash` is the one accent that changes the carrier (dash mode `spin`, §7.3). Every other merge keeps
-  the primary parent's carrier. A nova's `unit` follows the accent family.
+  the primary parent's carrier. A nova's `unit` follows the accent family. Statuses and the merge accent are built
+  after the signature patch, so they always match the body and palette the player sees.
 - **Timings.** Charge pieces span exactly `castMs`. A player nova rim spans the delay. Monster tells span
   `monsterTellMs` (the tell plus the wind-up). Cast, impact and area pieces end within the skill's cooldown (or the
   weapon delay). Status loops live for Combat's durations, and aura loops for the buff duration.
@@ -679,16 +712,20 @@ Test: a variant's visual radius and arc equal its composed shape's (within bucke
 - `echo = familyOf(secondary)` when it differs from the family.
 - The accent comes from the mechanical difference compose() made (compare the merged and primary shape and riders):
 
-| difference | accent | pieces |
+| difference | accent | what wears the echo family (drawn once) |
 |---|---|---|
-| hits / pulses / count / jumps + 1 | extra | the extra swing, pulse, shot or hop uses the echo family |
-| `radial` added | radial | ring muzzle instead of a flash + echo motes |
-| dash `spin` added | spinDash | dash mode spin |
-| `riders.knockback` added | knockback | knockback status pieces on hits |
-| `riders.arc` added | arc | arc zaps in the echo family |
-| none | none | echo overlays only |
+| hits / pulses / count / jumps + 1 | extra | `riders.merge.pieces` = the carrier piece of the extra swing, pulse, shot or hop (it replaces the plain one) |
+| `radial` added | radial | `riders.merge.pieces` = a second muzzle ring after the plain one |
+| dash `spin` added | spinDash | dash mode spin; its spin band |
+| `riders.knockback` added | knockback | the knockback status pieces |
+| `riders.arc` added | arc | the arc rider zap (`riders.arc`) |
+| none | none | only the echo overlays on the cast and impact phases |
 
-Test: every legal merge (mergeBlocker null, about 4k) derives, and its carrier equals the primary parent's.
+Every merge also gets echo motes on the cast and impact phases. The accent is applied after the signature patch, so
+an `extra` hit repeats the signature's body (e.g. glacial_orb's shard orb, tornado's funnel), never the pre-patch one.
+
+Tests: every legal merge (mergeBlocker null, about 4k) derives, its carrier equals the primary parent's, and each
+accent is drawn once in the echo family on the finished carrier.
 
 ## 8. Runtime contract (the later wiring step)
 
@@ -756,8 +793,8 @@ Combo pieces:
 - Conduct: lightning ring + zap across the target + steam puffs.
 - Fan the Flames: a small fire pulse + ember streams to `spreadTo`.
 
-Death pop (replaces the alpha/scaleY tween in Combat.kill): a 1-tick white silhouette → actor hidden → nova blast one
-bucket below the body (killer family) + 4–8 chips in the hide colour + puff.
+Death pop (replaces the alpha/scaleY tween in Combat.kill): a 1-tick white silhouette → actor hidden → nova blast in
+the killer's family (c24 for S / M bodies, c40 heavy for L / W) + 4–8 chips in the hide colour + puff (r5–r10).
 
 Extras:
 - spark: burst `star` held through the freeze + 14 ray streaks + glow pool
@@ -815,10 +852,15 @@ Extras:
 - **Bake schedule**:
   - boot (≤ 150 ms, time-sliced at ≤ 4 ms per frame): motes, puffs, the danger and steel ring pieces, burst steel, tell
     pieces
-  - map create / loadout change, behind the fade (≤ 60 ms): the recipes of the 8 equipped skills, the techniques of
-    the map's spawns, their statuses and sparks
-  - mid-combat miss: ≤ 1 strip per frame (≤ 2 ms); until it is ready, play the family fallback (white burst tinted R3
-    + ring), never blank
+  - map create / loadout change, behind the fade (`mapBakeMs` 600; the worst case measures about 0.45 s in Node), one
+    strip direction per slice, cast / body / impact pieces first: the **warm set** = the recipes of the 8 equipped
+    skills with every spark variant, the techniques and auto-attacks of the map's spawns, their statuses. It must fit
+    the atlas: `tests/vfx-pipeline` bakes the worst 8-skill loadout + the densest map (2.97 pages today) against
+    4 pages at 85 % shelf-packing efficiency (3.40).
+  - lazy (bake on first use into the remaining space, evict least recently used): death pops, combos, extras,
+    reduce-flash and keyline variants (with them the worst case is 3.41 pages)
+  - mid-combat miss: ≤ 1 strip per frame when the strip bakes in ≤ 2 ms; a bigger strip waits for the next fade or
+    pause. Until it is ready, play the family fallback (white burst tinted R3 + ring), never blank
   - a newly learned morph bakes during the spark freeze
 - **Bolts** are the only cast-time bakes. Each hop rasterises into a pooled transient texture (8 × 256², 2 × 512²).
   Hops longer than `boltMaxLen` split at the midpoint. If the upload budget is spent, the hop is drawn as a 2 px bead
@@ -859,7 +901,7 @@ Graphics objects leave the VFX path entirely; only debug overlays keep them.
 
 | budget | cap (`VFX_BUDGET`) |
 |---|---|
-| atlas | 4 pages of 1024², 2 px gutter |
+| atlas | 4 pages of 1024², 2 px gutter; the warm set (§8.5) must fit at 85 % packing (tested) |
 | pooled sprites | body 96 · glow 64 · ground 40 · tell 24 (total 224; tell sprites reserved) |
 | Blitter bobs (ring pieces, beads, chips) | 400, of which 120 are reserved for telegraphs |
 | particles | 250 across ≤ 6 emitters (3 per active page: body, glow, ground) |
@@ -905,7 +947,7 @@ Graphics objects leave the VFX path entirely; only debug overlays keep them.
 | `src/game/vfx/signatures.ts` | R | types, pieces |
 | `src/game/vfx/pieces.ts` (piece constructors; optional) | R | types |
 | `scripts/vfx-sheets.mjs` | P (+ joint skill sheets) | P + R files and data (bundled with esbuild) |
-| `tests/vfx-painter.test.ts`, `tests/vfx-bake.test.ts`, `tests/vfx-palette.test.ts` | P | P files |
+| `tests/vfx-painter.test.ts` (painter + bake checks), `tests/vfx-palette.test.ts` | P | P files |
 | `tests/vfx-recipes.test.ts` | R | R files |
 | `tests/vfx-pipeline.test.ts`, `tests/vfx-guard.test.ts` | joint (written after both land) | P + R |
 | `src/game/vfx/runtime/**` (bus bridge, atlas, pools, StatusFx, TelegraphFx, juice rig, gallery scene) | later wiring step (Phaser side) | P + R + Phaser + events.ts |
@@ -966,13 +1008,14 @@ Each test file pins its module to the contract at compile time, for example `con
 
 ### 10.4 Done criteria
 
-- **P** is done when every component bakes the §11.1 grid and passes `vfx-painter`, `vfx-bake` and `vfx-palette`. The
+- **P** is done when every component bakes the §11.1 grid and passes `vfx-painter` (with the bake checks) and `vfx-palette`. The
   grid is each value of each bucketed param with the other params at defaults, every enum value, × 3 motifs.
   `scripts/vfx-sheets.mjs` must also write the contact sheets (§11.2).
 - **R** is done when `vfx-recipes` passes over all authored skills, techniques, infusions, legal essence sets, merges
   and auto-attacks, and all 40 signatures apply.
-- **Joint** is done when `vfx-pipeline` bakes every distinct piece of every authored recipe (player and monster) and
-  the worst loadout fits in 4 pages. `npx tsc --noEmit` must be clean for `src/game/vfx/**` and `tests/vfx*`.
+- **Joint** is done when `vfx-pipeline` bakes every distinct piece of every authored recipe (player and monster), the
+  worst loadout + the densest map fit in 4 pages (§8.5) and `vfx-guard` passes. `npx tsc --noEmit` must be clean for
+  `src/game/vfx/**` and `tests/vfx*`.
 
 ## 11. QA plan
 
@@ -996,6 +1039,8 @@ Each test file pins its module to the contract at compile time, for example `con
     - no danger, dashed-march or converge pieces in player recipes
     - every signature id is an authored root
     - distinctness: at most 2 authored player skills share an identical cast-phase piece set
+    - every merge accent is drawn once, in the echo family, on the signature-patched carrier (§7.3)
+    - monster strike smears take their reach from the event; aftermath decals stay ≤ 96 px
 - **vfx-painter / vfx-bake (P)**, over the grid (each bucket value and enum value of each param, others at defaults,
   × 3 motifs):
   - determinism: equal hashes across two bakes and in shuffled bake order
@@ -1008,13 +1053,16 @@ Each test file pins its module to the contract at compile time, for example `con
 - **vfx-palette (P)**: the ΔE and CVD rules of §3.2.
 - **vfx-pipeline (joint)**:
   - bake every piece of every authored recipe; keys are stable
-  - worst loadout + densest zone fit in 4 pages (glow twins included)
-  - 1 s busy simulation: ≤ 3 area flashes, global hit-stop ≤ 150 ms, trauma within [0, 1]
+  - worst loadout + densest map fit in 4 pages at 85 % packing (2 px gutters; white glow twins stored once per
+    geometry; bolts excluded, they live in pooled textures); the test also logs the warm set's cold bake time
+  - the 1 s busy simulation (≤ 3 area flashes, global hit-stop ≤ 150 ms, trauma within [0, 1]) needs the runtime's
+    juice rig and flash governor, so it moves to the runtime step's gallery checks (§11.2)
 - **vfx-guard (joint)**:
-  - no `Math.random`, `Date.now`, `ctx.rotate` or `phaser` import under `src/game/vfx` outside `runtime/`
-  - no emitter `{min, max}` ops
+  - no `Math.random`, `Date.now`, `performance.now`, `ctx.rotate`, DOM globals or `phaser` import under
+    `src/game/vfx` outside `runtime/` (comments may name them)
+  - no emitter `{min, max}` ops (checked once `runtime/` exists)
   - no `.png/.gif/.jpg/.webp/.ttf/.woff*` under `src/` or `public/` (public/icon.svg whitelisted)
-  - no `Patch Pixel` or `DoomFire` strings
+  - no `Patch Pixel` or `DoomFire` strings under `src/`; painter.ts and §12 keep the technique credits
 
 ### 11.2 Contact sheets and gallery
 

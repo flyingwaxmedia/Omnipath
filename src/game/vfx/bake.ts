@@ -14,7 +14,6 @@ import {
   type IndexFrame,
   type RgbaFrame,
   type StripUse,
-  type VfxBakeApi,
   type VfxPiece,
 } from './types';
 import { TEMPLATES } from './components';
@@ -198,6 +197,3 @@ export function bakePhase(pieces: readonly VfxPiece[], opts?: Partial<BakeOption
     return b;
   });
 }
-
-/** Compile-time pin to the module contract. */
-export const BAKE_API: VfxBakeApi = { indexFrames, bakePiece, bakePhase, pieceKey };

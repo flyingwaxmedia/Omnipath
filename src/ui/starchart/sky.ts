@@ -35,6 +35,8 @@ export interface SkyHost {
   icon(star: StarView): string;
   /** '#rrggbb' of an element id. */
   elementColor(id: string): string;
+  /** The constellation nearest the middle of the view changed (null: open sky). */
+  centred?(c: ConstellationId | null): void;
 }
 
 /** Constellation tints: unaligned stars, lines, nebulae and names take their constellation's colour. */
@@ -135,6 +137,9 @@ export class SkyView {
   private dustDpr = 0;
   private bg: { h: number; grad: CanvasGradient; vignette: CanvasGradient } | null = null;
   private times: number[] = [];
+  private centredOn: ConstellationId | null | undefined = undefined;
+  private dirty = false;
+  private warm = false;
 
   constructor() {
     this.canvas = document.createElement('canvas');
@@ -170,6 +175,17 @@ export class SkyView {
   }
 
   setData(data: StarChartData, layout: StarLayout): void {
+    if (!this.warm) {
+      // Build the sprite caches up front so the first frames stay cheap.
+      this.warm = true;
+      for (const c of Object.keys(TINT) as ConstellationId[]) {
+        this.glow(TINT[c]);
+        this.nebula(c);
+      }
+      this.glow(GOLD);
+    }
+    for (const s of data.stars) if (s.element && s.state !== 'fog' && s.state !== 'whisper') this.glow(this.colorOf(s));
+    this.centredOn = undefined;
     this.data = data;
     this.layout = layout;
     this.byId = new Map(data.stars.map((s) => [s.id, s]));
@@ -422,7 +438,9 @@ export class SkyView {
     this.requestDraw();
   }
 
+  /** Something changed (a gesture, data, a selection): draw on the very next frame. */
   requestDraw(): void {
+    this.dirty = true;
     if (this.raf || typeof requestAnimationFrame === 'undefined') return;
     this.raf = requestAnimationFrame((t) => this.frame(t));
   }
@@ -457,8 +475,8 @@ export class SkyView {
       else moving = true;
     }
     this.effects = this.effects.filter((f) => now - f.t0 < f.ms);
-    // Only pulsing stars in view: ~30 fps is plenty.
-    if (!moving && !this.effects.length && now - this.lastDraw < 30 && this.lastDraw) {
+    // Only pulsing stars in view (nothing asked for a redraw): ~30 fps is plenty.
+    if (!moving && !this.dirty && !this.effects.length && now - this.lastDraw < 30 && this.lastDraw) {
       this.raf = requestAnimationFrame((t) => this.frame(t));
       return;
     }
@@ -472,6 +490,7 @@ export class SkyView {
     if (!view.w || !view.h) return false;
     const t0 = performance.now();
     this.lastDraw = now;
+    this.dirty = false;
     const dpr = this.dpr;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.globalAlpha = 1;
@@ -491,10 +510,31 @@ export class SkyView {
     // Vignette.
     ctx.fillStyle = this.bg!.vignette;
     ctx.fillRect(0, 0, view.w, view.h);
+    if (layout) this.noteCentre(layout);
     const ms = performance.now() - t0;
     this.times.push(ms);
     if (this.times.length > 90) this.times.shift();
     return animated;
+  }
+
+  /** Tells the host which constellation the view is on (the chips light up the current one). */
+  private noteCentre(layout: StarLayout): void {
+    const i = this.insets;
+    const mid = toSky(this.cam, this.view, (i.left + this.view.w - i.right) / 2, (i.top + this.view.h - i.bottom) / 2);
+    let best: ConstellationId | null = null;
+    let bestD = 760;
+    for (const c of ['edge', 'fang', 'lantern', 'heart', 'craft', 'wild', 'crown'] as const) {
+      const p = layout.centres[c];
+      const d = Math.hypot(p.x - mid.x, p.y - mid.y) * (c === 'heart' ? 1.4 : 1);
+      if (d < bestD) {
+        bestD = d;
+        best = c;
+      }
+    }
+    if (best !== this.centredOn) {
+      this.centredOn = best;
+      this.host?.centred?.(best);
+    }
   }
 
   private drawBackground(): void {
@@ -630,13 +670,14 @@ export class SkyView {
       ctx.beginPath();
       ctx.moveTo(pa.x + ux * ra, pa.y + uy * ra);
       ctx.lineTo(pb.x - ux * rb, pb.y - uy * rb);
+      // A long line (a link across the sky, e.g. Quickstep → Shadowstep) stays faint so the figures stay clear.
+      const far = Math.max(0.3, Math.min(1, 520 / Math.hypot(b.x - a.x, b.y - a.y)));
       if (l.known) {
         ctx.setLineDash([]);
-        ctx.strokeStyle = rgba(tint, l.kind === 'recipe' ? 0.4 : 0.55);
-        ctx.lineWidth = cam.z >= 1 ? 1.8 : 1.3;
+        ctx.strokeStyle = rgba(tint, (l.kind === 'recipe' ? 0.4 : 0.55) * far);
+        ctx.lineWidth = (cam.z >= 1 ? 1.8 : 1.3) * (far < 1 ? 0.8 : 1);
       } else {
-        // Dotted toward a star still to find; a long one (a link across the sky) stays faint.
-        const far = Math.max(0.3, Math.min(1, 520 / Math.hypot(b.x - a.x, b.y - a.y)));
+        // Dotted toward a star still to find.
         ctx.setLineDash([1.5, 6]);
         ctx.strokeStyle = rgba(tint, 0.42 * far);
         ctx.lineWidth = 1.4;

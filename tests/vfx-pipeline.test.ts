@@ -254,13 +254,20 @@ describe('vfx pipeline: atlas budget (docs/VFX.md §8.5, §9)', () => {
       ...extraPieces('spark'),
       ...extraPieces('levelUp'),
     ];
+    // Bake time of the warm set (cold cache), one piece at a time as the map fade would. Logged, not asserted: wall
+    // time under a parallel test run is noise; compare it with VFX_BUDGET.mapBakeMs by hand.
+    const fresh = new Map<string, VfxPiece>();
+    for (const p of warm) if (p.component !== 'bolt' && p.component !== 'afterimage') fresh.set(pieceKey(p), p);
+    const t0 = performance.now();
+    for (const p of fresh.values()) bakePiece(p);
+    const bakeMs = performance.now() - t0;
     const page = VFX_BUDGET.atlasPage * VFX_BUDGET.atlasPage;
     // Shelf packing of trimmed frames wastes some of each page; 85 % is the planning efficiency.
     const capacity = VFX_BUDGET.maxPages * page * 0.85;
     const n = footprint(warm);
     const all = footprint([...warm, ...lazy]);
     console.log(
-      `vfx atlas: warm set ${(n / page).toFixed(2)} pages (loadout ${loadout.map((r) => r.skillId).join(', ')}; map ${densest.id}); + deaths, combos and extras ${(all / page).toFixed(2)} pages; capacity ${(capacity / page).toFixed(2)}`,
+      `vfx atlas: warm set ${(n / page).toFixed(2)} pages, baked in ${bakeMs.toFixed(0)} ms (loadout ${loadout.map((r) => r.skillId).join(', ')}; map ${densest.id}); + deaths, combos and extras ${(all / page).toFixed(2)} pages; capacity ${(capacity / page).toFixed(2)}`,
     );
     expect(n).toBeLessThanOrEqual(capacity);
   }, 120_000);

@@ -11,13 +11,6 @@ export function bayerT(x: number, y: number, bx = 0, by = 0): number {
   return (BAYER4[((y + by) & 3) * 4 + ((x + bx) & 3)] + 0.5) / 16;
 }
 
-/** Ordered coverage test: true when coverage `a` keeps pixel (x, y). */
-export function covered(x: number, y: number, a: number, bx = 0, by = 0): boolean {
-  if (a >= 1) return true;
-  if (a <= 0) return false;
-  return a > bayerT(x, y, bx, by);
-}
-
 /** Integer hash of (x, y, seed) -> [0, 1). Organic dissolve for debris and smoke edges. */
 export function hash01(x: number, y: number, seed: number): number {
   let h = (Math.imul(x | 0, 0x27d4eb2d) ^ Math.imul(y | 0, 0x165667b1) ^ seed) >>> 0;

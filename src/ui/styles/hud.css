@@ -95,6 +95,14 @@
   }
 }
 
+/* Narrow portrait phones (360 / 375 px): the plate must end before the two rows of 4 buttons start. */
+@media (orientation: portrait) and (max-width: 379px) {
+  .hud-layer {
+    --medal: 56px;
+    --plate-w: 112px;
+  }
+}
+
 /* Landscape phones (short screens): one row of everything, tighter. */
 @media (max-height: 499px) {
   .hud-layer {
@@ -603,7 +611,8 @@
   gap: 2px 8px;
   margin: 2px 0 0 calc(var(--medal) * -0.06);
   padding: 2px 10px 2px 8px;
-  max-width: calc(var(--plate-w) + var(--medal) * 0.4);
+  /* --stats-room (layout()): never under the top-right buttons when they stack into two rows. */
+  max-width: min(calc(var(--plate-w) + var(--medal) * 0.4), var(--stats-room, 9999px));
   font-size: var(--fs-s);
   white-space: nowrap;
   text-shadow: var(--h-line);
