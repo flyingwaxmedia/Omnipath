@@ -9,7 +9,7 @@
 // tells; .resetPeaks(); .setReduceFlash(on); .setQuality(q); .juice / .world for counters.
 import type { SkillDef } from '../../../core/types';
 import { auraColor } from '../../art/classLooks';
-import * as monsterArt from '../../art/monsters';
+import { monsterHideColor } from '../../art/monsters';
 import type { Monster } from '../../entities/Monster';
 import { sceneScope } from '../../events';
 import type { MapScene } from '../../scenes/MapScene';
@@ -44,17 +44,13 @@ const CLASS_AURA: Readonly<Record<string, { motif: AuraMotif; family: FamilyId }
 };
 
 /**
- * A monster's hide colour from art/monsters.ts `monsterHideColor` (the actors lane's export; looked up by name so the
- * runtime builds before it exists): death chips take it. Accepts a 0xRRGGBB number or a '#rrggbb' string, keyed by
- * the monster id (or its def); null when the export is missing or has no colour.
+ * A monster's hide colour (art/monsters.ts `monsterHideColor`: the species' body tone, an elite's tint applied): death
+ * chips take it. Null when the art has none for this id.
  */
 function hideColorOf(m: Monster): number | null {
-  const fn = (monsterArt as Record<string, unknown>)['monsterHideColor'];
-  if (typeof fn !== 'function') return null;
-  const read = (v: unknown): number | null =>
-    typeof v === 'number' && Number.isFinite(v) ? v & 0xffffff : typeof v === 'string' && /^#?[0-9a-f]{6}$/i.test(v) ? parseInt(v.replace('#', ''), 16) : null;
   try {
-    return read(fn(m.def.id)) ?? read(fn(m.def));
+    const c = monsterHideColor(m.def.id);
+    return Number.isFinite(c) ? c & 0xffffff : null;
   } catch {
     return null;
   }

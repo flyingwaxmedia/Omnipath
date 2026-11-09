@@ -64,7 +64,7 @@ export const MARKER_ART: Readonly<Record<QuestMarkerKind, { w: number; h: number
   // ink-dark dots, so it reads on grey cobblestone (a grey bubble vanished there).
   '…': {
     w: 15,
-    h: 12,
+    h: 11,
     rows: [
       '.rrrrrrrrrrr.',
       'rwwwwwwwwwwwr',

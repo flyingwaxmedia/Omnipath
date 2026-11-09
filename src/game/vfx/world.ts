@@ -32,7 +32,7 @@ import { bodyOf, pulsePieces } from './bridge';
 import { holdFor } from './juice';
 import type { GhostSource, JuiceHooks, LivePt, PlayCtx, TellPhaseView, VfxGroup, VfxStage } from './play';
 import { piece, type Ink } from './pieces';
-import { hexToRgb, RAMPS } from './ramps';
+import { CHIP_RAMP, hexToRgb, RAMPS } from './ramps';
 import { deathPieces, deriveAttackVfx, deriveVfx, extraPieces, impactPieces, statusPieces, statusPip } from './recipe';
 import { ANCHOR_DY, DECAL_BUCKETS, FAMILY_IDS, VFX_BUDGET, ZONE_ASPECT, floorBucket, type AuraMotif, type FamilyId, type HitOutcome, type RampId, type VfxPiece, type VfxRecipe } from './types';
 
@@ -49,17 +49,18 @@ export interface WorldHost {
   juice: JuiceHooks | null;
   /** The worn class's Tier III aura, or null (art/classLooks auraColor). */
   classAura(): { motif: AuraMotif; family: FamilyId } | null;
-  /** A monster's hide colour (art/monsters.ts monsterHideColor, once the actors lane exports it), or null. */
+  /** A monster's hide colour (art/monsters.ts monsterHideColor, elite tint applied), or null. */
   hideColor?(m: Monster): number | null;
 }
 
-/** Dust ramp R3 (the chips' bake stop that should land on the hide colour). */
-const CHIP_R3 = hexToRgb(RAMPS.dust.R[3]);
+/** R3 of the hide-chip bake ramp (ramps.ts CHIP_RAMP): the chips' fill stop that lands on the hide colour. */
+const CHIP_R3 = hexToRgb(RAMPS[CHIP_RAMP].R[3]);
 
 /**
- * Bob multiply tint that turns the dust-ramp death chips into the monster's hide colour: each channel is the hide
- * channel over the dust R3 channel (capped at 255), so the chips' mid stop lands on the hide colour and the ramp's
- * lighter / darker stops keep their shading.
+ * Bob multiply tint that turns the death chips into the monster's hide colour: each channel is the hide channel over
+ * the CHIP_RAMP R3 channel (capped at 255), so the chips' fill lands on the hide colour and their R5 glint stays a
+ * lighter shade of it. The runtime bakes tinted chips from CHIP_RAMP (WebGL only: Canvas bobs take no tint and keep
+ * the dust chips).
  */
 export function chipTint(hide: number): number {
   const ch = (v: number, base: number) => Math.min(255, Math.round((v * 255) / Math.max(1, base)));

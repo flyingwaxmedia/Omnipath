@@ -114,6 +114,8 @@ export function createActors(scene: MapScene): Actors {
   // Every discovered class's outfit is drawn in the background (one frame per idle slice): Become is instant.
   const known = (): string[] => Object.keys(scene.book.state.classes ?? {});
   prebakeLooks(scene, player.weapon, known());
+  /** The weapon the outfits were queued for (a weapon change queues them again for the new one). */
+  let bakedFor = player.weapon;
   const offDiscovered = scene.book.events.on('classDiscovered', (e) => prebakeLooks(scene, player.weapon, [e.cls.id], true));
 
   // ---- quest markers
@@ -164,7 +166,7 @@ export function createActors(scene: MapScene): Actors {
     .on('classChanged', (e) => {
       player.setLook(e.classId);
       dirty = true;
-      // a weapon change since load: the other outfits follow for the weapon now shown
+      // any class known by now that is not drawn yet (skips the drawn ones)
       prebakeLooks(scene, player.weapon, known());
     })
     .on('mapEnter', markDirty)
@@ -204,6 +206,11 @@ export function createActors(scene: MapScene): Actors {
 
   return {
     update(_dt: number, now: number) {
+      // a new weapon shows new looks: draw every known outfit for it in the background too
+      if (player.weapon !== bakedFor) {
+        bakedFor = player.weapon;
+        prebakeLooks(scene, bakedFor, known());
+      }
       // markers: on events (next frame) and a slow poll
       if (dirty || now >= pollAt) {
         refreshMarkers(pollAt > 0);

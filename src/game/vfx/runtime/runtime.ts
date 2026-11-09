@@ -18,7 +18,7 @@ import Phaser from 'phaser';
 import { hashSeed, mulberry32 } from '../../../core/rng';
 import { DEPTH, VFX_DEPTH, Y_BIAS, ySort } from '../../render/depths';
 import type { GhostSource, LivePt, PlayCtx, TellSpec, VfxGroup, VfxStage } from '../play';
-import { RAMPS, hexToRgb } from '../ramps';
+import { CHIP_RAMP, RAMPS, hexToRgb } from '../ramps';
 import {
   RING_LONG,
   RING_WHOLE_MAX,
@@ -1293,7 +1293,17 @@ export class VfxRuntime implements VfxStage {
     if (p.component === 'ring' && this.chunked(p as RingPiece)) return [...this.chunkReqMap(p as RingPiece).values()];
     const o = this.optsFor(p, shift);
     if (this.splits(p)) return (['back', 'front'] as const).map((h) => bakeReq({ ...p, anchor: { ...p.anchor, half: h } } as VfxPiece, o));
+    if (this.chipTinted(p)) {
+      // Death chips: the dust bake (untinted) and the CHIP_RAMP bake the hide tint multiplies.
+      const q = { ...p, ramp: CHIP_RAMP } as VfxPiece;
+      return [bakeReq(p, o), bakeReq(q, this.optsFor(q, shift))];
+    }
     return [bakeReq(p, o)];
+  }
+
+  /** Chip motes that can take a hide tint (WebGL: Canvas Blitter bobs ignore tint). */
+  private chipTinted(p: VfxPiece): boolean {
+    return p.component === 'motes' && (p as VfxPieceOf<'motes'>).params.kind === 'chip' && !this.canvasTier;
   }
 
   /** The entry when baked and uploaded (requests it urgently otherwise). */
@@ -1407,17 +1417,21 @@ export class VfxRuntime implements VfxStage {
     if (p.place?.pattern === 'trail') return this.spawnTrail(g, p, t0, rng);
     if (p.component === 'motes') {
       if (p.place?.pattern === 'path' && p.anchor.to === 'path') return this.spawnTether(g, p, t0);
-      const req = bakeReq(p, this.optsFor(p, ctx.shift));
+      // Hide-tinted chips bake from CHIP_RAMP (light enough for the multiply tint to reach the hide) and carry no glow
+      // twin; Canvas bobs take no tint, so there the chips stay as baked.
+      const tint = this.chipTinted(p) ? ctx.chipTint : undefined;
+      const mp = tint !== undefined ? ({ ...p, ramp: CHIP_RAMP } as VfxPiece) : p;
+      const req = bakeReq(mp, this.optsFor(mp, ctx.shift));
       const toPt = ctx.caster;
       g.insts.push(
-        new MotesInst(this, g, t0, p as VfxPieceOf<'motes'>, req, this.where(ctx, p, { x: 0, y: 0 }), {
+        new MotesInst(this, g, t0, mp as VfxPieceOf<'motes'>, req, this.where(ctx, mp, { x: 0, y: 0 }), {
           layer,
           ang,
           rng,
           quota,
           to: toPt ? () => ({ x: toPt.x, y: toPt.y - 20 }) : null,
-          glow: layer === 'body',
-          ...(ctx.chipTint !== undefined && (p as VfxPieceOf<'motes'>).params.kind === 'chip' ? { tint: ctx.chipTint } : {}),
+          glow: layer === 'body' && tint === undefined,
+          ...(tint !== undefined ? { tint } : {}),
         }),
       );
       return;
@@ -1856,7 +1870,8 @@ export class VfxRuntime implements VfxStage {
     // Urgent bakes (live effects waiting) within the slice budget; warm work only when the frame is calm.
     const budget = VFX_BUDGET.cpuMs.bakeSlice;
     if (this.baker.pending) this.baker.pump(budget, false, this.ema > 20, true);
-    if (this.baker.pending) this.kickIdle();
+    // A bolt look first wanted at hop time (bolts.bake) queues its strip pool with nothing else pending: kick it too.
+    if (this.baker.pending || this.bolts.pool.pending) this.kickIdle();
     const t1 = performance.now();
     // Watchers, groups and instances are compacted in place: no per-frame arrays or closures.
     const ticks = this.ticks;

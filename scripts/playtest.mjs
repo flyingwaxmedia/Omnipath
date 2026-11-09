@@ -923,8 +923,15 @@ try {
   const ALL_BOXES = ['.hud-me .me-plate', '.hud-me .me-stats', '.hud-right .menu', '.hud-right .mm-dock', '.hud-right .pursuits', '.hud-centre .zone-banner', '.hud-centre .target', '.hud-centre .navpill'];
   // Landscape: the centre column over the player (zone plate, target plate, nav pill) and the toasts under it.
   const CENTRE_BOXES = ['.hud-centre .zone-banner', '.hud-centre .target', '.hud-centre .navpill', '.toasts .toast'];
-  const middleBand = (sels = ALL_BOXES) =>
-    page.evaluate((list) => {
+  // `target`: put that target plate up and measure at once, in the same task (the scene's combat pushes its own target
+  // — none here — to the HUD within a few frames, so a plate set from outside is gone before a later measure).
+  const middleBand = (sels = ALL_BOXES, target = null) =>
+    page.evaluate(([list, target]) => {
+      if (target) {
+        window.omnipath.ui.setTarget(target);
+        window.omnipath.ui.hud.layout();
+        if (!document.querySelector('.hud-centre .target:not(.hidden)')) return ['no target plate to measure'];
+      }
       const H = innerHeight;
       const out = [];
       for (const sel of list) {
@@ -935,7 +942,7 @@ try {
         if (r.top < H * 0.6 && r.bottom > H * 0.4) out.push(`${sel} ${Math.round(r.top)}-${Math.round(r.bottom)}`);
       }
       return out;
-    }, sels);
+    }, [sels, target]);
   for (const [name, w, h] of [
     ['portrait-phone', 390, 844],
     ['landscape-phone', 844, 390],
@@ -952,10 +959,9 @@ try {
       await page.evaluate(() => {
         const p = document.querySelector('.pursuits');
         if (p && !p.classList.contains('open')) p.querySelector('.pz-tab')?.click();
-        window.omnipath.ui.setTarget({ name: 'Jellop', level: 1, hp: 20, maxHp: 30 });
       });
       await page.waitForTimeout(400);
-      const mid = await middleBand();
+      const mid = await middleBand(ALL_BOXES, { name: 'Jellop', level: 1, hp: 20, maxHp: 30 });
       if (mid.length) fail(`${name}: HUD in the middle of the screen: ${mid.join(', ')}`);
       else ok(`${name}: the middle band is free of HUD (Pursuits open, a target up)`);
     } else {
@@ -968,8 +974,8 @@ try {
         window.omnipath.ui.toast('You awaken at the Windcrest Hill waystone.');
       });
       await page.waitForTimeout(500);
+      const mid = await middleBand(CENTRE_BOXES, { name: 'Thunderhoof', level: 12, hp: 4000, maxHp: 5000, boss: true });
       await shot(`13-${name}-warden`);
-      const mid = await middleBand(CENTRE_BOXES);
       if (mid.length) fail(`${name}: the centre column covers the player: ${mid.join(', ')}`);
       else ok(`${name}: the centre band is clear (warden plate, zone plate and toasts)`);
       await page.evaluate(() => window.omnipath.ui.setTarget(null));

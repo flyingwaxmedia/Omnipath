@@ -108,7 +108,7 @@ export class Player implements TextAnchor {
   textTop(): number {
     const y = Math.round(this.y);
     const s = this.sprite;
-    let top = y - Math.round(s.displayHeight * 0.95) + opaqueTop(this.scene, this.lookKey || s.texture.key) - 1;
+    let top = y - Math.round(s.height * 0.95) + opaqueTop(this.scene, this.lookKey || s.texture.key) - 1;
     if (this.iconKey) top = Math.min(top, Math.round(this.y - (this.castProgress !== null ? 62 : 50)) - ICON - 1);
     if (this.castProgress !== null) top = Math.min(top, Math.round(this.y - 58) - 3);
     return top;
@@ -130,7 +130,7 @@ export class Player implements TextAnchor {
   textBody(): { x0: number; y0: number; x1: number; y1: number } {
     const x = Math.round(this.x);
     const y = Math.round(this.y);
-    return { x0: x - 9, y0: y - Math.round(this.sprite.displayHeight * 0.95) + opaqueTop(this.scene, this.lookKey || this.sprite.texture.key), x1: x + 9, y1: y };
+    return { x0: x - 9, y0: y - Math.round(this.sprite.height * 0.95) + opaqueTop(this.scene, this.lookKey || this.sprite.texture.key), x1: x + 9, y1: y };
   }
 
   /** Shows the look for a weapon (MapScene.equipWeapon) — the worn class's outfit stays on. */

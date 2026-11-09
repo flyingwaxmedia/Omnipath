@@ -35,6 +35,13 @@ export const RAMPS: Readonly<Record<RampId, Ramp>> = {
 };
 
 /**
+ * Bake ramp of hide-tinted death chips (world.ts chipTint, runtime motes): a bob multiply tint can only darken, so the
+ * chips bake from the lightest near-neutral ramp, whose R3 (#c8d8ec) reaches 34 of the 41 monster hides exactly; the
+ * dust R3 (#a8906c) reached 8 (a green or blue hide came out olive / teal-grey). Untinted chips keep the dust ramp.
+ */
+export const CHIP_RAMP: RampId = 'steel';
+
+/**
  * Ramps whose glow twin is never baked (docs/VFX.md §3.3 glow column "none" / "never"). Matter missiles keep their
  * imbue rim regardless (the runtime shows it only when the body carries an element).
  */

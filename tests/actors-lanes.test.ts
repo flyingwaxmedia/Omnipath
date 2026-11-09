@@ -7,7 +7,6 @@ import {
   type LaneBox,
   floatKind,
   floatRole,
-  freeRow,
   laneAlpha,
   laneOrigin,
   laneRise,
@@ -16,6 +15,9 @@ import {
   sameColumn,
   sideStep,
   splitCount,
+  STACK_MAX_PUSH,
+  type StackItem,
+  stackPush,
 } from '../src/game/entities/lanes';
 
 describe('lane of a floating string', () => {
@@ -117,26 +119,13 @@ describe('lane layout', () => {
     expect(p1.y - p0.y).toBe(LANE.row);
   });
 
-  it('frees rows bottom-up and caps the stack', () => {
-    expect(freeRow(new Set())).toBe(0);
-    expect(freeRow(new Set([0]))).toBe(1);
-    expect(freeRow(new Set([1]))).toBe(0);
-    expect(freeRow(new Set([0, 1, 2, 3, 4, 5]))).toBe(LANE.maxRows - 1);
-  });
-
-  it('keeps numbers and crits in one column, a crit taking two rows', () => {
+  it('keeps numbers and crits in one column, a crit lifting two rows', () => {
     expect(sameColumn('damage', 'crit')).toBe(true);
     expect(sameColumn('crit', 'damage')).toBe(true);
     expect(sameColumn('damage', 'status')).toBe(false);
     expect(sameColumn('heal', 'heal')).toBe(true);
     expect(laneSpan('crit')).toBe(2);
     expect(laneSpan('damage')).toBe(1);
-    // a crit over a number at row 0 goes to rows 1-2; a number after that crit goes to row 3
-    expect(freeRow(new Set([0]), 2)).toBe(1);
-    expect(freeRow(new Set([0, 1, 2]))).toBe(3);
-    // a crit needs two free rows in a row
-    expect(freeRow(new Set([1]), 2)).toBe(2);
-    expect(freeRow(new Set([0, 1, 2, 3, 4]), 2)).toBe(LANE.maxRows - 2);
   });
 
   it('rises by whole pixels and fades out by the end of its life', () => {
@@ -175,5 +164,76 @@ describe('side-step off other bodies', () => {
     const r = { x0: 335, y0: 420, x1: 355, y1: 431 };
     const dx = sideStep(r, [a, b], 360);
     expect(r.x0 + dx).toBeGreaterThanOrEqual(350);
+  });
+});
+
+describe('stacking (newest at the base, older strings pushed up)', () => {
+  const H = 12;
+  /** A string `w` wide centred on `x`, its natural bottom at `y1`. */
+  const item = (x: number, y1: number, w = 14, push = 0): StackItem => ({ x0: x - w / 2, x1: x + w / 2, y1, h: H, push });
+  const box = (it: StackItem, push: number) => ({ x0: it.x0, x1: it.x1, y0: it.y1 - push - it.h, y1: it.y1 - push });
+  const clear = (items: StackItem[], pushes: number[]) => {
+    for (let i = 0; i < items.length; i++)
+      for (let j = i + 1; j < items.length; j++) {
+        const a = box(items[i], pushes[i]);
+        const b = box(items[j], pushes[j]);
+        const xs = a.x0 < b.x1 + 1 && b.x0 < a.x1 + 1;
+        const ys = a.y0 < b.y1 + 1 && b.y0 < a.y1 + 1;
+        if (xs && ys) return false;
+      }
+    return true;
+  };
+
+  it('pushes an older number that a newer one would touch right above it, with 1 px air', () => {
+    // the ease-out rise let a newer number catch up with an older one in the same spot
+    const items = [item(400, 300), item(402, 296)];
+    const p = stackPush(items);
+    expect(p[0]).toBe(0);
+    expect(items[1].y1 - p[1]).toBe(300 - H - 1);
+    expect(clear(items, p)).toBe(true);
+  });
+
+  it('leaves strings alone that are already clear (side by side, or above)', () => {
+    expect(stackPush([item(400, 300), item(430, 300)])).toEqual([0, 0]);
+    expect(stackPush([item(400, 300), item(400, 280)])).toEqual([0, 0]);
+    // wholly below a newer one (a world message far down the screen): never flung above it
+    expect(stackPush([item(400, 100), item(400, 300)])).toEqual([0, 0]);
+  });
+
+  it('settles a burst into one clear column, every string above the floor', () => {
+    const items = Array.from({ length: 6 }, (_, i) => item(400 + ((i * 5) % 9) - 4, 300 - i));
+    const p = stackPush(items, 296);
+    expect(clear(items, p)).toBe(true);
+    for (let i = 0; i < items.length; i++) expect(items[i].y1 - p[i]).toBeLessThanOrEqual(296);
+    for (const v of p) expect(Number.isInteger(v)).toBe(true);
+    // the column grows upward in age order
+    for (let i = 1; i < items.length; i++) expect(items[i].y1 - p[i]).toBeLessThan(items[i - 1].y1 - p[i - 1]);
+  });
+
+  it('keeps a crit (taller) and a small number apart and never lets a push shrink', () => {
+    const crit: StackItem = { x0: 390, x1: 412, y1: 300, h: 21, push: 0 };
+    const small = item(404, 297, 8, 30);
+    const p = stackPush([crit, small]);
+    expect(p[1]).toBeGreaterThanOrEqual(30);
+    expect(clear([crit, small], p)).toBe(true);
+  });
+
+  it('clears a second newer string it lands on after the first push', () => {
+    // newest at the base, a crit already pushed above it, the oldest touching the newest
+    const newest = item(400, 300);
+    const crit: StackItem = { x0: 392, x1: 408, y1: 300, h: 21, push: 13 };
+    const oldest = item(400, 299);
+    const p = stackPush([newest, crit, oldest]);
+    expect(clear([newest, crit, oldest], p)).toBe(true);
+  });
+
+  it('caps the column about maxRows high (pushed past it, a string fades early)', () => {
+    expect(STACK_MAX_PUSH).toBe(LANE.maxRows * LANE.row);
+  });
+
+  it('lifts a callout by whole rows (clear of a neighbour plate)', () => {
+    const a = laneSpot('callout', false, warden, { row: 0, dx: 0, lift: 0 }, 0);
+    const b = laneSpot('callout', false, warden, { row: 2, dx: 0, lift: 0 }, 0);
+    expect(a.y - b.y).toBe(2 * LANE.row);
   });
 });

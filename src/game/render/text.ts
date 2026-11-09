@@ -17,9 +17,10 @@ import {
   type LaneBox,
   type LaneRect,
   type LaneTiming,
+  STACK_MAX_PUSH,
+  type StackItem,
   floatKind,
   floatRole,
-  freeRow,
   laneAlpha,
   laneOrigin,
   laneRise,
@@ -28,6 +29,7 @@ import {
   sameColumn,
   sideStep,
   splitCount,
+  stackPush,
 } from '../entities/lanes';
 
 export type { FloatKind } from '../entities/lanes';
@@ -101,6 +103,8 @@ export interface TextAnchor {
   textLive(): boolean;
   /** The visible body (world px): other actors' text side-steps off it. */
   textBody(): LaneRect;
+  /** Its name plate while one shows (other actors' numbers start clear of it), else null. */
+  textPlate?(): LaneRect | null;
   /** Who it is: signed numbers ("-12", "+8") and level / rank-ups belong to the player, plain numbers to foes. */
   readonly textRole: 'player' | 'foe';
 }
@@ -163,7 +167,17 @@ interface Floater {
   /** A number's spawn height above the feet (absolute y without an anchor). */
   lift: number;
   t: LaneTiming;
+  /** Upward push from the lane's stack (entities/lanes.ts stackPush): newer strings below, older ones above. */
+  push: number;
+  /** Scene time it started an early fade (pushed past the top of its column); Infinity = none. */
+  fadeOut: number;
 }
+
+/** An early fade (a string pushed past the top of its column) lasts this long (ms). */
+const EARLY_FADE_MS = 200;
+
+/** Still on screen (within its life, not done with an early fade). */
+const showing = (f: Floater, now: number): boolean => now - f.born < f.t.life && now - f.fadeOut < EARLY_FADE_MS;
 
 /** Pooled floating combat text for one map (create in MapScene.create, destroy on shutdown). */
 export class WorldText {
@@ -191,7 +205,7 @@ export class WorldText {
 
     if (anchor && (k === 'status' || k === 'callout')) {
       // Coalesce: the same word / callout on the same actor while it is still up → "Text xN".
-      const same = this.live.find((f) => f.anchor === anchor && f.kind === k && f.base === base && now - f.born < f.t.life);
+      const same = this.live.find((f) => f.anchor === anchor && f.kind === k && f.below === below && f.base === base && showing(f, now));
       if (same) {
         same.count++;
         same.born = now - same.t.riseMs; // stays up, no second pop
@@ -211,21 +225,23 @@ export class WorldText {
       return;
     }
     const lane: FloatKind | 'free' = anchor ? k : 'free';
-    const f: Floater = { txt, kind: lane, anchor, below, base, count: 1, born: now, row: 0, dx: 0, lift: 0, t: LANE_TIMING[lane] };
+    const f: Floater = { txt, kind: lane, anchor, below, base, count: 1, born: now, row: 0, dx: 0, lift: 0, t: LANE_TIMING[lane], push: 0, fadeOut: Infinity };
     txt.setOrigin(...laneOrigin(lane, below));
     if (!anchor) {
+      // free text (no live actor there: a killing blow, a world message): it stacks with the other free strings
       f.dx = Math.round(x);
       f.lift = Math.round(y);
-      // free text: step up past another young free string at the same spot
-      while (this.live.some((o) => !o.anchor && now - o.born < LANE.rowHoldMs && Math.abs(o.dx - f.dx) < 12 && Math.abs(o.lift - f.lift) < LANE.row)) f.lift -= LANE.row;
     } else {
       this.lay(f, now);
       this.sidestep(f);
       this.unpile(f, now);
+      this.clearPlates(f);
     }
     txt.setVisible(true);
     this.live.push(f);
-    this.place(f, now);
+    // lay it out now (its stack push, the older strings pushed up) so the first frame is right
+    if (anchor) this.layoutActor(anchor, now);
+    else this.layoutFree(now);
   }
 
   /** The tracked actor a string at (x, y) belongs to (null = free text). */
@@ -248,25 +264,23 @@ export class WorldText {
     return best;
   }
 
-  /** Picks a new floater's spot in its anchor's lane: stack row, fan offset, spawn height. */
+  /**
+   * Picks a new floater's spot in its anchor's lane: fan offset and spawn height. Above the head every lane starts at
+   * its base (row 0) and the stack pass (layoutActor) pushes the older strings up; under the feet strings take rows.
+   */
   private lay(f: Floater, now: number): void {
     const a = f.anchor!;
-    const mates = this.live.filter((o) => o.anchor === a && sameColumn(o.kind, f.kind) && o.below === f.below && now - o.born < o.t.life);
     if (f.below) {
+      const mates = this.live.filter((o) => o.anchor === a && sameColumn(o.kind, f.kind) && o.below && showing(o, now));
       f.row = mates.length ? Math.max(...mates.map((o) => o.row)) + 1 : 0;
       return;
     }
-    if (f.kind === 'callout') return;
-    const held = new Set<number>();
-    for (const o of mates) if (now - o.born < LANE.rowHoldMs) for (let k = 0; k < laneSpan(o.kind as FloatKind); k++) held.add(o.row + k);
-    f.row = freeRow(held, laneSpan(f.kind as FloatKind));
     if (f.kind !== 'damage' && f.kind !== 'crit') return;
     const i = this.fanAt.get(a) ?? 0;
     this.fanAt.set(a, i + 1);
     f.dx = LANE.fan[i % LANE.fan.length];
-    // numbers start above the callout while one is up
-    const call = this.live.find((o) => o.anchor === a && o.kind === 'callout' && !o.below && now - o.born < o.t.life);
-    f.lift = Math.round(a.y) - (a.textTop() - 1 - (call ? call.txt.height + 1 : 0));
+    // numbers start right above what is fixed over the head; the stack pass lifts them over a callout that is up
+    f.lift = Math.round(a.y) - (a.textTop() - 1);
   }
 
   /**
@@ -290,15 +304,22 @@ export class WorldText {
 
   /**
    * Neighbours in a crowd each stack their own numbers: a new number that would land on another actor's young number
-   * steps up a row (the stack grows upward instead of piling up).
+   * or callout, or rise through a neighbour's name plate, steps up a row (the stack grows upward instead of piling up).
    */
   private unpile(f: Floater, now: number): void {
     if (f.kind !== 'damage' && f.kind !== 'crit') return;
     const a = f.anchor!;
     const others: LaneRect[] = [];
     for (const o of this.live)
-      if (o.anchor !== a && (o.kind === 'damage' || o.kind === 'crit' || o.kind === 'free') && now - o.born < o.t.life * 0.6) others.push(rectOf(o.txt));
-    if (!others.length) return;
+      if (o.anchor !== a && o.kind !== 'status' && o.kind !== 'heal' && now - o.born < o.t.life * 0.6 && showing(o, now)) others.push(rectOf(o.txt));
+    // a neighbour's name plate (the target next to it in a crowd): kept clear over the number's whole rise
+    const plates: LaneRect[] = [];
+    for (const o of ANCHORS.get(this.scene) ?? []) {
+      const plate = o !== a && o.textLive() ? o.textPlate?.() : null;
+      if (plate) plates.push(plate);
+    }
+    if (!others.length && !plates.length) return;
+    const hit = (r: LaneRect, o: LaneRect) => r.x0 < o.x1 && o.x0 < r.x1 && r.y0 < o.y1 && o.y0 < r.y1;
     const span = laneSpan(f.kind);
     const [ox, oy] = laneOrigin(f.kind, false);
     const w = f.txt.width;
@@ -306,42 +327,135 @@ export class WorldText {
     for (let tries = 0; tries < LANE.maxRows && f.row < LANE.maxRows + 2; tries++) {
       const p = laneSpot(f.kind, false, box(a), f, 0);
       const r = { x0: p.x - ox * w, y0: p.y - oy * h, x1: p.x - ox * w + w, y1: p.y - oy * h + h };
-      if (!others.some((o) => r.x0 < o.x1 && o.x0 < r.x1 && r.y0 < o.y1 && o.y0 < r.y1)) return;
+      const path = { ...r, y0: r.y0 - f.t.rise };
+      if (!others.some((o) => hit(r, o)) && !plates.some((o) => hit(path, o))) return;
       f.row += span;
     }
   }
 
-  /** Positions a floater for the time `now` (it follows its actor). */
-  private place(f: Floater, now: number): void {
+  /** A callout over a neighbour's name plate (the player next to an elite) goes up a row at a time until clear. */
+  private clearPlates(f: Floater): void {
+    if (f.kind !== 'callout' || f.below) return;
+    const a = f.anchor!;
+    const plates: LaneRect[] = [];
+    for (const o of ANCHORS.get(this.scene) ?? []) {
+      const plate = o !== a && o.textLive() ? o.textPlate?.() : null;
+      if (plate) plates.push(plate);
+    }
+    if (!plates.length) return;
+    const w = f.txt.width;
+    const h = f.txt.height;
+    for (let tries = 0; tries < LANE.maxRows; tries++) {
+      const p = laneSpot('callout', false, box(a), f, 0);
+      const r = { x0: p.x - w / 2, y0: p.y - h - f.t.rise, x1: p.x + w / 2, y1: p.y };
+      if (!plates.some((o) => r.x0 < o.x1 && o.x0 < r.x1 && r.y0 < o.y1 && o.y0 < r.y1)) return;
+      f.row++;
+    }
+  }
+
+  /** Positions a floater for the time `now` (it follows its actor; `b`: the actor's box this frame). */
+  private place(f: Floater, now: number, b?: LaneBox): void {
     const age = now - f.born;
-    const up = laneRise(f.t, age);
+    const rise = laneRise(f.t, age);
     const a = f.anchor;
-    const p = a && f.kind !== 'free' ? laneSpot(f.kind, f.below, box(a), f, up) : { x: f.dx, y: f.lift - up };
-    f.txt.setPosition(Math.round(p.x), Math.round(p.y)).setAlpha(laneAlpha(f.t, age));
+    const p = a && f.kind !== 'free' ? laneSpot(f.kind, f.below, b ?? box(a), f, f.below ? rise : rise + f.push) : { x: f.dx, y: f.lift - rise - f.push };
+    const early = f.fadeOut === Infinity ? 1 : Math.max(0, 1 - (now - f.fadeOut) / EARLY_FADE_MS);
+    f.txt.setPosition(Math.round(p.x), Math.round(p.y)).setAlpha(Math.min(laneAlpha(f.t, age), early));
+  }
+
+  /**
+   * Lays out every string over one actor for `now`: callouts and under-the-feet strings at their spots, then each lane
+   * above the head as a stack (entities/lanes.ts stackPush) — numbers over the plate and the callout, words left of the
+   * plate, heals right of it — newest at the base, older ones pushed up, the ones pushed past the top fading out.
+   */
+  private layoutActor(a: TextAnchor, now: number): void {
+    const fs = this.live.filter((f) => f.anchor === a && f.kind !== 'free' && showing(f, now));
+    if (!fs.length) return;
+    const b = box(a);
+    let floor = b.top - 1;
+    for (const f of fs) {
+      if (f.kind !== 'callout' && !f.below) continue;
+      this.place(f, now, b);
+      if (!f.below) floor = Math.min(floor, Math.round(f.txt.y - f.txt.height) - 1);
+    }
+    this.stack(fs.filter((f) => !f.below && (f.kind === 'damage' || f.kind === 'crit')), b, now, floor);
+    this.stack(fs.filter((f) => !f.below && f.kind === 'status'), b, now, null);
+    this.stack(fs.filter((f) => !f.below && f.kind === 'heal'), b, now, null);
+  }
+
+  /** One lane's stack over an actor: pushes, early fades, positions. */
+  private stack(fs: Floater[], b: LaneBox, now: number, floor: number | null): void {
+    if (!fs.length) return;
+    fs.sort((p, q) => q.born - p.born);
+    const items: StackItem[] = fs.map((f) => {
+      const k = f.kind as FloatKind;
+      const p = laneSpot(k, false, b, f, laneRise(f.t, now - f.born));
+      const x0 = p.x - laneOrigin(k, false)[0] * f.txt.width;
+      return { x0, x1: x0 + f.txt.width, y1: p.y, h: f.txt.height, push: f.push };
+    });
+    this.settle(fs, stackPush(items, floor), now, b);
+  }
+
+  /**
+   * Free strings (no actor): one stack for all of them, so a burst of killing blows does not pile up on one spot. The
+   * actors' strings (already laid out this frame) and name plates are fixed: a free string touching one goes above it.
+   */
+  private layoutFree(now: number): void {
+    const fs = this.live.filter((f) => !f.anchor && showing(f, now));
+    if (!fs.length) return;
+    fs.sort((p, q) => q.born - p.born);
+    const fixed: StackItem[] = [];
+    const fix = (r: LaneRect) => fixed.push({ x0: r.x0, x1: r.x1, y1: r.y1, h: r.y1 - r.y0, push: 0 });
+    for (const o of this.live) if (o.anchor && showing(o, now)) fix(rectOf(o.txt));
+    for (const a of ANCHORS.get(this.scene) ?? []) {
+      const plate = a.textLive() ? a.textPlate?.() : null;
+      if (plate) fix(plate);
+    }
+    const items: StackItem[] = fs.map((f) => {
+      const w = f.txt.width;
+      const h = f.txt.height;
+      return { x0: f.dx - w / 2, x1: f.dx + w / 2, y1: f.lift - laneRise(f.t, now - f.born) + h / 2, h, push: f.push };
+    });
+    this.settle(fs, stackPush([...fixed, ...items]).slice(fixed.length), now);
+  }
+
+  /** Applies a stack's pushes (whole-pixel steps, at once), starts early fades past the top, positions the strings. */
+  private settle(fs: readonly Floater[], want: readonly number[], now: number, b?: LaneBox): void {
+    fs.forEach((f, i) => {
+      // at once: the newer string under it is still rising fast, so easing would trail it and overlap
+      if (want[i] > f.push) f.push = want[i];
+      // pushed past the top of the column: it fades out early (the stack stays about maxRows high)
+      if (f.push > STACK_MAX_PUSH && f.fadeOut === Infinity) f.fadeOut = now;
+      this.place(f, now, b);
+    });
   }
 
   private tick(): void {
     const now = this.scene.time.now;
+    const actors = new Set<TextAnchor>();
     for (const f of this.live) {
-      // the actor died or left: the text carries on from where it is
+      // the actor died or left: the text carries on from where it is (its push is in its new spawn point)
       if (f.anchor && !f.anchor.textLive()) {
         const [ox, oy] = laneOrigin(f.kind, f.below);
         f.dx = Math.round(f.txt.x + (0.5 - ox) * f.txt.width);
         f.lift = Math.round(f.txt.y + (0.5 - oy) * f.txt.height) + laneRise(f.t, now - f.born);
+        f.push = 0;
         f.anchor = null;
         f.kind = 'free';
         f.txt.setOrigin(0.5);
       }
-      if (now - f.born < f.t.life) this.place(f, now);
+      if (f.anchor && f.kind !== 'free' && showing(f, now)) actors.add(f.anchor);
     }
+    for (const a of actors) this.layoutActor(a, now);
+    this.layoutFree(now);
     this.sweep(now);
   }
 
-  /** Recycles every floater past its life. */
+  /** Recycles every floater past its life (or done with an early fade). */
   private sweep(now: number): void {
-    if (!this.live.some((f) => now - f.born >= f.t.life)) return;
+    if (this.live.every((f) => showing(f, now))) return;
     this.live = this.live.filter((f) => {
-      if (now - f.born < f.t.life) return true;
+      if (showing(f, now)) return true;
       this.recycle(f.txt);
       return false;
     });

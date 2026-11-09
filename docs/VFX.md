@@ -1211,7 +1211,10 @@ screen, the player pinned beside it; plus 250 ms-apart crops round the target.
   warden per visit, on **first sight** (it comes into view after the arrival beat) or on **aggro** (Combat.hostile:
   provoked, or aggressive with the player inside its 220 px aggro radius, never while spawn-protected); a warden already
   in view on arrival is not a sighting. In the browser: arrival at 288-304 px, no pan for 7 s of standing; walking in,
-  the pan starts as Thunderhoof turns hostile (~200 px) and plays once.
+  the pan starts as Thunderhoof turns hostile (~200 px) and plays once. Review re-check (debug warp, default arrival
+  ~100 px from Thunderhoof, iPad and phone): no pan during the arrival beat or under the welcome card; one pan when
+  spawn protection ends and the aggressive warden turns on the player (~2.4 s after arrival); one again on a revisit;
+  a walk-in from 430 px pans once, at aggro (the warden was in view on arrival).
 - **Wind cone strikes** (`recipe.ts` cone style: mon_gust, rime_breath, every aoe elemental cone). A few hairline lines
   read as nothing. The gust now carries a **streak fan** (size-3 streaks across the arc at chest height, three waves 80
   ms apart, quota-aware) and a **hot leading-edge arc** that expands from 20 % of the reach to the hit reach over ~330
@@ -1221,9 +1224,13 @@ screen, the player pinned beside it; plus 250 ms-apart crops round the target.
   own sprite, hidden for the dash's first ~80 ms. Now the cast frame turns the actor's frame into a family-R3 silhouette
   IN FRONT of the body (the vanish frame, 33 ms, alpha 0.85), which then splits into 4 px bands sliding apart by whole
   pixels (±1, ±2, ±3) while their alpha steps 0.6 / 0.4 / 0.2. It plays at every quality (bands above 0.25).
-- **Death chips** take the monster's hide colour through `PlayCtx.chipTint` / `chipTint()` (bob multiply tint that lands
-  the dust ramp's R3 on the hide colour) as soon as art/monsters.ts exports `monsterHideColor` (looked up by name; §13
-  item 7). Until then: the dust ramp.
+- **Death chips** take the monster's hide colour: runtime/index.ts reads art/monsters.ts `monsterHideColor` (species
+  body tone, elite tint applied), world.ts passes `PlayCtx.chipTint = chipTint(hide)`, and the runtime bakes those chips
+  from `CHIP_RAMP` (ramps.ts: steel, R3 #c8d8ec) with no glow twin, so the bob multiply tint lands their fill on the
+  hide and their R5 glint on a lighter shade of it. A multiply can only darken: from the dust ramp (R3 #a8906c) 33 of
+  the 41 hides were capped (jellop #78c25a came out olive #789050 in game, thunderhoof's blue teal-grey); from steel 34
+  land exactly and the other 7 (near-white / hot yellow-orange hides) stray ≤ 55 in one channel. Canvas bobs take no
+  tint, so there (and for untinted pops) the chips keep the dust ramp; the warm set bakes both.
 - **Bolt strip pool** (`boltpool.ts`, runtime/bolts.ts). Per bolt look (style × strength) the warm set queues a pool —
   trunk runs 6 / 10 / 16 / 24 px × 9 headings of a quadrant × 2 seeded variants in the bolt / white / remnant inks,
   wiggly fork runs 4 / 7 / 11 / 16 px, and every integer micro step ≤ 6 px — baked in idle slices (a look is ~50 ms of
@@ -1237,7 +1244,11 @@ screen, the player pinned beside it; plus 250 ms-apart crops round the target.
   Hop cost (whole bake: frames + pack + upload), busy fight, 8 skills incl. lightning_bolt / static_charge /
   thunder_peal, quality pinned at 1: before p50 1.2-1.3 ms, p90 4.2-4.4 ms, max 4.9-5.1 ms (paint alone 1-5 ms per
   hop in node); after p50 0.6-0.8 ms, mean 0.79-0.9 ms (frames 0.46-0.54 ms), all hops from the pool.
-  `vfx.stats().boltHops` reports hops, pooled, peak / mean ms and the pool's bake time.
+  `vfx.stats().boltHops` reports hops, pooled, peak / mean ms and the pool's bake time. Review re-measure (same
+  harness, quality governed): busy fight p50 0.6 ms, p90 1.8 ms, mean 0.98 ms, 34 of 34 hops pooled; a synthetic sweep
+  of 40-220 px hops costs ~0.6-1 ms up to 100 px and 2-4 ms at 160-220 px (frames p90 1.5 ms, the SwiftShader upload
+  p90 1 ms), so long hops are still above the 1 ms target on this CPU (device gate, §13 item 9). A look first wanted
+  at hop time (not in the warm set) now kicks the idle baker itself instead of waiting for the next strip bake.
 - **Long ring chunks** (`RING_LONG`, components/ring.ts `chunkLayout`). Chunked rings wider than 128 px place **20 px
   chunks (32 headings)** wherever the rim's radius of curvature is ≥ 100 px (a 20 px chord strays ≤ 0.5 px; the heading
   error at the chunk ends stays ≤ 1 px, as for 10 px chunks at 16 headings), 10 px chunks elsewhere (the tight ends of
@@ -1522,11 +1533,10 @@ Open:
 7. ~~World lane~~ (done, §8.9): monster techniques, auto-attacks and telegraphs (rasterised at the hit-test geometry),
    player statuses and hurt impacts, death and spawn pops, enrage, the Tier III and buff auras (Player.sync's rings are
    gone), Interactions' world moments, victim-local hit-stop, impact frames, squash, recoil, kicks and the camera rig.
-   DoT tick tints go through the body-flash gate (§8.12). Still open: **death chips in the hide colour** — the runtime
-   reads `monsterHideColor` from art/monsters.ts by name (a 0xRRGGBB number or '#rrggbb' per monster id / def) and
-   tints the chips with `chipTint` the moment the actors lane exports it; until then they keep the dust ramp. Monster's
-   fractional breath squash and the player's stunned wobble (actors lane), MapScene's portal-reveal shake (it goes
-   through the rig's `install()` shim; the scene keeps its one seam), shade_cloak's alpha.
+   DoT tick tints go through the body-flash gate (§8.12); death chips take the hide colour (`monsterHideColor`, §8.12).
+   The actors lane replaced the fractional breath squash and the stunned wobble with idle frames and whole-pixel steps.
+   Still open: MapScene's portal-reveal shake (it goes through the rig's `install()` shim; the scene keeps its one
+   seam), shade_cloak's alpha.
 8. ~~Settings UI~~ (done): "Reduce shake & flashes" lives on the runtime (`setReduceFlash`, persisted in localStorage,
    defaulting to `prefers-reduced-motion` until the player chooses — fixed in §8.11) and its toggle is in the ☰ menu
    (src/ui/hud/settings.ts).

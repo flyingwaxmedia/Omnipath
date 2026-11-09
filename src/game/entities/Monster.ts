@@ -199,9 +199,10 @@ export class Monster implements TextAnchor {
     return this._label;
   }
 
-  /** Top of the body (world y) — where the HP bar sits; plates and chevrons go above it. */
+  /** Top of the body (world y) — where the HP bar sits; plates and chevrons go above it. The frame's own height, not
+   *  the displayed one: the 1-frame squash must not jolt the bar, the plate and the chevron. */
   get top(): number {
-    return this.y - this.sprite.displayHeight * 0.9 - 4;
+    return this.y - this.sprite.height * 0.9 - 4;
   }
 
   /** Bottom of the name plate (world y): fixed above the HP bar and the chevron's room. */
@@ -233,9 +234,17 @@ export class Monster implements TextAnchor {
   }
 
   textBody(): { x0: number; y0: number; x1: number; y1: number } {
-    const half = Math.round(this.sprite.displayWidth / 2);
+    const half = Math.round(this.sprite.width / 2);
     const x = Math.round(this.x);
     return { x0: x - half, y0: Math.round(this.top) + 4, x1: x + half, y1: Math.round(this.y) };
+  }
+
+  /** The name plate's box while it shows (a neighbour's numbers start clear of it). */
+  textPlate(): { x0: number; y0: number; x1: number; y1: number } | null {
+    const lb = this._label;
+    if (!lb?.visible) return null;
+    const x0 = Math.round(this.x) - lb.width / 2;
+    return { x0, y0: this.plateY - lb.height, x1: x0 + lb.width, y1: this.plateY };
   }
 
   get radius(): number {

@@ -8,6 +8,7 @@ import { EventBus, type GameEvents, type TellPhase, type TellShape } from '../sr
 import type { Monster } from '../src/game/entities/Monster';
 import { CameraRig, FLASH, IntroWatch } from '../src/game/render/camera';
 import { JuiceRig, holdFor, type JuiceActor } from '../src/game/vfx/juice';
+import { CHIP_RAMP, RAMPS, hexToRgb } from '../src/game/vfx/ramps';
 import type { JuiceHooks, PlayCtx, TellSpec, VfxGroup, VfxStage } from '../src/game/vfx/play';
 import { deriveVfx } from '../src/game/vfx/recipe';
 import { VFX_BUDGET, type VfxPiece } from '../src/game/vfx/types';
@@ -407,13 +408,18 @@ describe('juice rig', () => {
 });
 
 describe('death chips in the hide colour', () => {
-  it('tints the chips so the dust mid stop lands on the hide colour, when the art has one', () => {
-    // Dust R3 x tint / 255 = the hide colour (channels that would need > 255 cap there).
-    const t = chipTint(0x5a8a3c);
-    const r3 = [0xa8, 0x90, 0x6c];
-    const hide = [0x5a, 0x8a, 0x3c];
-    const ch = [(t >> 16) & 255, (t >> 8) & 255, t & 255];
-    ch.forEach((c, i) => expect(Math.abs(Math.round((r3[i] * c) / 255) - hide[i])).toBeLessThanOrEqual(1));
+  it('tints the chips so their fill stop lands on the hide colour, when the art has one', () => {
+    // CHIP_RAMP R3 x tint / 255 = the hide colour (channels that would need > 255 cap there).
+    const r3 = hexToRgb(RAMPS[CHIP_RAMP].R[3]);
+    const lands = (hex: number) => {
+      const t = chipTint(hex);
+      const hide = [(hex >> 16) & 255, (hex >> 8) & 255, hex & 255];
+      const ch = [(t >> 16) & 255, (t >> 8) & 255, t & 255];
+      return ch.every((c, i) => Math.abs(Math.round((r3[i] * c) / 255) - hide[i]) <= 1);
+    };
+    // Bright greens and blues (jellop, puddlewisp, thunderhoof, voltmane): the dust R3 (#a8906c) capped them to olive
+    // and teal-grey; the light chip ramp reaches them.
+    for (const hide of [0x5a8a3c, 0x78c25a, 0x8cc6e6, 0x3a4c84, 0x4761b0, 0x9a6cc4]) expect(lands(hide)).toBe(true);
     expect(chipTint(0xffffff)).toBe(0xffffff);
     // The bridge passes it to the death pop when the host knows the colour.
     const f = setup();
@@ -423,7 +429,7 @@ describe('death chips in the hide colour', () => {
     const m = monster('jellop');
     bus.emit('death', { target: m, rank: 'common', x: m.x, y: m.y });
     const play = f.plays.at(-1)!;
-    expect(play.ctx.chipTint).toBe(t);
+    expect(play.ctx.chipTint).toBe(chipTint(0x5a8a3c));
     expect(play.pieces.some((p) => p.component === 'motes' && (p.params as { kind: string }).kind === 'chip')).toBe(true);
   });
 });

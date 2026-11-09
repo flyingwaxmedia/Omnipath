@@ -73,7 +73,10 @@ export interface PlayCtx {
   /** Low priority (status units): drawn only while the sprite pools have room to spare, so a crowd of statuses
    *  never starves the casts and impact sparks. */
   low?: boolean;
-  /** Multiply tint for the play's 'chip' motes (death chips take the monster's hide colour); absent = as baked. */
+  /**
+   * Multiply tint for the play's 'chip' motes (death chips take the monster's hide colour: world.ts chipTint, over the
+   * ramps.ts CHIP_RAMP bake the runtime switches them to); absent = as baked.
+   */
   chipTint?: number;
 }
 
