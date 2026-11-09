@@ -3,7 +3,7 @@
 // pausing the world while anything modal is up). Everything the game asks of the DOM goes through here.
 import type { GameController } from './controller';
 import { type DialogOption, type DiscoveryCard, renderDialog, renderDiscovery, runFishing, runForge } from './dialogs';
-import { Hud, type LogKind, type TargetInfo } from './hud';
+import { Hud, type CastInfo, type LogKind, type TargetInfo } from './hud';
 import { Minimap } from './minimap';
 import { renderAltar } from './panels/altar';
 import { renderBag } from './panels/bag';
@@ -17,7 +17,7 @@ import { $ } from './util';
 
 export { esc } from './util';
 export type { DialogOption, DiscoveryCard } from './dialogs';
-export type { TargetInfo } from './hud';
+export type { CastInfo, TargetInfo } from './hud';
 
 const PANELS: Record<string, PanelRender> = {
   skills: renderSkills,
@@ -74,6 +74,7 @@ export class UI implements PanelHost {
   tick(): void {
     this.hud.updateVitals();
     this.hud.updateCooldowns();
+    this.hud.updateNav();
     this.minimap.update();
   }
 
@@ -84,6 +85,8 @@ export class UI implements PanelHost {
     this.hud.updateVitals();
     this.hud.setTarget(null);
     this.hud.setChannel(null);
+    this.hud.setCast(null);
+    this.hud.updateNav();
   }
 
   banner(title: string, sub = ''): void {
@@ -100,6 +103,11 @@ export class UI implements PanelHost {
 
   setChannel(label: string | null, progress = 0): void {
     this.hud.setChannel(label, progress);
+  }
+
+  /** Skill wind-up in progress (pushed at the HUD tick), or null. */
+  setCast(c: CastInfo | null): void {
+    this.hud.setCast(c);
   }
 
   log(msg: string, kind: LogKind = 'info'): void {

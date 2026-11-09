@@ -55,7 +55,7 @@ export const CROSS_RECIPES: FusionRecipe[] = [
     a: 'skill:boomerang_blade',
     b: 'skill:static_charge',
     result: 'skill:thunder_tether',
-    hint: 'A blade that already comes home could carry lightning there and back.',
+    hint: 'A blade that already cuts through everything could carry lightning along its path.',
   },
 
   // ---------------------------------------------------------------- v2: echo + technique

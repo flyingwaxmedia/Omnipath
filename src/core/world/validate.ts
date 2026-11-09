@@ -31,6 +31,12 @@ export const MAP_BUDGET = { monsters: 60, spawns: 12, npcs: 12, portals: 8 } as 
 /** Edge portals must span at least this many tiles along their border. */
 export const EDGE_MIN_SPAN = 3;
 
+/**
+ * Spawn spread (soft rule, spawnWarnings): at most `maxFarShare` of a spawn square's walkable tiles may lie more
+ * than `stepsPerR × r` walking steps from its centre (or be unreachable from it).
+ */
+export const SPAWN_SPREAD = { stepsPerR: 3, maxFarShare: 0.05 } as const;
+
 /** Primal element sources used by the soft-lock check (SPEC §7.2 / §7.4). */
 export const ELEMENT_SOURCES: readonly { element: ElementId; source: string; test: (m: MapDef) => boolean }[] = [
   { element: 'fire', source: "npc 'brann' (forge)", test: (m) => (m.npcs ?? []).some((n) => n.npc === 'brann') },
@@ -230,6 +236,63 @@ export function validateMap(def: MapDef): string[] {
     if (missing.length) errs.push(`${t.label} is unreachable from ${missing.map((s) => s.label).join(', ')}`);
   }
   return errs;
+}
+
+/**
+ * Soft warnings for one map (never errors: validateMap and validateWorld ignore them). The client samples a
+ * monster's home from every walkable tile of its spawn square (cx ± r, cy ± r), so a square that reaches over a
+ * cliff or wall puts monsters on another terrace, where they aggro across it and stall. Warns for each spawn with
+ * more than SPAWN_SPREAD.maxFarShare of its walkable square farther than stepsPerR × r 4-connected steps from the
+ * centre (unreachable tiles count as far). [] when nothing is wrong or the map does not compile.
+ */
+export function spawnWarnings(def: MapDef): string[] {
+  let cm: CompiledMap;
+  try {
+    cm = compileMap(def);
+  } catch {
+    return [];
+  }
+  const { w: W, h: H } = cm;
+  const walkable = (x: number, y: number) => x >= 0 && y >= 0 && x < W && y < H && (cm.coll[y * W + x] & COLL.BLOCK) === 0;
+  const out: string[] = [];
+  for (const s of def.spawns ?? []) {
+    const dist = new Int32Array(W * H).fill(-1);
+    const queue: number[] = [];
+    const seed = (x: number, y: number, d: number) => {
+      if (!walkable(x, y) || dist[y * W + x] >= 0) return;
+      dist[y * W + x] = d;
+      queue.push(y * W + x);
+    };
+    seed(s.cx, s.cy, 0);
+    // A blocked centre (e.g. a prop) starts from its walkable 8-neighbours.
+    if (queue.length === 0) for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) seed(s.cx + dx, s.cy + dy, 1);
+    for (let head = 0; head < queue.length; head++) {
+      const c = queue[head];
+      const x = c % W;
+      const y = (c - x) / W;
+      seed(x + 1, y, dist[c] + 1);
+      seed(x - 1, y, dist[c] + 1);
+      seed(x, y + 1, dist[c] + 1);
+      seed(x, y - 1, dist[c] + 1);
+    }
+    const limit = SPAWN_SPREAD.stepsPerR * s.r;
+    let tiles = 0;
+    let far = 0;
+    for (let y = s.cy - s.r; y <= s.cy + s.r; y++) {
+      for (let x = s.cx - s.r; x <= s.cx + s.r; x++) {
+        if (!walkable(x, y)) continue;
+        tiles++;
+        const d = dist[y * W + x];
+        if (d < 0 || d > limit) far++;
+      }
+    }
+    if (tiles > 0 && far / tiles > SPAWN_SPREAD.maxFarShare) {
+      out.push(
+        `spawn ${s.monster} at (${s.cx},${s.cy}) r ${s.r}: ${far} of ${tiles} walkable tiles in its square are more than ${limit} steps from the centre`,
+      );
+    }
+  }
+  return out;
 }
 
 export interface WorldCheckOptions {

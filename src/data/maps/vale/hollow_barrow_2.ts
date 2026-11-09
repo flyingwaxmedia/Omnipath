@@ -74,7 +74,7 @@ const map: MapDef = {
     { monster: 'hollowshade', count: 6, cx: 18, cy: 13, r: 3 },
     { monster: 'cairn_wraith', count: 6, cx: 4, cy: 23, r: 3 },
     { monster: 'hollowshade', count: 6, cx: 9, cy: 34, r: 4 },
-    { monster: 'cairn_wraith', count: 5, cx: 21, cy: 30, r: 4 },
+    { monster: 'cairn_wraith', count: 5, cx: 21, cy: 33, r: 3 },
     { monster: 'crypt_keeper', count: 1, cx: 33, cy: 23, r: 3 },
   ],
 };

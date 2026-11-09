@@ -1,6 +1,6 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CLASS_TREE_POWER, classTreeTemplate } from '../src/core/balance';
-import { classXpToNext } from '../src/core/classes';
+import { CLASS, HARDENED_RANK, classPoints, classXpToNext } from '../src/core/classes';
 import { MASTERY, monsterThreat, overmasteryCost, xpForHit, xpToNext } from '../src/core/mastery';
 import { Registry } from '../src/core/registry';
 import { BOOK_FLAGS } from '../src/core/save';
@@ -25,6 +25,7 @@ import type {
   SkillDef,
   SkillShape,
 } from '../src/core/types';
+import { createRegistry } from '../src/data';
 
 // ------------------------------------------------------------------ inline fixture
 
@@ -802,6 +803,31 @@ describe('passives', () => {
     expect(passives).toHaveLength(1);
   });
 
+  it('keeps totals across a Class Rank-up below the imprint CR, refreshes them at it', () => {
+    const saved = emptyState();
+    saved.skills.ember_edge = { id: 'ember_edge', rank: 5, xp: 0, charges: 1, uses: 0, source: 'start', learnedAt: 0, overBars: 0, study: {} };
+    saved.classes.mimic = { rank: 1, xp: 0, spent: {} };
+    saved.classes.blademaster = { rank: 3, xp: 0, spent: {} };
+    saved.worn = 'mimic';
+    const b = new SkillBook(reg, saved);
+    // A slot set while Blademaster's imprint was still locked (the API refuses that; a hand-edited
+    // or server state need not): it switches on when Blademaster reaches its imprint CR.
+    b.state.imprints.push('blademaster');
+    const ember = reg.skill('ember_edge')!;
+    const before = b.totals();
+    const powerBefore = b.tagPowerFor(ember);
+    expect(b.passives().some((p) => p.source === 'imprint')).toBe(false);
+    // ember_edge is at max rank: only overmastery, and Blademaster bleeds 15% of it.
+    b.addMastery('ember_edge', classXpToNext(3, 1) / CLASS.bleedShare + 1);
+    expect(b.state.classes.blademaster.rank).toBe(4);
+    expect(b.totals()).toBe(before);
+    b.addMastery('ember_edge', classXpToNext(4, 1) / CLASS.bleedShare + 1);
+    expect(b.state.classes.blademaster.rank).toBe(CLASS.imprintAt[1]);
+    expect(b.totals()).not.toBe(before);
+    expect(b.passives().find((p) => p.source === 'imprint')?.def.id).toBe('imprint_blademaster');
+    expect(b.tagPowerFor(ember)).toBe(powerBefore + CLASS_TREE_POWER[1].imprint);
+  });
+
   it('caches totals until something changes', () => {
     const before = book.totals();
     expect(book.totals()).toBe(before);
@@ -906,6 +932,109 @@ describe('classes', () => {
     expect(book.activeBonus()).toEqual({ atk: 10 + CLASS_TREE_POWER[1].damageStat });
     expect(book.wear('pyroblade')).toMatchObject({ ok: false });
     expect(book.wear('blademaster')).toMatchObject({ ok: true });
+  });
+
+  it('respec keeps skill nodes bought, so their skill is not free (real data)', () => {
+    const real = createRegistry();
+    const saved = emptyState();
+    saved.classes.assassin = { rank: 5, xp: 0, spent: { n1: 1, n2: 2 } };
+    saved.worn = 'assassin';
+    const b = new SkillBook(real, saved);
+    const assassin = real.classDef('assassin')!;
+    const progress = b.state.classes.assassin;
+    expect(b.buyNode('assassin', 'n5').ok).toBe(true);
+    expect(b.progress('shade_cloak')?.source).toBe('class:assassin');
+    expect(classPoints(assassin, progress)).toBe(0);
+    expect(b.respec('assassin')).toEqual({ ok: true, message: 'Nightblade points refunded.' });
+    expect(progress.spent).toEqual({ n5: 1 });
+    expect(classPoints(assassin, progress)).toBe(progress.rank * assassin.tier - 2);
+    expect(b.has('shade_cloak')).toBe(true);
+    // Only the 3 refunded points can be re-bought.
+    expect(b.buyNode('assassin', 'n1').ok).toBe(true);
+    expect(b.buyNode('assassin', 'n2').ok).toBe(true);
+    expect(b.buyNode('assassin', 'n2').ok).toBe(true);
+    expect(b.buyNode('assassin', 'n1')).toEqual({ ok: false, message: 'Needs 1 point (0 available).' });
+    expect(b.buyNode('assassin', 'n5')).toEqual({ ok: false, message: 'Already at max rank.' });
+  });
+});
+
+describe('discovery triggers (incFlag)', () => {
+  it('evaluates on the first incFlag after construction, then only for flags classes read', () => {
+    const saved = emptyState();
+    for (const id of ['slash', 'whirlwind']) {
+      saved.skills[id] = { id, rank: 1, xp: 0, charges: 0, uses: 0, source: 'start', learnedAt: 0, overBars: 0, study: {} };
+    }
+    const loaded = new SkillBook(reg, saved);
+    expect(loaded.state.classes).toEqual({}); // loading never runs discovery
+    const discovered = listen(loaded, 'classDiscovered');
+    const spy = vi.spyOn(loaded, 'evaluateClasses');
+    // The first incFlag is the catch-up for the loaded save, whatever the flag.
+    loaded.incFlag('kills');
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(discovered.map((d) => d.cls.id)).toEqual(['blademaster']);
+    // No class reads these flags: no evaluation.
+    loaded.incFlag('kills');
+    loaded.incFlag('kill_pip');
+    loaded.incFlag('talk:hale', 2);
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(loaded.flag('kills')).toBe(2);
+    // Moonwarden reads visited:vale.moonlit_glade.
+    loaded.incFlag('visited:vale.moonlit_glade');
+    expect(spy).toHaveBeenCalledTimes(2);
+  });
+
+  it('skips the catch-up once another action has run discovery', () => {
+    const spy = vi.spyOn(book, 'evaluateClasses');
+    book.learn('slash', 'start'); // runs a full discovery
+    expect(spy).toHaveBeenCalledTimes(1);
+    book.incFlag('kills');
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
+
+  it('discovers Moonwarden on the map-visit flag', () => {
+    book.learn('slash', 'start');
+    book.learn('slash@holy', 'test'); // moonwarden's holy clause
+    expect(book.state.classes.moonwarden).toBeUndefined();
+    book.incFlag('kills');
+    expect(book.state.classes.moonwarden).toBeUndefined();
+    book.incFlag('visited:vale.moonlit_glade');
+    expect(book.state.classes.moonwarden).toMatchObject({ rank: 1 });
+  });
+
+  it("still discovers Ascendant on incFlag('relic_storm') (real data)", () => {
+    const real = createRegistry();
+    const saved = emptyState();
+    for (const s of real.authoredSkills()) {
+      saved.skills[s.id] = {
+        id: s.id,
+        rank: Math.min(HARDENED_RANK, s.maxRank),
+        xp: 0,
+        charges: 0,
+        uses: 0,
+        source: 'test',
+        learnedAt: 0,
+        overBars: 0,
+        study: {},
+      };
+    }
+    saved.classes.sword_saint = { rank: 6, xp: 0, spent: {} };
+    saved.classes.archmage = { rank: 6, xp: 0, spent: {} };
+    saved.worn = 'sword_saint';
+    const b = new SkillBook(real, saved);
+    b.evaluateClasses();
+    const ascendant = real.classDef('ascendant')!;
+    const before = b.classProgress(ascendant);
+    expect(before.discovered).toBe(false);
+    expect(before.clauses.every((c) => c.have >= c.clause.count)).toBe(true);
+    expect(before.parents?.every((p) => p.have >= p.need)).toBe(true);
+    expect(before.requires).toEqual([{ text: "Claim Thunderhoof's storm relic", ok: false }]);
+    b.incFlag('kills');
+    b.incFlag('kill_thunderhoof');
+    expect(b.state.classes.ascendant).toBeUndefined();
+    const discovered = listen(b, 'classDiscovered');
+    b.incFlag('relic_storm');
+    expect(discovered.map((d) => d.cls.id)).toEqual(['ascendant']);
+    expect(b.has('ascendant_sig')).toBe(true);
   });
 });
 

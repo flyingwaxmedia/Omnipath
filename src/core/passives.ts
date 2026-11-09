@@ -281,9 +281,15 @@ function addEffect(t: PassiveTotals, effect: PassiveEffect, pct: number, fromTag
 
 /**
  * Folds every active passive (pct × rank × strength), the bestiary family and HP bonuses and the
- * worn class's tagPower bonus into PassiveTotals. Pure; the SkillBook caches the result.
+ * worn class's tagPower bonus into PassiveTotals. Pure; the SkillBook caches the result. `active`
+ * defaults to activePassives(reg, state); pass a list already built for the same state to skip
+ * rebuilding it.
  */
-export function aggregate(reg: Registry, state: Readonly<SkillBookState>): PassiveTotals {
+export function aggregate(
+  reg: Registry,
+  state: Readonly<SkillBookState>,
+  active: readonly ActivePassive[] = activePassives(reg, state),
+): PassiveTotals {
   const t: PassiveTotals = {
     tagPower: scoped(),
     power: scoped(),
@@ -296,7 +302,7 @@ export function aggregate(reg: Registry, state: Readonly<SkillBookState>): Passi
     vsStatus: [],
     regenStill: 0,
   };
-  for (const p of activePassives(reg, state)) {
+  for (const p of active) {
     addEffect(t, p.def.effect, p.def.effect.pct * p.rank * p.strength, p.source === 'tag');
   }
   const family = bestiaryFamilyPct(reg, state);

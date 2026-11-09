@@ -42,7 +42,7 @@ export const SWORD_SKILLS: SkillDef[] = [
   {
     id: 'sword_throw',
     name: 'Sword Throw',
-    desc: 'Hurl your blade in a straight line. It pierces the first foe and returns to your hand.',
+    desc: 'Hurl your blade in a straight line. It pierces the first foe and flies on into the next.',
     icon: '🗡️',
     tier: 1,
     weapons: ['sword'],
@@ -105,7 +105,7 @@ export const SWORD_SKILLS: SkillDef[] = [
   {
     id: 'boomerang_blade',
     name: 'Boomerang Blade',
-    desc: 'Your thrown blade arcs out and back, cutting everything along the way.',
+    desc: 'Your thrown blade flies on through everything along its path.',
     icon: '🪃',
     tier: 2,
     weapons: ['sword'],
@@ -185,7 +185,7 @@ export const SWORD_SKILLS: SkillDef[] = [
   {
     id: 'hundredfold_edge',
     name: 'Hundredfold Edge',
-    desc: 'Hurl nine phantom blades in a wide fan after a short wind-up. Each one cuts through three foes.',
+    desc: 'Hurl nine phantom blades in a wide fan after a short wind-up. Each one hits up to four foes.',
     icon: '🌠',
     tier: 3,
     weapons: ['sword'],
@@ -383,7 +383,7 @@ export const SWORD_SKILLS: SkillDef[] = [
   {
     id: 'cleaver_toss',
     name: 'Cleaver Toss',
-    desc: 'Throw your sword like a smith throws a hammer: slow, heavy, stunning. Cuts through two foes.',
+    desc: 'Throw your sword like a smith throws a hammer: slow, heavy, stunning. Hits up to three foes.',
     icon: '⚒️',
     tier: 2,
     weapons: ['sword'],

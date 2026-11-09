@@ -114,7 +114,7 @@ export const ESSENCES: EssenceDef[] = [
     id: 'haste',
     name: 'Haste',
     icon: '⏩',
-    desc: 'Cooldown cut by 30% for a little less power per cast.',
+    desc: 'Cooldown cut by 30% for a little less power per cast. More SP.',
     affix: { text: 'Swift', pos: 'prefix' },
     category: 'tempo',
     appliesTo: ['strike', 'spin', 'projectile', 'dash', 'nova', 'chain'],

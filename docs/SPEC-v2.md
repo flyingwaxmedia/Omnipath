@@ -121,7 +121,7 @@ deterministically (old v1 ids like `slash@fire` stay valid).
 
 **Element slot rules**: an *authored unaligned* attack (non-buff, power > 0) has one element slot. A generated variant
 of such a base may swap element (`sword_throw@fire~split` + water → `sword_throw@water~split`, essences kept, none
-consumed). Authored *aligned* skills (Flame Spin, Firebolt…) cannot take an element ("already bound").
+consumed). Authored *aligned* skills (Flame Spin, Ember Dart…) cannot take an element ("already bound").
 
 **Essence slots** (`fusion.essenceSlots`): buffs 0; 1 slot for every other skill; 2 when that skill id's own
 `overBars ≥ 3` (a variant overmasters separately from its base; see §1 for how capped charges never block the bars).
@@ -162,7 +162,8 @@ success only** (and not at all when the player already knows the resulting varia
    both hit once; a heavy single hit never multiplies across extra pulses). sp = max + 0.6×min, cooldown = max (≥ 300;
    800 if both are 0), tier = min(3, max tier + 1), maxRank 5, tags = union, weapons = union (or undefined if either is
    any-weapon), element/status from the primary (else the other parent), `baseId` = the higher-tier parent (ties:
-   the primary). Name = higher skill name + rider noun (Cyclone, Rend, Arc, Burst, Volley, Rush) ≤ 4 words.
+   the primary). Name = higher skill name + rider noun (Cyclone, Rend, Arc, Burst, Volley, Rush) ≤ 4 words: a long
+   name keeps its last 3 words, minus any leading lowercase word ('Eye of the Storm' + spin → 'Storm Cyclone').
    Merges can take an element and essences but are never merged again.
 6. Otherwise `nothing` (+ whisper hint from an undiscovered recipe using either ingredient, as v1).
 Skill ingredients need rank ≥ `fusionMinRank`. Ingredients are never consumed except essences.
@@ -170,10 +171,11 @@ Every attempt is remembered (attempts/discoveries keyed by the sorted pair).
 
 Budget test (`tests/budget.test.ts`, **no waivers**): enumerate every authored non-buff attack × (none + each element
 it can take) × every legal essence set of size 0–2, plus every legal shape merge (± element ± 1 essence; pairs with an
-authored recipe never merge): assert hits ≤ 12, cooldown ≥ 300, name ≤ 4 words, and damage-per-SP within ±35% for
-every essence step — a 1-essence variant vs base (or base@element), a 2-essence variant vs each 1-essence subset;
-damage is `power`, or `power × hits per cast` once a multiply essence (split/flurry) is on the skill — and every merge
-within [0.65 × the weaker, 1.35 × the stronger] attacking parent (per-cast damage). SP-free references are skipped.
+authored recipe never merge): assert hits ≤ 12, cooldown ≥ 300, name ≤ 4 words (first word capitalized), and
+damage-per-SP within ±35% for every essence step — a 1-essence variant vs base (or base@element), a 2-essence
+variant vs each 1-essence subset; damage is `power`, or `power × hits per cast` once a multiply essence (split/flurry)
+is on the skill — and every merge within [0.65 × the weaker, 1.35 × the stronger] attacking parent (per-cast
+damage). SP-free references are skipped.
 Split's volley rule, hit renormalization and the buff-merge ban are what make this hold; the test also checks split's
 1.1× volley on every untrimmed projectile and that no buff ever merges.
 
@@ -263,10 +265,12 @@ points(cls, progress) = progress.rank * cls.tier - sum(spent node ranks * node.c
   clause of the class (has all tags of a clause); every other discovered class whose clause matches gains `bleedShare ×`.
 - **Discovery**: Tier I — v1 permissive counting (any known skill incl. variants). Tier II/III — *hardened*: count only
   distinct authored skills at rank ≥ 5 (a variant counts as its base), all `parents` at their required CR, and all
-  `requires` met. Hidden classes are never shown in the codex until whispered.
+  `requires` met. For `distinctElements`, hardened: each distinct authored skill contributes at most one element
+  (five `slash@<element>` variants count as 1). Hidden classes are never shown in the codex until whispered.
 - First discovered class becomes worn if none is worn. `wear(id)` is free in safe maps (the game enforces where).
-- **Tree**: buy node ranks with points; node `requires` and `minSpent` respected; `respec(id)` refunds all (safe maps).
-  Worn class: tree passives active and its `bonus` applies. Signature skills (`grants`) learned on discovery.
+- **Tree**: buy node ranks with points; node `requires` and `minSpent` respected; `respec(id)` refunds every passive
+  and capstone node; skill nodes stay bought, since their skill is kept (safe maps). Worn class: tree passives active
+  and its `bonus` applies. Signature skills (`grants`) learned on discovery.
 - **Imprints**: unlocked at CR `imprintAt[tier]`. Slots: 1 when any class reaches its imprint CR, 2 at first Tier II
   discovered, 3 at first Tier III or 12 classes discovered. The worn class's own imprint cannot be slotted.
 - **Class power budget** (`balance.CLASS_POWER_BUDGET = 25`, `tests/class-budget.test.ts` over every class): for
@@ -299,7 +303,8 @@ trySpark(skillId, monster, now) -> SkillDef | null;  sparkWindow(skillId, monste
 witness(skillId) -> { status: 'learned' | 'progress' | 'blocked'; marks; need; anchorShape }
 morphOptions(id) (v2: includes tier, requirement list with met flags, spark info), canMorph, morph(from, to)
 ingredients() (elements, skills, essences), rememberedPair, fuse(a, b)
-passives() -> {def, rank, strength}[];  totals() -> PassiveTotals (cached; invalidated on any learn/rank/class change)
+passives() -> {def, rank, strength}[];  totals() -> PassiveTotals (cached; invalidated on any learn/rank/class change
+                                        // that alters passives — a Class Rank only at its imprint CR)
 lessonState(lessonId), takeLesson(lessonId)
 classProgress(cls), evaluateClasses(), wear(id), buyNode(classId, nodeId), respec(classId),
 setImprints(ids), imprintSlots(), activeBonus(), tagPowerFor(skill)  // class bonus + passives (%)
@@ -307,6 +312,9 @@ stats(), serialize()
 ```
 Events: `learned, element, rankUp, mastered, charge, morphed, fused, classDiscovered, classRank, hint, spark,
 witness, echo, passive, essence, lesson, bestiary`. Discovery checks run on events only, never per frame.
+`incFlag` re-runs class discovery only for flags some class requirement reads (`flag` ids, `visited:<map>` for
+`mapVisited`) and on its first call after the book is constructed (catch-up for a loaded save); `kills`,
+`kill_<id>`, `talk:<id>`… skip it.
 
 **Save v2** (`src/core/save.ts`): `migrateBookState(raw): SkillBookState` handles v1 (classes `string[]` →
 `{rank:1,xp:0,spent:{}}`, `activeClass` → `worn`, adds new fields, clamps xp to the new curve) and v2 (fills any
@@ -352,6 +360,10 @@ paths (+1 tile margin), portals (+2), structures, NPCs, nodes, objects (+1) or s
 - Flood fill from every arrival reaches every NPC, node, object, other portal and spawn centre (hidden-portal and
   gated destinations excluded from *their* map's requirement only).
 - Every map has ≤ 60 monsters total, ≤ 12 spawn entries, ≤ 12 NPCs, ≤ 8 portals; safe maps have 0 spawns.
+- Spawn spread (soft, `spawnWarnings`; `tests/world.test.ts` keeps it empty): the client may home a monster on any
+  walkable tile of its spawn square (cx ± r, cy ± r), so ≤ 5% of those tiles may lie more than 3 × r walking steps
+  from the centre (`SPAWN_SPREAD`) — a square must not reach over a cliff or wall onto another terrace. Clients
+  should also sample only tiles in the centre's walkable component.
 - **Hidden portals** (`PortalReveal`) are revealed by a cast within 3 tiles whose skill matches **any of**: `tag`, OR
   its element is `element` or one of `elements`, OR its shape kind is `shape` (e.g. the quarry shaft: tag heavy OR
   shape nova; the gloomwood glade: element shadow OR holy).
@@ -515,7 +527,8 @@ data; new nodes in **bold**:
 
 Existing alternates stay (quickstep→shadowstep with shadow, meditation→focus, firebolt→meteor).
 Display renames (ids unchanged): fan_of_knives "Knife Fan", shadowstep "Umbral Step", blade_storm "Steel Bloom",
-sanctuary "Hallowed Rest".
+sanctuary "Hallowed Rest", backstab "Blindside", firebolt "Ember Dart", lightning_bolt "Forked Spark", wind_cutter
+"Twin Gale", holy_light "Dawn Dart", thunderstorm "Squall Cell" (§9: those names matched Ragnarok Online skills).
 
 **Trainers** (`src/data/trainers.ts`) and their techniques (`src/data/skills/techniques.ts`, tier 1, maxRank 5, any
 weapon unless noted):
@@ -552,7 +565,7 @@ patience, still_mind, field_drill, pathfinder (maxRank 3, repeatable lessons rai
 |---|---|
 | I (18) | blademaster, tempest_dancer, pyroblade, shadowstalker, knife_juggler, assassin ("Nightblade"), arcanist, pyromancer, tidecaller, stormcaller, earthshaper, elementalist, spellblade, wayfarer, paladin ("Oathsworn"), twilight_sage, **windblade** (2× blade+wind), **mimic** (3× echo) |
 | I hidden | **moonwarden** (mapVisited vale.moonlit_glade + 1× holy) |
-| II (8) | **sword_saint** (blademaster 10), **magma_knight** (pyroblade 10 + magma element), **phantom** (shadowstalker 10), **archmage** (arcanist 10), **prism_sage** (elementalist 10, 5 distinct elements), **vortex_dancer** (tempest_dancer 10), **runeknight** (spellblade 6 + earthshaper 6), **stormreaver** (stormcaller 6 + tempest_dancer 6) |
+| II (8) | **sword_saint** (blademaster 10), **magma_knight** (pyroblade 10 + magma element), **phantom** (shadowstalker 10), **archmage** (arcanist 10), **prism_sage** (elementalist 10, 5 distinct elements), **vortex_dancer** (tempest_dancer 10), **runeknight** ("Glyphwarden"; spellblade 6 + earthshaper 6), **stormreaver** (stormcaller 6 + tempest_dancer 6) |
 | II hidden | **echo_sovereign** (mimic 8 + 6 echoes) |
 | III (2) | **ascendant** (sword_saint 6 + archmage 6, flag relic_storm), **eclipse_walker** (phantom 6 + prism_sage 6, flag relic_dusk) |
 

@@ -362,6 +362,27 @@ describe('aggregate and readers', () => {
   const spinner = reg.skill('whirlwind')!;
   const orb = reg.skill('orb')!;
 
+  it('gives the same totals from a prebuilt active list', () => {
+    const states = [
+      emptyState(),
+      stateWith({ slash: 10, whirlwind: 10, cleave: 10 }),
+      stateWith(
+        { slash: 10, whirlwind: 10, cleave: 10 },
+        {
+          passives: { big_power: 3, thrift: 2 },
+          classes: { blademaster: { rank: 10, xp: 0, spent: { n1: 3 } }, archmage: { rank: 4, xp: 0, spent: {} } },
+          worn: 'blademaster',
+          imprints: ['archmage'],
+          bestiary: { sprite_0: BESTIARY_BONUS.hpKills, sprite_1: BESTIARY_BONUS.familyKills },
+        },
+      ),
+    ];
+    for (const st of states) {
+      const active = activePassives(reg, st);
+      expect(aggregate(reg, st, active)).toEqual(aggregate(reg, st));
+    }
+  });
+
   it('starts empty', () => {
     const t = aggregate(reg, emptyState());
     expect(powerPctFor(t, blade)).toBe(0);

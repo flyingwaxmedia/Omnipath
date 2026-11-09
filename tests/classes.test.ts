@@ -26,6 +26,7 @@ import { Registry } from '../src/core/registry';
 import { VISITED_FLAG_PREFIX, countTagged, type RequirementContext } from '../src/core/requirements';
 import { emptyState, type ClassProgress, type SkillBookState, type SkillProgress } from '../src/core/state';
 import type { ClassDef, ClassTier, ElementDef, ElementId, GameData, PassiveDef, SkillDef } from '../src/core/types';
+import { createRegistry } from '../src/data';
 
 // ------------------------------------------------------------------ inline fixture
 
@@ -166,7 +167,7 @@ function stateWith(ranks: Record<string, number>, patch: Partial<SkillBookState>
 const cp = (rank: number, spent: Record<string, number> = {}, xp = 0): ClassProgress => ({ rank, xp, spent });
 
 /** A RequirementContext reading straight from a state (what the SkillBook implements). */
-function ctxOf(state: SkillBookState): RequirementContext {
+function ctxOf(state: SkillBookState, r: Registry = reg): RequirementContext {
   return {
     level: 1,
     hasElement: (id) => !!state.elements[id],
@@ -175,7 +176,7 @@ function ctxOf(state: SkillBookState): RequirementContext {
     flag: (id) => state.flags[id] ?? 0,
     classRank: (id) => state.classes[id]?.rank ?? 0,
     worn: state.worn,
-    tagCount: (tags, minRank) => countTagged(reg, state.skills, tags, minRank),
+    tagCount: (tags, minRank) => countTagged(r, state.skills, tags, minRank),
     itemCount: () => 0,
     lessons: state.lessons,
     witness: (id) => state.witness[id] ?? 0,
@@ -278,6 +279,103 @@ describe('discovery', () => {
     expect(discoverableNow(reg, state, ASCENDANT, ctxOf(state))).toBe(false);
     state.flags.relic_storm = 1;
     expect(discoverableNow(reg, state, ASCENDANT, ctxOf(state))).toBe(true);
+  });
+});
+
+describe('discoverableNow agrees with classProgress', () => {
+  const hasComponents = (c: ClassDef): boolean =>
+    c.clauses.length > 0 || !!c.distinctElements || !!c.parents?.length || !!c.requires?.length;
+
+  function expectAgreement(r: Registry, states: SkillBookState[]): number {
+    let discoverable = 0;
+    for (const state of states) {
+      const ctx = ctxOf(state, r);
+      for (const c of r.classes) {
+        const v = classProgress(r, state, c, ctx);
+        const expected = !v.discovered && v.progress >= 1 && hasComponents(c);
+        expect(discoverableNow(r, state, c, ctx), `${c.id}`).toBe(expected);
+        if (expected) discoverable++;
+      }
+    }
+    return discoverable;
+  }
+
+  it('on the fixture classes', () => {
+    const states = [
+      stateWith({}),
+      stateWith({ slash: 1, whirlwind: 1, throw: 1, 'slash@fire': 1 }),
+      stateWith({ vanish: 1, searing: 1, 'slash@fire': 1, smite: 1 }),
+      stateWith({ slash: 10, whirlwind: 5 }, { classes: { blademaster: cp(10) } }),
+      stateWith({}, { classes: { blademaster: cp(10), sword_saint: cp(6) }, flags: { relic_storm: 1 } }),
+      stateWith({ smite: 1 }, { flags: { [VISITED_FLAG_PREFIX + 'vale.moonlit_glade']: 1 } }),
+    ];
+    expect(expectAgreement(reg, states)).toBeGreaterThan(0);
+  });
+
+  it('on the real classes', () => {
+    const real = createRegistry();
+    const all = Object.fromEntries(real.authoredSkills().map((s) => [s.id, HARDENED_RANK]));
+    const classes = Object.fromEntries(real.classes.map((c) => [c.id, cp(c.tier === 1 ? 10 : 6)]));
+    const half = Object.fromEntries(real.authoredSkills().slice(0, 40).map((s) => [s.id, 3]));
+    const states = [
+      stateWith({}),
+      stateWith(half),
+      stateWith(all),
+      stateWith(all, { classes: Object.fromEntries(Object.entries(classes).filter(([id]) => real.classDef(id)!.tier === 1)) }),
+      stateWith(all, {
+        classes: Object.fromEntries(Object.entries(classes).filter(([id]) => real.classDef(id)!.tier < 3)),
+        flags: { relic_storm: 1, relic_dusk: 1, [VISITED_FLAG_PREFIX + 'vale.moonlit_glade']: 1 },
+      }),
+    ];
+    expect(expectAgreement(real, states)).toBeGreaterThan(0);
+  });
+});
+
+describe('hardened distinct elements', () => {
+  const real = createRegistry();
+  const prism = real.classDef('prism_sage')!;
+  const withElementalist = (ranks: Record<string, number>) =>
+    stateWith(ranks, { classes: { elementalist: cp(10) } });
+
+  it('counts each distinct authored skill for at most one element', () => {
+    expect(prism.distinctElements).toBe(5);
+    const variants = Object.fromEntries(
+      ['fire', 'water', 'earth', 'wind', 'holy'].map((e) => [`slash@${e}`, HARDENED_RANK]),
+    );
+    const state = withElementalist(variants);
+    expect(classProgress(real, state, prism, ctxOf(state, real)).elements).toEqual({ have: 1, need: 5 });
+    expect(discoverableNow(real, state, prism, ctxOf(state, real))).toBe(false);
+  });
+
+  it('counts five distinct authored elemental skills as five', () => {
+    const ids = ['firebolt', 'aqua_lance', 'lightning_bolt', 'wind_cutter', 'holy_light'];
+    const state = withElementalist(Object.fromEntries(ids.map((id) => [id, HARDENED_RANK])));
+    expect(new Set(ids.map((id) => real.skill(id)!.element)).size).toBe(5);
+    expect(classProgress(real, state, prism, ctxOf(state, real)).elements).toEqual({ have: 5, need: 5 });
+    expect(discoverableNow(real, state, prism, ctxOf(state, real))).toBe(true);
+    // Below the hardened rank one of them stops counting.
+    state.skills.holy_light.rank = HARDENED_RANK - 1;
+    expect(classProgress(real, state, prism, ctxOf(state, real)).elements?.have).toBe(4);
+  });
+
+  it('uses a true matching, not min(elements, skills)', () => {
+    // firebolt {fire}, flame_spin {fire}, slash {water, earth}: 3 elements and 3 skills, but both
+    // fire skills compete for fire, so only 2 skills can each claim a distinct element.
+    const state = withElementalist({
+      firebolt: HARDENED_RANK,
+      flame_spin: HARDENED_RANK,
+      'slash@water': HARDENED_RANK,
+      'slash@earth': HARDENED_RANK,
+    });
+    expect(classProgress(real, state, prism, ctxOf(state, real)).elements?.have).toBe(2);
+    // An augmenting path: aqua_lance takes water, so slash moves to earth → fire, water, earth.
+    state.skills.aqua_lance = prog('aqua_lance', HARDENED_RANK);
+    expect(classProgress(real, state, prism, ctxOf(state, real)).elements?.have).toBe(3);
+  });
+
+  it('keeps Tier I element counting permissive', () => {
+    const state = stateWith({ searing: 1, 'slash@fire': 1, 'slash@holy': 1 });
+    expect(view(state, PRISM).elements).toEqual({ have: 2, need: 2 });
   });
 });
 
@@ -408,6 +506,24 @@ describe('class tree', () => {
     respec(p);
     expect(p.spent).toEqual({});
     expect(classPoints(BLADEMASTER, p)).toBe(10);
+    // Without the class, even a skill node id is refunded (the v1 behaviour).
+    const q = cp(5, { n1: 1, n2: 2, n5: 1 });
+    respec(q);
+    expect(q.spent).toEqual({});
+  });
+
+  it('respec with the class keeps skill nodes bought (their skill is kept)', () => {
+    const real = createRegistry();
+    const assassin = real.classDef('assassin')!;
+    expect(assassin.tree?.find((n) => n.id === 'n5')).toMatchObject({ kind: 'skill', ref: 'shade_cloak', cost: 2 });
+    const p = cp(5, { n1: 1, n2: 2, n5: 1, cap: 0 });
+    respec(p, assassin);
+    expect(p.spent).toEqual({ n5: 1 });
+    expect(classPoints(assassin, p)).toBe(5 * assassin.tier - 2);
+    // A class without a skill node refunds everything.
+    const q = cp(10, { n1: 3, n2: 3, cap: 1 });
+    respec(q, BLADEMASTER);
+    expect(q.spent).toEqual({});
   });
 });
 

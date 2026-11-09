@@ -26,7 +26,7 @@ import {
   type RegionDef,
   type StructureKind,
 } from '../src/core/world/types';
-import { renderAscii, validateMap, validateWorld } from '../src/core/world/validate';
+import { SPAWN_SPREAD, renderAscii, spawnWarnings, validateMap, validateWorld } from '../src/core/world/validate';
 
 const fill = (cols: number, rows: number, ch = '.') => Array.from({ length: rows }, () => ch.repeat(cols));
 
@@ -590,6 +590,26 @@ describe('validateMap', () => {
     expect(rows[4][12]).toBe('@');
     expect(rows[3][12]).toBe('#');
     expect(rows[0][0]).toBe('.');
+  });
+});
+
+describe('spawnWarnings', () => {
+  // A cliff across the map (tiles y 6-7) with a gap only at the far east (x 14-15).
+  const cliff = mk({ layout: ['........', '........', '........', '#######.', '........', '........', '........', '........'] });
+
+  it('warns when a spawn square reaches over a wall onto tiles far from its centre', () => {
+    const over = { ...cliff, spawns: [{ monster: 'jellop', count: 3, cx: 2, cy: 5, r: 3 }] };
+    expect(validateMap(over)).toEqual([]); // a soft rule: never a validateMap error
+    const warns = spawnWarnings(over);
+    expect(warns).toHaveLength(1);
+    // Row y 8 (x 0-5) lies under the cliff: 6 of 30 walkable tiles, far more than 3 × r steps away.
+    expect(warns[0]).toMatch(/spawn jellop at \(2,5\) r 3: 6 of 30 walkable tiles .* more than 9 steps/);
+  });
+
+  it('accepts squares that stay on the centre side, or whose far share is small', () => {
+    expect(spawnWarnings({ ...cliff, spawns: [{ monster: 'jellop', count: 3, cx: 2, cy: 4, r: 2 }] })).toEqual([]);
+    expect(spawnWarnings({ ...cliff, spawns: [{ monster: 'jellop', count: 3, cx: 12, cy: 5, r: 3 }] })).toEqual([]);
+    expect(SPAWN_SPREAD).toEqual({ stepsPerR: 3, maxFarShare: 0.05 });
   });
 });
 

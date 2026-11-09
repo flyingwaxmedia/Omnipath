@@ -52,7 +52,7 @@ export const SWORD_MORPHS: MorphDef[] = [
     to: 'boomerang_blade',
     tier: 2,
     requires: [{ type: 'skill', id: 'whirlwind', rank: 5 }],
-    hint: 'A blade that has learned to spin might learn to come home.',
+    hint: 'A blade that has learned to spin might learn never to stop.',
     // The wind-sprites of the lake and hill bat thrown blades back toward you.
     spark: { threat: 6, minParentRank: 4, families: ['sprite'] },
   },

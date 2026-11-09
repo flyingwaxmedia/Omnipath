@@ -360,7 +360,7 @@ const SEEDS: ClassSeed[] = [
   },
   {
     id: 'runeknight',
-    name: 'Runeknight',
+    name: 'Glyphwarden',
     icon: '⚜️',
     desc: 'Carves runes into steel, and the steel into the ground.',
     hint: 'Etch spells onto steel and drive the steel into stone: a tried Spellblade who is also a tried Earthshaper.',

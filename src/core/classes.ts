@@ -136,19 +136,60 @@ export function clauseCount(
   return n;
 }
 
-/** Distinct elements among known skills (hardened: only skills at rank ≥ HARDENED_RANK). */
+/**
+ * Distinct elements among known skills. Permissive (Tier I): every known skill id's element.
+ * Hardened (Tier II/III): only skills at rank ≥ HARDENED_RANK, and each distinct authored skill (a
+ * variant or merge counting as its base, Registry.baseOf) contributes at most one element — the
+ * size of a maximum matching between authored skills and the elements they carry.
+ */
 function distinctElementCount(
   reg: Registry,
   skills: Readonly<Record<string, SkillProgress>>,
   hardened: boolean,
 ): number {
-  const seen = new Set<string>();
-  for (const [id, progress] of Object.entries(skills)) {
-    if (hardened && progress.rank < HARDENED_RANK) continue;
-    const element = reg.skill(id)?.element;
-    if (element) seen.add(element);
+  if (!hardened) {
+    const seen = new Set<string>();
+    for (const id of Object.keys(skills)) {
+      const element = reg.skill(id)?.element;
+      if (element) seen.add(element);
+    }
+    return seen.size;
   }
-  return seen.size;
+  // Element -> authored bases carrying it (at the hardened rank).
+  const basesOf = new Map<string, Set<string>>();
+  for (const [id, progress] of Object.entries(skills)) {
+    if (progress.rank < HARDENED_RANK) continue;
+    const element = reg.skill(id)?.element;
+    const base = reg.baseOf(id);
+    if (!element || base === undefined) continue;
+    let bases = basesOf.get(element);
+    if (!bases) basesOf.set(element, (bases = new Set()));
+    bases.add(base);
+  }
+  return maxMatching(basesOf);
+}
+
+/**
+ * Size of a maximum bipartite matching from keys to the values they list (augmenting paths,
+ * Kuhn's algorithm): how many keys can each take a distinct value.
+ */
+function maxMatching(edges: ReadonlyMap<string, ReadonlySet<string>>): number {
+  const owner = new Map<string, string>();
+  const augment = (key: string, visited: Set<string>): boolean => {
+    for (const value of edges.get(key) ?? []) {
+      if (visited.has(value)) continue;
+      visited.add(value);
+      const held = owner.get(value);
+      if (held === undefined || augment(held, visited)) {
+        owner.set(value, key);
+        return true;
+      }
+    }
+    return false;
+  };
+  let size = 0;
+  for (const key of edges.keys()) if (augment(key, new Set())) size++;
+  return size;
 }
 
 // ------------------------------------------------------------------ discovery
@@ -230,9 +271,11 @@ export function classProgress(
 }
 
 /**
- * Whether an undiscovered class's requirements are all met right now: every clause count,
- * distinct elements, parent Class Ranks and extra requirement. False for discovered classes and for
- * classes with nothing to satisfy (invalid data, reported by Registry.validate).
+ * Whether an undiscovered class's requirements are all met right now: every parent Class Rank,
+ * extra requirement, distinct elements and clause count (checked in that order, cheapest first,
+ * stopping at the first unmet one). False for discovered classes and for classes with nothing to
+ * satisfy (invalid data, reported by Registry.validate). Agrees with classProgress: true exactly
+ * when an undiscovered class with at least one component has progress 1.
  */
 export function discoverableNow(
   reg: Registry,
@@ -241,8 +284,25 @@ export function discoverableNow(
   ctx: RequirementContext,
 ): boolean {
   if (state.classes[cls.id]) return false;
-  const { fills } = evaluate(reg, state, cls, ctx);
-  return fills.length > 0 && fills.every((f) => f >= 1);
+  let components = 0;
+  for (const p of cls.parents ?? []) {
+    if ((state.classes[p.id]?.rank ?? 0) < p.rank) return false;
+    components++;
+  }
+  for (const req of cls.requires ?? []) {
+    if (!meetsRequirement(req, ctx)) return false;
+    components++;
+  }
+  const hardened = isHardened(cls);
+  if (cls.distinctElements) {
+    if (distinctElementCount(reg, state.skills, hardened) < cls.distinctElements) return false;
+    components++;
+  }
+  for (const clause of cls.clauses) {
+    if (clauseCount(reg, state, clause, hardened) < clause.count) return false;
+    components++;
+  }
+  return components > 0;
 }
 
 // ------------------------------------------------------------------ Class Rank XP
@@ -335,9 +395,20 @@ export function buyNode(cls: ClassDef, progress: ClassProgress, nodeId: string):
   return check;
 }
 
-/** Refunds every node rank of a class tree (mutates `progress`). Safe maps only — the game enforces where. */
-export function respec(progress: ClassProgress): void {
-  progress.spent = {};
+/**
+ * Refunds a class tree (mutates `progress`). Safe maps only — the game enforces where. With `cls`,
+ * every passive and capstone node is refunded but `kind: 'skill'` nodes stay bought, since the skill
+ * they taught is kept (refunding them would make the skill free). Without `cls`, every node rank
+ * is refunded.
+ */
+export function respec(progress: ClassProgress, cls?: ClassDef): void {
+  const kept: Record<string, number> = {};
+  for (const node of cls?.tree ?? []) {
+    if (node.kind !== 'skill' || !Object.hasOwn(progress.spent, node.id)) continue;
+    const rank = progress.spent[node.id];
+    if (rank > 0) kept[node.id] = rank;
+  }
+  progress.spent = kept;
 }
 
 // ------------------------------------------------------------------ imprints

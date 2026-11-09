@@ -3,7 +3,8 @@
 // Enumerates every authored non-buff attack × (no element + every element it can take) × every
 // legal essence set of size 0–2, plus every legal shape merge (± element ± 1 essence; pairs with an
 // authored recipe never merge), and checks:
-// - potentialHits ≤ MAX_HITS, cooldown ≥ 300 ms (authored skills may use 0 = weapon delay), name ≤ 4 words;
+// - potentialHits ≤ MAX_HITS, cooldown ≥ 300 ms (authored skills may use 0 = weapon delay), name ≤ 4 words
+//   whose first word starts with an uppercase letter (a trimmed name never opens on 'of', 'the'…);
 // - damage per SP within ±35%, with NO waivers:
 //   · essence variants: every essence step is budgeted — a 1-essence variant against base (or
 //     base@element), a 2-essence variant against each of its 1-essence subsets. Damage is `power`,
@@ -63,6 +64,7 @@ function checkInvariants(s: SkillDef, out: Report): void {
   const cdOk = s.generated ? s.cooldown >= MIN_COOLDOWN : s.cooldown === 0 || s.cooldown >= MIN_COOLDOWN;
   if (!cdOk) out.invariants.push(`${s.id}: cooldown ${s.cooldown} ms < ${MIN_COOLDOWN}`);
   if (words(s.name) > MAX_NAME_WORDS) out.invariants.push(`${s.id}: name "${s.name}" has ${words(s.name)} words`);
+  if (!/^[A-Z]/.test(s.name)) out.invariants.push(`${s.id}: name "${s.name}" does not start with an uppercase word`);
 }
 
 /** One essence step: `v` is `ref` plus one more essence. */
@@ -161,7 +163,7 @@ describe('procedural skill budget (src/data)', () => {
     expect(merges.checked).toBeGreaterThan(0);
   });
 
-  it('variants: hits ≤ 12, cooldown ≥ 300 ms, names ≤ 4 words', () => {
+  it('variants: hits ≤ 12, cooldown ≥ 300 ms, names ≤ 4 capitalized words', () => {
     expect(variants.invariants, summary(variants.invariants)).toEqual([]);
   });
 
@@ -173,7 +175,7 @@ describe('procedural skill budget (src/data)', () => {
     expect(variants.floor, summary(variants.floor)).toEqual([]);
   });
 
-  it('merges: hits ≤ 12, cooldown ≥ 300 ms, names ≤ 4 words', () => {
+  it('merges: hits ≤ 12, cooldown ≥ 300 ms, names ≤ 4 capitalized words', () => {
     expect(merges.invariants, summary(merges.invariants)).toEqual([]);
   });
 

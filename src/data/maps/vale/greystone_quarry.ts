@@ -110,8 +110,8 @@ const map: MapDef = {
   spawns: [
     { monster: 'mossling', count: 9, cx: 6, cy: 34, r: 5 },
     { monster: 'mossling', count: 7, cx: 34, cy: 4, r: 5 },
-    { monster: 'cragling', count: 7, cx: 34, cy: 11, r: 4 },
-    { monster: 'cragling', count: 6, cx: 34, cy: 35, r: 4 },
+    { monster: 'cragling', count: 7, cx: 34, cy: 11, r: 3 },
+    { monster: 'cragling', count: 6, cx: 34, cy: 35, r: 3 },
     { monster: 'cragling', count: 5, cx: 40, cy: 28, r: 3 },
     { monster: 'boulderback', count: 1, cx: 44, cy: 20, r: 4 },
   ],

@@ -609,7 +609,8 @@ const castDamage = (s: SkillDef): number => s.power * shapeHits(s.shape);
  * hits — equal to max(power) × 1.1 when both parents hit once, and never letting a heavy single hit
  * multiply across a multi-pulse shape. sp = max + 0.6 × min, cooldown = max (≥ 300), tier =
  * min(3, max + 1), maxRank 5, tags and weapons unioned (any-weapon if either parent is), element and
- * status from the primary (else the other parent). Name = primary name + rider noun (≤ 4 words).
+ * status from the primary (else the other parent). Name = primary name + rider noun (≤ 4 words: the
+ * primary's last 3 words, then leading lowercase words dropped — 'Eye of the Storm' → 'Storm Cyclone').
  * `baseId` is the higher-tier parent (ties: the primary), `mergedFrom` the sorted parents.
  */
 export function mergeSkills(a: SkillDef, b: SkillDef): SkillDef | null {
@@ -620,12 +621,14 @@ export function mergeSkills(a: SkillDef, b: SkillDef): SkillDef | null {
   const clamped = clampHits(rider.shape, combineRiders(primary.riders, rider.riders));
   const power = round2((MERGE_POWER * Math.max(castDamage(a), castDamage(b))) / shapeHits(clamped.shape));
   const heir = secondary.tier > primary.tier ? secondary : primary;
-  const nameWords = words(primary.name);
+  // Keep the primary's last words, never starting on a lowercase joiner ('of the Storm' → 'Storm').
+  let kept = words(primary.name).slice(-(MAX_NAME_WORDS - 1));
+  while (kept.length > 1 && /^[a-z]/.test(kept[0])) kept = kept.slice(1);
   const noun = RIDER_NOUN[secondary.shape.kind];
 
   const merged: SkillDef = {
     id: mergeId(a.id, b.id),
-    name: [...nameWords.slice(-(MAX_NAME_WORDS - 1)), noun].join(' '),
+    name: [...kept, noun].join(' '),
     desc: `${primary.desc} Merged with ${secondary.name}${rider.text ? `, it ${rider.text}` : ''}.`,
     icon: primary.icon,
     tier: Math.min(3, Math.max(a.tier, b.tier) + 1),

@@ -22,7 +22,7 @@ export const DAGGER_SKILLS: SkillDef[] = [
   // ---------------------------------------------------------------- T1
   {
     id: 'backstab',
-    name: 'Backstab',
+    name: 'Blindside',
     desc: 'Slip to a blind spot and strike a vital point. High critical chance.',
     icon: '🗡️',
     tier: 1,
@@ -215,7 +215,7 @@ export const DAGGER_SKILLS: SkillDef[] = [
   {
     id: 'umbral_strike',
     name: 'Umbral Strike',
-    desc: 'A backstab delivered from inside the shadows themselves. Wounds bleed.',
+    desc: 'A Blindside delivered from inside the shadows themselves. Wounds bleed.',
     icon: '🌑',
     tier: 2,
     weapons: ['dagger'],
@@ -261,7 +261,7 @@ export const DAGGER_SKILLS: SkillDef[] = [
   {
     id: 'ambush',
     name: 'Ambush',
-    desc: 'Umbral Step straight into a backstab. Devastating opener.',
+    desc: 'Umbral Step straight into a Blindside. Devastating opener.',
     icon: '🐾',
     tier: 2,
     weapons: ['dagger'],

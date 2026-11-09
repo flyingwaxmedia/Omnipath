@@ -810,6 +810,11 @@ export class MapScene extends Phaser.Scene implements GameController {
     this.hotbarDirty = true;
   }
 
+  /** Saves within ~1 s (coalesces bursts such as AoE kills). */
+  requestSave(): void {
+    this.saveT = Math.max(this.saveT, 9);
+  }
+
   // =================================================================== input
 
   private hitSprite(img: Phaser.GameObjects.Image, x: number, y: number): boolean {
@@ -927,6 +932,8 @@ export class MapScene extends Phaser.Scene implements GameController {
       this.uiT = 0;
       this.ui.tick();
       this.combat.updateTargetUi();
+      const w = this.combat.windup;
+      this.ui.setCast(w ? { skill: w.skill, progress: (now - w.start) / Math.max(1, w.until - w.start), remainMs: w.until - now } : null);
       if (this.hotbarDirty && !this.ui.isOpen) {
         this.hotbarDirty = false;
         this.ui.renderHotbar();
@@ -1413,6 +1420,13 @@ export class MapScene extends Phaser.Scene implements GameController {
     this.ui.close();
     this.navStep();
     return { ok: true, message: `Heading for ${mapById(mapId)?.name ?? mapId}.` };
+  }
+
+  /** Stops auto-travel (HUD "Stop" button): forget the target and stand still. */
+  cancelNavigate(): void {
+    if (!this.session.nav) return;
+    this.session.nav = null;
+    if (this.player) this.player.path = [];
   }
 
   /** Auto-travel: walk to the next portal of the route (re-run after each warp). */

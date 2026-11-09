@@ -1,10 +1,13 @@
 import type { MapDef } from '../../../core/world/types';
 
-// Riftmarch — the second hub, a frontier town built on the lip of the Rift. A jagged crack of starry nothing runs in
-// from the north-east and ends at the cobbled plaza, where the Rift Altar stands on its very edge. Ione's Archive (the
-// long hall, NW) faces the plaza; Dask keeps the Rift Waystone at its centre. A plank footbridge crosses the crack to
-// the old watchtower; cottages, a well and a reed pond fill the south. Four roads: west to the Riftgate Road, north to
-// the Frost Shelf, east to the Basalt Steps, south to the Dusk Orchard.
+// Riftmarch — the second hub, a frontier town on the lip of the Rift. A crack of starry void runs in from the
+// north-east rim and cuts diagonally across the town to the south-west, splitting its plaza in two: the Archive
+// Court (NW), where Ione keeps the long hall of records, and the Waystone Court (SE), where Dask tends the Rift
+// Waystone. Two plank footbridges cross the crack — the north road from the Frost Shelf, and the Archive lane down
+// to the Waystone Court — and the Rift Altar stands on the stony lip where that lane lands. A watchtower guards the
+// NE rim; cottages, a well and the frontier camp fill the south and west, with dusk grass creeping in along the
+// road to the orchard. Four gates: west to the Riftgate Road, north to the Frost Shelf, east to the Basalt Steps,
+// south to the Dusk Orchard.
 const map: MapDef = {
   id: 'rift.riftmarch',
   name: 'Riftmarch',
@@ -15,71 +18,73 @@ const map: MapDef = {
   levelBand: null,
   safety: 'safe',
   worldCell: { x: 1, y: 1 },
-  landmark: 'The Rift Altar stands at the tip of a crack of starry void that splits the plaza of Riftmarch.',
+  landmark: 'The Rift Altar stands on the lip of a crack of starry void that splits the plaza of Riftmarch in two.',
   layout: [
-    'TTTTTTTTT..TTTTTT TT',
-    'TTTt,,...,.,..t#  #T',
-    'Tt,...........#  #tT',
-    'T,...........#  #..T',
-    'T.............bb...T',
-    'Tt......++++.# #...T',
-    'T,.....++++++ ....,T',
-    '......++++++++......',
-    '......++++++++......',
-    'T,.....++++++.....,T',
-    'Tt......++++......tT',
-    'T,................,T',
-    'Tt.............--.tT',
-    'T,,...........-~~-tT',
-    'TTt,.....,..,..--..T',
-    'TTTTTTTTT..TTTTTTTTT',
+    'TTTT#########..#  #T',
+    'Tt,hhhhh,hhhh.o  oCC',
+    'Tt....hhhhhh.o  ohhC',
+    'T,..........ob ohhtC',
+    'T.....++++.o bo.hhtC',
+    'T....+++++.o o.hhhhC',
+    '....+++++.o  o.h,hhT',
+    '...+++++.obbo..hhhhT',
+    'T.......o  o++++.,.T',
+    'T,.....o  o+++++....',
+    'T..,..o  o+++++.....',
+    'Tt....o o+++++.....T',
+    'Tt...,......llll..,T',
+    'Tt,....llllllllllltT',
+    'T.ttllllllllllll.ttT',
+    'TTTTTTTTTTT..TTTTTTT',
   ],
   paths: [
-    // west road from the Riftgate Road
-    [[0, 15], [8, 15], [13, 15]],
+    // west road from the Riftgate Road into the Archive Court
+    [[0, 14], [7, 14]],
+    // the Archive lane: over the west footbridge, down to the Waystone Court
+    [[15, 14], [25, 14], [26, 16]],
+    // north road from the Frost Shelf, over the north footbridge
+    [[26, 0], [26, 15]],
     // east road to the Basalt Steps
-    [[26, 15], [33, 15], [39, 15]],
-    // north road to the Frost Shelf
-    [[19, 0], [19, 10]],
+    [[31, 19], [39, 19]],
     // south road to the Dusk Orchard
-    [[19, 21], [18, 26], [19, 31]],
-    // spurs: Archive steps, the footbridge lane to the watchtower, cottage lanes
-    [[14, 13], [10, 10], [7, 9]],
-    [[21, 8], [33, 8]],
-    [[17, 23], [12, 23], [8, 24]],
-    [[20, 22], [26, 23], [30, 22], [34, 22]],
+    [[23, 23], [23, 27], [23, 31]],
+    // spurs: Archive steps, the watchtower, the south-west cottages, the south-east cottages
+    [[7, 7], [10, 10]],
+    [[28, 11], [32, 10]],
+    [[19, 23], [13, 24], [8, 24]],
+    [[36, 20], [36, 26]],
   ],
   structures: [
-    { kind: 'hall', tx: 3, ty: 3 },
-    { kind: 'house', tx: 12, ty: 3 },
-    { kind: 'tower', tx: 34, ty: 6 },
-    { kind: 'tent', tx: 3, ty: 10 },
-    { kind: 'house', tx: 4, ty: 21 },
-    { kind: 'house', tx: 9, ty: 25 },
-    { kind: 'house', tx: 23, ty: 3 },
-    { kind: 'house', tx: 27, ty: 19 },
-    { kind: 'house', tx: 33, ty: 18 },
-    { kind: 'well', tx: 13, ty: 20 },
+    { kind: 'hall', tx: 4, ty: 3 },
+    { kind: 'house', tx: 14, ty: 2 },
+    { kind: 'tower', tx: 32, ty: 6 },
+    { kind: 'house', tx: 34, ty: 12 },
+    { kind: 'tent', tx: 3, ty: 18 },
+    { kind: 'house', tx: 4, ty: 22 },
+    { kind: 'house', tx: 9, ty: 26 },
+    { kind: 'house', tx: 28, ty: 25 },
+    { kind: 'house', tx: 33, ty: 23 },
+    { kind: 'well', tx: 16, ty: 27 },
   ],
   portals: [
-    { id: 'west', tx: 0, ty: 14, w: 2, h: 4, facing: 'w', kind: 'edge', to: { map: 'rift.riftgate_road', portal: 'town' } },
-    { id: 'north', tx: 18, ty: 0, w: 4, h: 2, facing: 'n', kind: 'edge', to: { map: 'rift.frost_shelf', portal: 'south' } },
-    { id: 'east', tx: 38, ty: 14, w: 2, h: 4, facing: 'e', kind: 'edge', to: { map: 'rift.basalt_steps', portal: 'west' } },
-    { id: 'south', tx: 18, ty: 30, w: 4, h: 2, facing: 's', kind: 'edge', to: { map: 'rift.dusk_orchard', portal: 'north' } },
+    { id: 'west', tx: 0, ty: 12, w: 2, h: 4, facing: 'w', kind: 'edge', to: { map: 'rift.riftgate_road', portal: 'town' } },
+    { id: 'north', tx: 26, ty: 0, w: 4, h: 2, facing: 'n', kind: 'edge', to: { map: 'rift.frost_shelf', portal: 'south' } },
+    { id: 'east', tx: 38, ty: 18, w: 2, h: 4, facing: 'e', kind: 'edge', to: { map: 'rift.basalt_steps', portal: 'west' } },
+    { id: 'south', tx: 22, ty: 30, w: 4, h: 2, facing: 's', kind: 'edge', to: { map: 'rift.dusk_orchard', portal: 'north' } },
   ],
   spawns: [],
   npcs: [
-    { npc: 'ione', tx: 6, ty: 8 },
-    { npc: 'dask', tx: 21, ty: 14 },
+    { npc: 'ione', tx: 13, ty: 10 },
+    { npc: 'dask', tx: 28, ty: 18 },
   ],
   objects: [
-    { id: 'waystone', kind: 'waystone', tx: 19, ty: 14 },
-    { id: 'altar', kind: 'altar', tx: 25, ty: 12 },
+    { id: 'waystone', kind: 'waystone', tx: 26, ty: 19 },
+    { id: 'altar', kind: 'altar', tx: 22, ty: 17 },
     {
       id: 'signpost',
       kind: 'signpost',
-      tx: 15,
-      ty: 18,
+      tx: 21,
+      ty: 25,
       text: 'Riftmarch — West: Riftgate Road · North: Frost Shelf · East: Basalt Steps · South: Dusk Orchard',
     },
   ],

@@ -103,7 +103,7 @@ export const STAFF_SKILLS: SkillDef[] = [
   {
     id: 'arcane_barrage',
     name: 'Arcane Barrage',
-    desc: 'Split your nova into a volley of seeking darts.',
+    desc: 'Split your nova into a volley of darts.',
     icon: '🎆',
     tier: 2,
     weapons: ['staff'],
@@ -209,7 +209,7 @@ export const STAFF_SKILLS: SkillDef[] = [
   // ---------------------------------------------------------------- alternate: firebolt → meteor
   {
     id: 'firebolt',
-    name: 'Firebolt',
+    name: 'Ember Dart',
     desc: 'An arcane bolt set alight. Cheap, fast, and burning.',
     icon: '🔥',
     tier: 1,
@@ -257,8 +257,8 @@ export const STAFF_SKILLS: SkillDef[] = [
   },
   {
     id: 'lightning_bolt',
-    name: 'Lightning Bolt',
-    desc: 'A bolt of lightning that leaps to a nearby foe.',
+    name: 'Forked Spark',
+    desc: 'A bolt of lightning that leaps to two nearby foes.',
     icon: '⚡',
     tier: 1,
     weapons: ['staff'],
@@ -272,7 +272,7 @@ export const STAFF_SKILLS: SkillDef[] = [
   },
   {
     id: 'wind_cutter',
-    name: 'Wind Cutter',
+    name: 'Twin Gale',
     desc: 'Twin blades of compressed air that knock foes back.',
     icon: '🍃',
     tier: 1,
@@ -287,7 +287,7 @@ export const STAFF_SKILLS: SkillDef[] = [
   },
   {
     id: 'holy_light',
-    name: 'Holy Light',
+    name: 'Dawn Dart',
     desc: 'A lance of sacred light. Mends you a little with every hit.',
     icon: '🌟',
     tier: 1,
@@ -347,7 +347,7 @@ export const STAFF_SKILLS: SkillDef[] = [
   },
   {
     id: 'thunderstorm',
-    name: 'Thunderstorm',
+    name: 'Squall Cell',
     desc: 'Gather a raging storm cell, then loose it over a wide area.',
     icon: '⛈️',
     tier: 3,

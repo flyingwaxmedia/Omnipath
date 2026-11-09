@@ -241,7 +241,7 @@ export const SIGNATURE_SKILLS: SkillDef[] = [
   {
     id: 'runeknight_sig',
     name: 'Runestone Slam',
-    desc: 'Runeknight signature. Drive a rune-carved edge into the ground: runes erupt in a ring ahead, stunning all.',
+    desc: 'Glyphwarden signature. Drive a rune-carved edge into the ground: runes erupt in a ring ahead, stunning all.',
     icon: '🪨',
     tier: 2,
     tags: ['blade', 'arcane', 'heavy', 'aoe'],

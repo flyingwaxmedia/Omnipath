@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { compileMap, mapSizeTiles } from '../src/core/world/compile';
 import { buildPortalGraph, routeMaps } from '../src/core/world/graph';
 import type { Biome, MapDef, MapKind, NodeKind, ObjectKind, PortalDef, PortalGate, PortalReveal } from '../src/core/world/types';
-import { validateMap, validateWorld } from '../src/core/world/validate';
+import { spawnWarnings, validateMap, validateWorld } from '../src/core/world/validate';
 import { MAPS, REGIONS } from '../src/data/world';
 
 type Row = [id: string, kind: MapKind, size: string, biome: Biome, band: [number, number] | null, cell: string, portals: string];
@@ -237,6 +237,10 @@ describe('world rules (SPEC §7.2)', () => {
 
   it('passes validateWorld', () => {
     expect(validateWorld(MAPS, REGIONS)).toEqual([]);
+  });
+
+  it('keeps every spawn square on its centre\'s side of walls and cliffs (spawnWarnings)', () => {
+    expect(MAPS.flatMap((m) => spawnWarnings(m).map((w) => `${m.id}: ${w}`))).toEqual([]);
   });
 
   it('routes from the vale hub to the Riftmarch hub', () => {

@@ -39,7 +39,7 @@ import {
 } from './passives';
 import { elRef, modRef, pairKey, parseRef, skillRef } from './refs';
 import type { Registry } from './registry';
-import { countTagged, describeRequirement, meetsRequirement } from './requirements';
+import { VISITED_FLAG_PREFIX, countTagged, describeRequirement, meetsRequirement } from './requirements';
 import { hashSeed, mulberry32 } from './rng';
 import { BOOK_FLAGS, migrateBookState } from './save';
 import {
@@ -433,6 +433,13 @@ export class SkillBook {
   private readonly tagRanks = new Map<string, number>();
   private evaluating = false;
   private reevaluate = false;
+  /**
+   * True until a full evaluateClasses() run finishes. Loading never runs discovery, so the first
+   * incFlag after construction always evaluates (catch-up for a loaded or migrated save).
+   */
+  private pendingDiscovery: boolean;
+  /** Flag ids that class requirements read (`flag` ids and `visited:<map>`), built on first use. */
+  private classFlagIds?: ReadonlySet<string>;
 
   /**
    * @param state Any saved book (v2, or v1 — migrated by migrateBookState with this registry). It is
@@ -444,6 +451,7 @@ export class SkillBook {
     state?: SkillBookState,
   ) {
     this.state = migrateBookState(state ?? emptyState(), reg);
+    this.pendingDiscovery = true;
     this.ctx = this.makeContext();
     for (const p of this.passives()) if (p.source === 'tag') this.tagRanks.set(p.def.id, p.rank);
   }
@@ -563,13 +571,14 @@ export class SkillBook {
   }
 
   /**
-   * Adds `n` to a flag (world progress: `visited:<mapId>`, `ore_mined`, relic flags…), runs class
-   * discovery, and returns the new value.
+   * Adds `n` to a flag (world progress: `visited:<mapId>`, `ore_mined`, relic flags…) and returns the
+   * new value. Runs class discovery when some class requirement reads this flag, and on the first
+   * call after construction (catch-up for a loaded save); other flags (kills, talks…) skip it.
    */
   incFlag(id: string, n = 1): number {
     const value = this.flag(id) + n;
     this.state.flags[id] = value;
-    this.evaluateClasses();
+    if (this.pendingDiscovery || this.flagsReadByClasses().has(id)) this.evaluateClasses();
     return value;
   }
 
@@ -638,7 +647,9 @@ export class SkillBook {
     if (p.rank >= skill.maxRank) this.fillOverBars(p, skill);
     if (p.charges > startCharges) this.events.emit('charge', { skill, charges: p.charges });
     const classUps = grantClassXp(this.reg, this.state, skill, xp);
-    if (classUps.length > 0) this.invalidate();
+    // A Class Rank changes active passives only when it reaches the imprint CR (imprint unlock and
+    // imprint slots); tree passives follow points spent and tagPower the worn class, not the rank.
+    if (classUps.some((u) => u.rank === CLASS.imprintAt[u.cls.tier])) this.invalidate();
     for (const up of classUps) this.events.emit('classRank', up);
     if (ranked) this.checkTagPassives();
     if (ranked || classUps.length > 0) this.evaluateClasses();
@@ -912,7 +923,7 @@ export class SkillBook {
    * changes (learning, ranks, elements, passives, classes, imprints, bestiary stars); do not mutate.
    */
   totals(): PassiveTotals {
-    return (this.cache.totals ??= aggregate(this.reg, this.state));
+    return (this.cache.totals ??= aggregate(this.reg, this.state, this.passives()));
   }
 
   // ---------------------------------------------------------------- trainers
@@ -977,6 +988,7 @@ export class SkillBook {
         }
         again = discovered || this.reevaluate;
       }
+      this.pendingDiscovery = false;
     } finally {
       this.evaluating = false;
     }
@@ -1007,12 +1019,15 @@ export class SkillBook {
     return { ok: true, message: `${label} rank ${progress.spent[nodeId]}.` };
   }
 
-  /** Refunds every tree point of a discovered class (safe maps; the game enforces where). */
+  /**
+   * Refunds the tree points of a discovered class (safe maps; the game enforces where): every passive
+   * and capstone node. Skill nodes stay bought, since their skill is kept (classes.respec).
+   */
   respec(classId: string): BookOutcome {
     const cls = this.reg.classDef(classId);
     const progress = own(this.state.classes, classId);
     if (!cls || !progress) return { ok: false, message: 'You have not discovered that class.' };
-    respecTree(progress);
+    respecTree(progress, cls);
     this.invalidate();
     return { ok: true, message: `${cls.name} points refunded.` };
   }
@@ -1170,6 +1185,21 @@ export class SkillBook {
 
   private invalidate(): void {
     this.cache = {};
+  }
+
+  /** Flag ids read by some class requirement: `flag` ids and `visited:<map>` for `mapVisited`. */
+  private flagsReadByClasses(): ReadonlySet<string> {
+    if (!this.classFlagIds) {
+      const ids = new Set<string>();
+      for (const cls of this.reg.classes) {
+        for (const req of cls.requires ?? []) {
+          if (req.type === 'flag') ids.add(req.id);
+          else if (req.type === 'mapVisited') ids.add(VISITED_FLAG_PREFIX + req.id);
+        }
+      }
+      this.classFlagIds = ids;
+    }
+    return this.classFlagIds;
   }
 
   private discovered(classId: string): boolean {

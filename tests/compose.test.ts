@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   ESSENCE_BUDGET_BAND,
   MAX_HITS,
+  MAX_NAME_WORDS,
   MIN_COOLDOWN,
   SHAPE_PRIORITY,
   budgetDamage,
@@ -20,6 +21,7 @@ import {
 } from '../src/core/compose';
 import { Registry } from '../src/core/registry';
 import type { ElementDef, EssenceDef, GameData, SkillDef } from '../src/core/types';
+import { createRegistry } from '../src/data';
 
 // ------------------------------------------------------------------ inline fixture
 
@@ -532,6 +534,29 @@ describe('shape merges', () => {
       .sort((a, b) => b[1] - a[1])
       .map(([k]) => k);
     expect(order).toEqual(['dash', 'nova', 'projectile', 'chain', 'spin', 'strike', 'buff']);
+  });
+
+  it('trims a long primary name from the front without opening on a lowercase word (real data)', () => {
+    const real = createRegistry();
+    const eye = real.skill('eye_of_the_storm')!;
+    expect(eye.name).toBe('Eye of the Storm');
+    expect(mergeSkills(eye, real.skill('whirlwind')!)?.name).toBe('Storm Cyclone');
+    expect(mergeSkills(real.skill('crescent_sweep')!, eye)?.name).toBe('Storm Rend');
+    // Every legal merge over the real registry: ≤ 4 words, first word capitalized.
+    const attacks = real.authoredSkills().filter((s) => s.shape.kind !== 'buff');
+    const bad: string[] = [];
+    let n = 0;
+    for (let i = 0; i < attacks.length; i++) {
+      for (let j = i + 1; j < attacks.length; j++) {
+        const m = mergeSkills(attacks[i], attacks[j]);
+        if (!m) continue;
+        n++;
+        const w = m.name.split(/\s+/);
+        if (w.length > MAX_NAME_WORDS || !/^[A-Z]/.test(w[0])) bad.push(`${m.id}: ${m.name}`);
+      }
+    }
+    expect(n).toBeGreaterThan(0);
+    expect(bad).toEqual([]);
   });
 
   it('the higher-priority parent sets the shape; a spin makes projectiles radial', () => {

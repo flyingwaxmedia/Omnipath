@@ -1,26 +1,70 @@
-// Monster techniques (docs/CLIENT-v2.md §6) — minimal working version for the combat-depth stage to deepen.
-// Monsters with techniques sometimes cast one instead of an auto-attack: weighted pick among techniques whose
-// cooldown is ready, whose `hpBelow` holds and whose `range` covers the player. Every technique is telegraphed
-// (nova ellipse, projectile wind-up, dash line, strike cone, spin ring, chain spark) before it resolves.
-// Echo techniques begun at the player within 6 tiles are marked witnessed on the instance (credited on kill).
+// Monster techniques (docs/CLIENT-v2.md §6).
+//
+// Selection: once a monster is engaged it runs on a technique tempo (commons slowest, wardens fastest, enraged
+// wardens faster still). When the tempo slot is open it picks a technique by weight among those whose cooldown is
+// ready, whose `hpBelow` holds and whose `range` covers the player (projectiles, chains and dashes also need a clear
+// line); otherwise it chases and auto-attacks. Wardens under 50 % HP enrage once (roar, red aura, faster tempo, moves
+// and swings faster) and weight their enrage (`hpBelow`) techniques ×3.
+//
+// Every technique is telegraphed in red with the element's colour filling toward impact (a white rim flashes just
+// before it lands): nova = ellipse at the player's position for `delay` ms; projectile = 300 ms wind-up then a real,
+// dodgeable projectile; dash = 400 ms lane, then the dash; strike = 300 ms cone; spin = 400 ms ring; chain = 300 ms
+// charge then a zap (the range ring shows where it reaches). A technique's own `castMs` adds wind-up on top.
+// Damage = monster ATK × skill.power (element neutral vs the player), plus the technique's statuses on the player.
+// Commons and elites can be interrupted by stunning or freezing them mid wind-up; wardens cannot.
+//
+// Echo witness: an echo technique begun at the player within 6 tiles is marked on that instance (a '👁' floater
+// the first time per instance); Combat.kill credits the marks with SkillBook.witness.
 import Phaser from 'phaser';
-import type { MonsterTechnique, SkillDef } from '../../core/types';
+import type { MonsterRank, MonsterTechnique, SkillDef, StatusKind } from '../../core/types';
 import { isBlockedPx } from '../../core/world/compile';
+import { lineClear } from '../../core/world/pathfinding';
+import { esc } from '../../ui/util';
 import type { Monster } from '../entities/Monster';
 import type { MapScene } from '../scenes/MapScene';
 import { TILE } from '../world/runtime';
-import { distToSegment } from './SkillSystem';
+import { distToSegment, fxStyle } from './SkillSystem';
 
 const WITNESS_RANGE = 6 * TILE;
-const TELEGRAPH = 0xff3b3b;
+const DANGER = 0xff3b3b;
 const PLAYER_R = 14;
+/** Telegraph length (ms) per shape; novas use their own `delay` (at least NOVA_MIN). */
+const TELL = { projectile: 300, dash: 400, strike: 300, spin: 400, chain: 300, buff: 400 } as const;
+const NOVA_MIN = 500;
+/** Gap between a technique's pulses / swings so a later one can still be escaped. */
+const PULSE_GAP = 260;
+const SWING_GAP = 220;
+/** Recovery after a technique (a short punish window). */
+const RECOVERY = 220;
+/** Ms between techniques once engaged (min, max). */
+const TEMPO: Record<MonsterRank, [number, number]> = { common: [3200, 4800], elite: [2300, 3300], warden: [1500, 2200] };
+const ENRAGED_TEMPO = 0.7;
+/** First technique after engaging. */
+const OPENING: Record<MonsterRank, [number, number]> = { common: [900, 1800], elite: [700, 1400], warden: [600, 1000] };
+const ENRAGE_WEIGHT = 3;
+/** Ground decal depth: above the tilemap, under every y-sorted sprite. */
+const TELL_DEPTH = -40000;
 
-interface Active {
+interface HitSpec {
+  dmg: number;
+  from: string;
+  statuses: StatusKind[];
+  rank: MonsterRank;
+  skill: SkillDef;
+  color: number;
+}
+
+interface Pending {
   m: Monster;
   skill: SkillDef;
+  start: number;
   at: number;
   gfx: Phaser.GameObjects.Graphics;
+  /** Redraws the telegraph at progress t (0..1). */
+  draw: (g: Phaser.GameObjects.Graphics, t: number) => void;
   resolve: () => void;
+  /** Wind-up (not a follow-up pulse): the monster glows and can be interrupted. */
+  windup: boolean;
 }
 
 interface Shot {
@@ -32,236 +76,393 @@ interface Shot {
   traveled: number;
   range: number;
   size: number;
-  dmg: number;
-  from: string;
-  slow: boolean;
+  spin: number;
+  trailT: number;
+  hit: HitSpec;
+}
+
+interface Sweep {
+  m: Monster;
+  sx: number;
+  sy: number;
+  ex: number;
+  ey: number;
+  w: number;
+  t: number;
+  dur: number;
+  done: boolean;
+  trailT: number;
+  hit: HitSpec;
+}
+
+const between = ([a, b]: [number, number]) => a + Math.random() * (b - a);
+
+/** Statuses a technique puts on the player: its element's status, then its own (holy smite only heals casters). */
+function statusesOf(s: MapScene, skill: SkillDef): StatusKind[] {
+  const out: StatusKind[] = [];
+  const el = skill.element ? s.reg.element(skill.element) : undefined;
+  if (el && el.status !== 'smite') out.push(el.status);
+  if (skill.status && skill.status !== 'smite' && !out.includes(skill.status)) out.push(skill.status);
+  return out;
 }
 
 export class MonsterSkills {
-  private active: Active[] = [];
+  private active: Pending[] = [];
   private shots: Shot[] = [];
+  private sweeps: Sweep[] = [];
 
   constructor(private s: MapScene) {}
+
+  // ---------------------------------------------------------------- selection
 
   /** A hostile monster at distance `dist` may start a technique. True when it did (skip the auto-attack). */
   tryStart(m: Monster, now: number, dist: number): boolean {
     const techs = m.def.techniques;
-    if (!techs?.length || now < m.nextTechRoll || now < m.busyUntil) return false;
-    m.nextTechRoll = now + (m.warden ? 700 : 1100);
+    if (!techs?.length || now < m.busyUntil) return false;
+    if (!m.nextTechAt) {
+      m.nextTechAt = now + between(OPENING[m.def.rank]);
+      return false;
+    }
+    if (now < m.nextTechAt) return false;
+    const s = this.s;
+    const p = s.player;
     const hpFrac = m.hp / m.maxHp;
-    const ready = techs.filter(
-      (t) =>
-        (m.techReadyAt.get(t.skill) ?? 0) <= now &&
-        (t.hpBelow === undefined || hpFrac < t.hpBelow) &&
-        dist <= t.range &&
-        !!this.s.reg.skill(t.skill),
-    );
-    if (!ready.length) return false;
-    const chance = m.warden ? 0.75 : m.elite ? 0.5 : 0.35;
-    if (Math.random() > chance) return false;
-    const enraged = m.warden && hpFrac < 0.5;
-    const weight = (t: MonsterTechnique) => t.weight * (t.hpBelow !== undefined ? (enraged ? 3 : 2) : 1);
-    let roll = Math.random() * ready.reduce((a, t) => a + weight(t), 0);
+    let clear: boolean | null = null;
+    const los = () => (clear ??= lineClear(s.cm, m.x, m.y, p.x, p.y));
+    const ready: { t: MonsterTechnique; skill: SkillDef }[] = [];
+    for (const t of techs) {
+      if ((m.techReadyAt.get(t.skill) ?? 0) > now) continue;
+      if (t.hpBelow !== undefined && hpFrac >= t.hpBelow) continue;
+      if (dist > t.range) continue;
+      const skill = s.reg.skill(t.skill);
+      if (!skill) continue;
+      const k = skill.shape.kind;
+      if ((k === 'projectile' || k === 'chain' || k === 'dash') && !los()) continue;
+      if (k === 'dash' && dist < m.radius + 30) continue;
+      ready.push({ t, skill });
+    }
+    if (!ready.length) {
+      m.nextTechAt = now + 350;
+      return false;
+    }
+    const weight = (t: MonsterTechnique) => t.weight * (m.enraged && t.hpBelow !== undefined ? ENRAGE_WEIGHT : 1);
+    let roll = Math.random() * ready.reduce((a, r) => a + weight(r.t), 0);
     let pick = ready[0];
-    for (const t of ready) {
-      roll -= weight(t);
+    for (const r of ready) {
+      roll -= weight(r.t);
       if (roll <= 0) {
-        pick = t;
+        pick = r;
         break;
       }
     }
-    m.techReadyAt.set(pick.skill, now + pick.cooldown);
-    this.start(m, pick, this.s.reg.skill(pick.skill)!, now, dist);
+    m.techReadyAt.set(pick.t.skill, now + pick.t.cooldown);
+    const dur = this.start(m, pick.t, pick.skill, now, dist);
+    m.nextTechAt = now + dur + between(TEMPO[m.def.rank]) * (m.enraged ? ENRAGED_TEMPO : 1);
     return true;
   }
 
-  private start(m: Monster, tech: MonsterTechnique, skill: SkillDef, now: number, dist: number): void {
+  /** Warden below 50 % HP: a roar (stagger, shake, red rings), then faster tempo and enrage techniques. */
+  enrage(m: Monster, now: number): void {
+    const s = this.s;
+    m.enraged = true;
+    s.floatText(m.x, m.y - m.sprite.displayHeight - 22, '💢 ENRAGED', '#ff6a4a', 17);
+    s.ui.toast(`💢 <b>${esc(m.def.name)}</b> is enraged!`);
+    s.ui.log(`💢 <b>${esc(m.def.name)}</b> is enraged — it strikes faster and harder to read. Watch the red.`, 'warn');
+    s.cameras.main.shake(260, 0.008);
+    s.skills.fxRing(m.x, m.y - 8, m.radius * 2.4, 0xff3b1a, false);
+    s.time.delayedCall(160, () => m.alive && s.skills.fxRing(m.x, m.y - 8, m.radius * 3.2, 0xff6a2a, false));
+    s.skills.fxBurst(m.x, m.y - 20, 0xff5a3a, 24);
+    m.chargeColor = 0xff3b1a;
+    if (now >= m.busyUntil) {
+      m.busyUntil = now + 600;
+      s.tweens.addCounter({ from: 1, to: 0, duration: 600, onUpdate: (tw) => (m.charge = tw.getValue() ?? 0) });
+    }
+    m.nextTechAt = Math.min(m.nextTechAt || now + 700, now + 700);
+    s.combat.updateTargetUi();
+  }
+
+  // ---------------------------------------------------------------- techniques
+
+  /** Starts a technique; returns how long it runs (telegraphs + follow-ups) in ms. */
+  private start(m: Monster, tech: MonsterTechnique, skill: SkillDef, now: number, dist: number): number {
     const s = this.s;
     const p = s.player;
     m.facing = p.x > m.x ? 1 : -1;
     // Echo witness: the technique begins at the player within 6 tiles.
     if (tech.echo && dist <= WITNESS_RANGE && !s.book.has(skill.id) && !m.witnessed.has(skill.id)) {
       m.witnessed.add(skill.id);
-      s.floatText(m.x, m.y - m.sprite.displayHeight - 14, '👁', '#e8f4ff', 14);
+      if (!m.eyeShown) {
+        m.eyeShown = true;
+        s.floatText(m.x, m.y - m.sprite.displayHeight - 18, '👁', '#e8f4ff', 17);
+      }
     }
-    const dmg = Math.max(1, Math.round(m.def.atk * skill.power));
-    const from = `${m.def.name}'s ${skill.name}`;
-    const slow =
-      skill.element === 'water' || skill.element === 'ice' || skill.status === 'slow' || skill.status === 'freeze' || skill.status === 'soak';
-    const color = skill.element ? (s.reg.element(skill.element)?.color ?? TELEGRAPH) : TELEGRAPH;
-    const gfx = s.add.graphics().setDepth(-40000);
+    const color = skill.element ? (s.reg.element(skill.element)?.color ?? DANGER) : DANGER;
+    const hit: HitSpec = {
+      dmg: Math.max(1, Math.round(m.atk(now) * skill.power)),
+      from: `${m.def.name}'s ${skill.name}`,
+      statuses: statusesOf(s, skill),
+      rank: m.def.rank,
+      skill,
+      color,
+    };
+    m.chargeColor = color;
+    s.floatText(m.x, m.y - m.sprite.displayHeight - 2, `${skill.icon} ${skill.name}`, '#ffc8b8', 12);
+    const wind = skill.castMs ?? 0;
     const sh = skill.shape;
-    const hitPlayer = () => s.combat.hurtPlayer(dmg, from, { slow });
-    let delay = 400;
-    let resolve: () => void = () => undefined;
-    s.floatText(m.x, m.y - m.sprite.displayHeight - 2, skill.name, '#ffb0a0', 11);
-
+    let total = 0;
     switch (sh.kind) {
       case 'nova': {
         const cx = p.x;
         const cy = p.y;
         const r = sh.radius;
-        delay = Math.max(600, sh.delay ?? 0);
-        this.pulse(gfx, delay, (t) => {
-          gfx.clear();
-          gfx.fillStyle(TELEGRAPH, 0.12 + t * 0.15).fillEllipse(cx, cy, r * 2, r * 1.3);
-          gfx.lineStyle(2, TELEGRAPH, 0.9).strokeEllipse(cx, cy, r * 2, r * 1.3);
-          gfx.fillStyle(color, 0.3).fillEllipse(cx, cy, r * 2 * t, r * 1.3 * t);
+        total = Math.max(NOVA_MIN, sh.delay ?? 0) + wind;
+        this.tell(m, skill, now, total, true, (g, t) => this.zone(g, cx, cy, r, r * 0.65, t, color), () => {
+          s.skills.fxNova(cx, cy, r, color, skill.element, skill.power >= 2 || skill.tags.includes('heavy'));
+          if (m.warden) s.cameras.main.shake(160, 0.007);
+          if (Math.hypot((p.x - cx) / r, (p.y - cy) / (r * 0.65)) <= 1) this.hitPlayer(hit, { x: cx, y: cy });
         });
-        resolve = () => {
-          s.skills.fxRing(cx, cy, r, color, false);
-          s.skills.fxBurst(cx, cy, color, 14);
-          if (m.warden) s.cameras.main.shake(150, 0.007);
-          if (Math.hypot((p.x - cx) / r, (p.y - cy) / (r * 0.65)) <= 1) hitPlayer();
-        };
         break;
       }
       case 'projectile': {
-        delay = 300;
-        this.pulse(gfx, delay, (t) => {
-          gfx.clear();
-          gfx.fillStyle(color, 0.25 + 0.4 * t).fillCircle(m.x, m.y - 16, 6 + 6 * t);
-        });
-        resolve = () => {
-          const count = sh.count ?? 1;
-          const spread = ((sh.spread ?? (count > 1 ? 30 : 0)) * Math.PI) / 180;
-          const base = Math.atan2(p.y - m.y, p.x - m.x);
-          for (let i = 0; i < count; i++) {
-            const a = count > 1 ? base - spread / 2 + (spread * i) / (count - 1) : base;
-            this.shoot(m, a, sh.speed, sh.range, sh.size ?? 12, dmg, from, slow, color);
-          }
-        };
+        total = TELL.projectile + wind;
+        const count = sh.count ?? 1;
+        const spread = ((sh.spread ?? (count > 1 ? 30 : 0)) * Math.PI) / 180;
+        this.tell(
+          m,
+          skill,
+          now,
+          total,
+          true,
+          (g, t) => {
+            const mx = m.x;
+            const my = m.y - Math.min(30, m.sprite.displayHeight * 0.5);
+            const base = Math.atan2(p.y - m.y, p.x - m.x);
+            const len = Math.min(sh.range, Math.hypot(p.x - m.x, p.y - m.y) + 30);
+            for (let i = 0; i < count; i++) {
+              const a = count > 1 ? base - spread / 2 + (spread * i) / (count - 1) : base;
+              this.dashed(g, mx, my, mx + Math.cos(a) * len, my + Math.sin(a) * len, DANGER, 0.25 + 0.5 * t);
+            }
+            g.fillStyle(color, 0.35 + 0.45 * t).fillCircle(mx, my, 5 + 7 * t);
+            g.fillStyle(0xffffff, 0.7 * t).fillCircle(mx, my, 2 + 3 * t);
+          },
+          () => {
+            const base = Math.atan2(p.y - m.y, p.x - m.x);
+            for (let i = 0; i < count; i++) {
+              const a = count > 1 ? base - spread / 2 + (spread * i) / (count - 1) : base;
+              this.shoot(m, a, sh.speed, sh.range, sh.size ?? 12, hit);
+            }
+          },
+        );
         break;
       }
       case 'dash': {
-        delay = 400;
+        total = TELL.dash + wind;
         const a = Math.atan2(p.y - m.y, p.x - m.x);
-        const sx = m.x;
-        const sy = m.y;
-        let ex = sx;
-        let ey = sy;
-        for (let d = 8; d <= sh.distance; d += 8) {
-          const nx = sx + Math.cos(a) * d;
-          const ny = sy + Math.sin(a) * d;
-          if (isBlockedPx(s.cm, nx, ny)) break;
-          ex = nx;
-          ey = ny;
-        }
         const w = Math.max(24, sh.width);
-        this.pulse(gfx, delay, (t) => {
-          gfx.clear();
-          gfx.lineStyle(w, TELEGRAPH, 0.12 + 0.18 * t).lineBetween(sx, sy, ex, ey);
-          gfx.lineStyle(2, TELEGRAPH, 0.8).lineBetween(sx, sy, ex, ey);
-        });
-        resolve = () => {
-          s.tweens.addCounter({
-            from: 0,
-            to: 1,
-            duration: 180,
-            onUpdate: (tw) => {
-              const t = tw.getValue() ?? 0;
-              m.x = sx + (ex - sx) * t;
-              m.y = sy + (ey - sy) * t;
-            },
-          });
-          s.time.delayedCall(110, () => {
-            if (m.alive && distToSegment(p.x, p.y, sx, sy, ex, ey) <= w / 2 + PLAYER_R) hitPlayer();
-          });
-        };
+        this.tell(
+          m,
+          skill,
+          now,
+          total,
+          true,
+          (g, t) => {
+            const [ex, ey] = this.dashEnd(m.x, m.y, a, sh.distance);
+            g.lineStyle(w, DANGER, 0.12 + 0.12 * t).lineBetween(m.x, m.y, ex, ey);
+            g.lineStyle(w * 0.55, color, 0.18 + 0.2 * t).lineBetween(m.x, m.y, m.x + (ex - m.x) * t, m.y + (ey - m.y) * t);
+            const nx = -Math.sin(a) * (w / 2);
+            const ny = Math.cos(a) * (w / 2);
+            g.lineStyle(2, DANGER, 0.85);
+            g.lineBetween(m.x + nx, m.y + ny, ex + nx, ey + ny);
+            g.lineBetween(m.x - nx, m.y - ny, ex - nx, ey - ny);
+            // Arrow head at the far end.
+            const hx = ex + Math.cos(a) * 10;
+            const hy = ey + Math.sin(a) * 10;
+            g.fillStyle(t > 0.8 ? 0xffffff : DANGER, 0.85).fillTriangle(hx, hy, ex + nx * 0.8, ey + ny * 0.8, ex - nx * 0.8, ey - ny * 0.8);
+          },
+          () => {
+            const [ex, ey] = this.dashEnd(m.x, m.y, a, sh.distance);
+            const len = Math.hypot(ex - m.x, ey - m.y);
+            this.sweeps.push({ m, sx: m.x, sy: m.y, ex, ey, w, t: 0, dur: Math.max(140, len / 1.1), done: false, trailT: 0, hit });
+          },
+        );
+        total += Math.max(140, sh.distance / 1.1);
         break;
       }
       case 'strike': {
-        delay = 300;
+        const hits = sh.hits ?? 1;
         const a = Math.atan2(p.y - m.y, p.x - m.x);
         const arc = (sh.arc * Math.PI) / 180;
         const range = sh.range + m.radius;
-        this.pulse(gfx, delay, (t) => {
-          gfx.clear();
-          gfx.fillStyle(TELEGRAPH, 0.12 + 0.2 * t);
-          gfx.slice(m.x, m.y, range, a - arc / 2, a + arc / 2, false).fillPath();
-        });
-        resolve = () => {
-          s.skills.fxArc(m.x, m.y - 10, a, arc, range, color, false);
+        const style = s.skills.strikeStyle(skill, true);
+        const swing = () => {
+          s.skills.fxStrike(m.x, m.y - 10, a, arc, range, color, false, style, skill.element);
           const d = Math.hypot(p.x - m.x, p.y - m.y);
           let diff = Math.atan2(p.y - m.y, p.x - m.x) - a;
           while (diff > Math.PI) diff -= Math.PI * 2;
           while (diff < -Math.PI) diff += Math.PI * 2;
-          if (d <= range + PLAYER_R && (Math.abs(diff) <= arc / 2 || d < m.radius + PLAYER_R)) hitPlayer();
+          if (d <= range + PLAYER_R && (Math.abs(diff) <= arc / 2 + Math.atan2(PLAYER_R, Math.max(1, d)) || d < m.radius + PLAYER_R)) this.hitPlayer(hit, { x: m.x, y: m.y });
         };
+        total = TELL.strike + wind;
+        this.tell(m, skill, now, total, true, (g, t) => this.cone(g, m.x, m.y, range, a, arc, t, color), swing);
+        for (let h = 1; h < hits; h++) {
+          this.tell(m, skill, now + total + (h - 1) * SWING_GAP, SWING_GAP, false, (g, t) => this.cone(g, m.x, m.y, range, a, arc, 0.5 + t * 0.5, color), swing);
+        }
+        total += (hits - 1) * SWING_GAP;
         break;
       }
       case 'spin': {
-        delay = 400;
+        const pulses = sh.pulses ?? 1;
         const r = sh.radius + m.radius;
-        this.pulse(gfx, delay, (t) => {
-          gfx.clear();
-          gfx.lineStyle(3, TELEGRAPH, 0.5 + 0.4 * t).strokeEllipse(m.x, m.y, r * 2, r * 1.3);
-          gfx.fillStyle(TELEGRAPH, 0.1 + 0.15 * t).fillEllipse(m.x, m.y, r * 2, r * 1.3);
-        });
-        resolve = () => {
-          s.skills.fxRing(m.x, m.y - 6, r, color, true);
-          if (Math.hypot((p.x - m.x) / r, (p.y - m.y) / (r * 0.65)) <= 1) hitPlayer();
+        const pulse = () => {
+          s.skills.fxSpin(m.x, m.y - 6, r, color, skill.element);
+          if (Math.hypot((p.x - m.x) / r, (p.y - m.y) / (r * 0.65)) <= 1) this.hitPlayer(hit, { x: m.x, y: m.y });
         };
+        total = TELL.spin + wind;
+        this.tell(m, skill, now, total, true, (g, t) => this.zone(g, m.x, m.y, r, r * 0.65, t, color), pulse);
+        for (let i = 1; i < pulses; i++) {
+          this.tell(m, skill, now + total + (i - 1) * PULSE_GAP, PULSE_GAP, false, (g, t) => this.zone(g, m.x, m.y, r, r * 0.65, 0.4 + 0.6 * t, color), pulse);
+        }
+        total += (pulses - 1) * PULSE_GAP;
         break;
       }
       case 'chain': {
-        delay = 300;
+        total = TELL.chain + wind;
         const range = sh.range;
-        this.pulse(gfx, delay, (t) => {
-          gfx.clear();
-          gfx.fillStyle(color, 0.3 + 0.5 * t).fillCircle(m.x, m.y - 18, 4 + 5 * t);
-        });
-        resolve = () => {
-          if (Math.hypot(p.x - m.x, p.y - m.y) <= range + PLAYER_R) {
-            s.skills.fxLightning(
-              [
-                { x: m.x, y: m.y - 18 },
-                { x: p.x, y: p.y - 16 },
-              ],
-              color,
-            );
-            hitPlayer();
-          }
-        };
+        this.tell(
+          m,
+          skill,
+          now,
+          total,
+          true,
+          (g, t) => {
+            const my = m.y - Math.min(30, m.sprite.displayHeight * 0.5);
+            g.lineStyle(2, DANGER, 0.2 + 0.3 * t).strokeEllipse(m.x, m.y, range * 2, range * 1.3);
+            g.fillStyle(color, 0.35 + 0.5 * t).fillCircle(m.x, my, 4 + 6 * t);
+            for (let k = 0; k < 3; k++) {
+              const ka = Math.random() * Math.PI * 2;
+              g.lineStyle(1.5, 0xffffff, 0.8 * t).lineBetween(m.x, my, m.x + Math.cos(ka) * (8 + 10 * t), my + Math.sin(ka) * (8 + 10 * t));
+            }
+          },
+          () => {
+            const my = m.y - Math.min(30, m.sprite.displayHeight * 0.5);
+            if (Math.hypot(p.x - m.x, p.y - m.y) <= range + PLAYER_R && lineClear(s.cm, m.x, m.y, p.x, p.y)) {
+              s.skills.fxLightning([{ x: m.x, y: my }, { x: p.x, y: p.y - 18 }], color);
+              this.hitPlayer(hit, { x: m.x, y: m.y });
+            } else s.skills.fxBurst(m.x, my, color, 6);
+          },
+        );
         break;
       }
-      case 'buff':
-        delay = 400;
-        this.pulse(gfx, delay, (t) => {
-          gfx.clear();
-          gfx.lineStyle(2, color, 0.8).strokeEllipse(m.x, m.y, 40 + 20 * t, 16 + 8 * t);
-        });
-        resolve = () => s.skills.fxRing(m.x, m.y, 40, color, false);
+      case 'buff': {
+        total = TELL.buff + wind;
+        const bs = sh;
+        const bc = s.combat.buffColor(bs.stat);
+        this.tell(
+          m,
+          skill,
+          now,
+          total,
+          true,
+          (g, t) => {
+            g.lineStyle(3, bc, 0.5 + 0.4 * t).strokeEllipse(m.x, m.y, (m.radius * 2 + 20) * (1 + 0.3 * t), (m.radius + 10) * (1 + 0.3 * t));
+          },
+          () => {
+            const until = s.time.now + bs.duration;
+            m.buffs = m.buffs.filter((b) => b.stat !== bs.stat);
+            m.buffs.push({ stat: bs.stat, amount: bs.amount, until, color: bc });
+            s.skills.fxRing(m.x, m.y, m.radius * 2 + 10, bc, false);
+            s.floatText(m.x, m.y - m.sprite.displayHeight - 14, `${skill.icon} ${bs.stat.toUpperCase()} ↑`, '#ffe9a0', 12);
+          },
+        );
         break;
+      }
     }
-    m.busyUntil = now + delay + 220;
-    m.nextAttack = Math.max(m.nextAttack, now + delay + 400);
-    this.active.push({ m, skill, at: now + delay, gfx, resolve });
+    m.busyUntil = now + total + RECOVERY;
+    m.nextAttack = Math.max(m.nextAttack, now + total + 400);
+    return total;
   }
 
-  /** Redraws a telegraph with progress 0..1 every frame until it resolves. */
-  private pulse(gfx: Phaser.GameObjects.Graphics, duration: number, draw: (t: number) => void): void {
-    draw(0);
-    this.s.tweens.addCounter({
-      from: 0,
-      to: 1,
-      duration,
-      onUpdate: (tw) => {
-        if (gfx.active) draw(tw.getValue() ?? 0);
-      },
-    });
+  private tell(m: Monster, skill: SkillDef, start: number, dur: number, windup: boolean, draw: Pending['draw'], resolve: () => void): void {
+    const gfx = this.s.add.graphics().setDepth(TELL_DEPTH);
+    const at = start + dur;
+    const p: Pending = { m, skill, start, at, gfx, draw, resolve, windup };
+    if (start <= this.s.time.now) draw(gfx, 0);
+    this.active.push(p);
   }
 
-  private shoot(m: Monster, a: number, speed: number, range: number, size: number, dmg: number, from: string, slow: boolean, color: number) {
-    const img = this.s.add
-      .image(m.x, m.y - 14, 'fx_orb')
-      .setTint(color)
-      .setScale(size / 16)
-      .setBlendMode(Phaser.BlendModes.ADD);
-    this.shots.push({ img, x: m.x, y: m.y, vx: Math.cos(a) * speed, vy: Math.sin(a) * speed, traveled: 0, range, size, dmg, from, slow });
+  /** Where a dash from (x, y) toward `a` stops (walls and closed gates end it early). */
+  private dashEnd(x: number, y: number, a: number, distance: number): [number, number] {
+    let ex = x;
+    let ey = y;
+    for (let d = 8; d <= distance; d += 8) {
+      const nx = x + Math.cos(a) * d;
+      const ny = y + Math.sin(a) * d;
+      if (isBlockedPx(this.s.cm, nx, ny)) break;
+      ex = nx;
+      ey = ny;
+    }
+    return [ex, ey];
   }
+
+  // ---------------------------------------------------------------- telegraph drawing
+
+  /** Danger ellipse: red rim, element fill growing to the rim at impact, a white rim in the last 20 %. */
+  private zone(g: Phaser.GameObjects.Graphics, x: number, y: number, rx: number, ry: number, t: number, color: number): void {
+    g.fillStyle(DANGER, 0.1 + 0.1 * t).fillEllipse(x, y, rx * 2, ry * 2);
+    g.fillStyle(color, 0.2 + 0.2 * t).fillEllipse(x, y, rx * 2 * t, ry * 2 * t);
+    g.lineStyle(3, DANGER, 0.9).strokeEllipse(x, y, rx * 2, ry * 2);
+    if (t > 0.8) g.lineStyle(2, 0xffffff, Math.min(1, (t - 0.8) * 5)).strokeEllipse(x, y, rx * 2 - 5, ry * 2 - 4);
+  }
+
+  /** Danger cone from (x, y) toward `a`. */
+  private cone(g: Phaser.GameObjects.Graphics, x: number, y: number, range: number, a: number, arc: number, t: number, color: number): void {
+    g.fillStyle(DANGER, 0.12 + 0.1 * t);
+    g.slice(x, y, range, a - arc / 2, a + arc / 2, false);
+    g.fillPath();
+    g.fillStyle(color, 0.2 + 0.2 * t);
+    g.slice(x, y, Math.max(1, range * t), a - arc / 2, a + arc / 2, false);
+    g.fillPath();
+    g.lineStyle(3, t > 0.8 ? 0xffffff : DANGER, 0.9);
+    g.slice(x, y, range, a - arc / 2, a + arc / 2, false);
+    g.strokePath();
+  }
+
+  private dashed(g: Phaser.GameObjects.Graphics, x0: number, y0: number, x1: number, y1: number, color: number, alpha: number): void {
+    const len = Math.hypot(x1 - x0, y1 - y0);
+    const n = Math.max(1, Math.floor(len / 14));
+    g.lineStyle(2, color, alpha);
+    for (let i = 0; i < n; i++) {
+      const t0 = i / n;
+      const t1 = (i + 0.55) / n;
+      g.lineBetween(x0 + (x1 - x0) * t0, y0 + (y1 - y0) * t0, x0 + (x1 - x0) * t1, y0 + (y1 - y0) * t1);
+    }
+  }
+
+  // ---------------------------------------------------------------- hits
+
+  private hitPlayer(hit: HitSpec, source: { x: number; y: number }): void {
+    const s = this.s;
+    const dealt = s.combat.hurtPlayer(hit.dmg, hit.from, { statuses: hit.statuses, source, rank: hit.rank });
+    if (dealt > 0) s.skills.fxImpactAt(s.player.x, s.player.y - 20, hit.skill, hit.color, 5);
+  }
+
+  private shoot(m: Monster, a: number, speed: number, range: number, size: number, hit: HitSpec): void {
+    const s = this.s;
+    const look = s.skills.lookFor(hit.skill, size);
+    const y = m.y - Math.min(30, m.sprite.displayHeight * 0.5);
+    const img = s.add
+      .image(m.x, y, look.key)
+      .setTint(hit.color)
+      .setScale(look.scale)
+      .setRotation(a)
+      .setBlendMode(look.add ? Phaser.BlendModes.ADD : Phaser.BlendModes.NORMAL);
+    this.shots.push({ img, x: m.x, y: m.y, vx: Math.cos(a) * speed, vy: Math.sin(a) * speed, traveled: 0, range, size, spin: look.spin, trailT: 0, hit });
+  }
+
+  // ---------------------------------------------------------------- update
 
   update(dt: number, now: number): void {
+    const s = this.s;
     for (let i = this.active.length - 1; i >= 0; i--) {
       const a = this.active[i];
       if (!a.m.alive) {
@@ -269,13 +470,51 @@ export class MonsterSkills {
         this.active.splice(i, 1);
         continue;
       }
+      // Stunning or freezing a common or elite mid wind-up interrupts it (wardens push through).
+      if (a.windup && !a.m.warden && a.m.stunned && now < a.at) {
+        this.interrupt(a.m);
+        continue;
+      }
+      if (now < a.start) continue;
+      const t = Math.min(1, (now - a.start) / Math.max(1, a.at - a.start));
+      a.gfx.clear();
+      a.draw(a.gfx, t);
+      if (a.windup) a.m.charge = t;
       if (now >= a.at) {
         a.gfx.destroy();
-        this.active.splice(i, 1);
+        const idx = this.active.indexOf(a);
+        if (idx >= 0) this.active.splice(idx, 1);
+        if (a.windup) a.m.charge = 0;
         a.resolve();
       }
     }
-    const p = this.s.player;
+    for (let i = this.sweeps.length - 1; i >= 0; i--) {
+      const w = this.sweeps[i];
+      const m = w.m;
+      if (!m.alive) {
+        this.sweeps.splice(i, 1);
+        continue;
+      }
+      w.t = Math.min(1, w.t + (dt * 1000) / w.dur);
+      m.x = w.sx + (w.ex - w.sx) * w.t;
+      m.y = w.sy + (w.ey - w.sy) * w.t;
+      w.trailT -= dt;
+      if (w.trailT <= 0) {
+        w.trailT = 0.025;
+        if (w.hit.skill.element) s.skills.mote(m.x, m.y - 10, w.hit.color, fxStyle(w.hit.skill.element), 0.7);
+        else s.skills.particle(m.x, m.y - 6, 0xd8c8b0, 0, -10, 300, 0.7, { add: false, endScale: 1.4 });
+      }
+      const p = s.player;
+      if (!w.done && distToSegment(p.x, p.y, w.sx, w.sy, m.x, m.y) <= w.w / 2 + PLAYER_R) {
+        w.done = true;
+        this.hitPlayer(w.hit, { x: m.x, y: m.y });
+      }
+      if (w.t >= 1) {
+        s.skills.fxDust(m.x, m.y);
+        this.sweeps.splice(i, 1);
+      }
+    }
+    const p = s.player;
     for (let i = this.shots.length - 1; i >= 0; i--) {
       const sh = this.shots[i];
       const sx = sh.vx * dt;
@@ -284,26 +523,48 @@ export class MonsterSkills {
       sh.y += sy;
       sh.traveled += Math.hypot(sx, sy);
       sh.img.setPosition(sh.x, sh.y - 14).setDepth(sh.y + 20);
-      let dead = sh.traveled >= sh.range || isBlockedPx(this.s.cm, sh.x, sh.y);
+      if (sh.spin) sh.img.rotation += sh.spin * dt;
+      sh.trailT -= dt;
+      if (sh.trailT <= 0) {
+        sh.trailT = 0.035;
+        s.skills.trail(sh.x, sh.y - 14, sh.hit.skill, sh.hit.color, sh.size);
+      }
+      let dead = sh.traveled >= sh.range || isBlockedPx(s.cm, sh.x, sh.y);
       if (!dead && Math.hypot(p.x - sh.x, p.y - sh.y) <= PLAYER_R + sh.size / 2) {
-        this.s.combat.hurtPlayer(sh.dmg, sh.from, { slow: sh.slow });
+        this.hitPlayer(sh.hit, { x: sh.x - sh.vx * 0.05, y: sh.y - sh.vy * 0.05 });
         dead = true;
       }
       if (dead) {
+        s.skills.fxImpactAt(sh.x, sh.y - 14, sh.hit.skill, sh.hit.color, 3);
         sh.img.destroy();
         this.shots.splice(i, 1);
       }
     }
   }
 
-  /** Drops a monster's pending technique (death, leash). */
+  private interrupt(m: Monster): void {
+    this.cancel(m);
+    this.s.floatText(m.x, m.y - m.sprite.displayHeight - 16, 'Interrupted!', '#9fe0ff', 12);
+  }
+
+  /** Drops a monster's pending technique and dash (death, leash, interrupt). Fired projectiles keep flying. */
   cancel(m: Monster): void {
     for (let i = this.active.length - 1; i >= 0; i--) {
       if (this.active[i].m !== m) continue;
       this.active[i].gfx.destroy();
       this.active.splice(i, 1);
     }
+    this.sweeps = this.sweeps.filter((w) => w.m !== m);
     m.busyUntil = 0;
+    m.charge = 0;
+  }
+
+  /** The world was frozen for `ms` (panel pause, hit-stop): telegraphs resume where they were. */
+  shiftTime(ms: number): void {
+    for (const a of this.active) {
+      a.start += ms;
+      a.at += ms;
+    }
   }
 
   clear(): void {
@@ -311,5 +572,6 @@ export class MonsterSkills {
     for (const s of this.shots) s.img.destroy();
     this.active = [];
     this.shots = [];
+    this.sweeps = [];
   }
 }
