@@ -99,12 +99,31 @@ function sharedFor(scene: Phaser.Scene): Shared {
 class Group implements VfxGroup {
   insts: Inst[] = [];
   ended = false;
+  /**
+   * Loops stop this frame: the group was ended, or its `alive()` turned false (a cancelled wind-up, a dead monster's
+   * statuses, a buff run out). Read once per frame by the runtime, so a loop with a lifeMs still ends with its
+   * gameplay state instead of playing out its full life.
+   */
+  halt = false;
   constructor(readonly ctx: PlayCtx) {}
   end(): void {
     this.ended = true;
+    this.halt = true;
+  }
+  /** Re-reads `alive()` (once per frame, before the instances update). */
+  check(): void {
+    if (this.halt) return;
+    const alive = this.ctx.alive;
+    if (!alive) return;
+    try {
+      this.halt = !alive();
+    } catch {
+      this.halt = true;
+    }
   }
   get done(): boolean {
-    return this.insts.every((i) => i.dead);
+    for (const i of this.insts) if (!i.dead) return false;
+    return true;
   }
 }
 
@@ -183,7 +202,7 @@ class SpriteInst extends Inst {
     if (t < 0) return this.hide();
     const rt = this.rt;
     const loop = this.req.piece.component !== 'motes' && rt.useOf(this.req) !== 'once';
-    if (loop && ((this.o.life !== null && t >= this.o.life) || this.group.ended || (this.o.life === null && this.group.ctx.alive && !this.group.ctx.alive()))) {
+    if (loop && ((this.o.life !== null && t >= this.o.life) || this.group.halt)) {
       this.dead = true;
       return;
     }
@@ -339,7 +358,7 @@ class ChunkRingInst extends Inst {
     if (t < 0) return this.clearFrom(0, 0);
     const prm = this.piece.params;
     const stay = prm.anim === 'static' || prm.anim === 'march';
-    if (t >= this.o.life || (stay && this.group.ended)) {
+    if (t >= this.o.life || (stay && this.group.halt)) {
       this.dead = true;
       return;
     }
@@ -533,6 +552,8 @@ interface Particle {
   bob: Phaser.GameObjects.Bob | null;
   glowBob: Phaser.GameObjects.Bob | null;
   glow: boolean;
+  /** Orbit / converge motes end with their group (a cancelled charge's orbiting sparks); null: free motes. */
+  grp: Group | null;
 }
 
 /** Emits a motes piece's particles over time (staggered waves, cadence repeats). */
@@ -543,6 +564,8 @@ class MotesInst extends Inst {
   private readonly life: number;
   private readonly cadence: number;
   private readonly until: number;
+  /** Orbit / converge motes follow their anchor for their whole life (a charge's orbiting sparks). */
+  private readonly persistent: boolean;
 
   constructor(
     rt: VfxRuntime,
@@ -559,6 +582,7 @@ class MotesInst extends Inst {
     this.n = scaledCount(pl, o.quota, rt.quality, VFX_BUDGET.perEvent.novaMotes);
     const lifeMs = piece.lifeMs ?? 400;
     const persistent = pat === 'orbit' || pat === 'converge';
+    this.persistent = persistent;
     this.life = persistent ? lifeMs : Math.min(lifeMs, 600);
     const wave = this.n * (pl?.staggerMs ?? 0);
     this.cadence = !persistent && pl?.staggerMs && lifeMs >= 2 * Math.max(1, wave) ? Math.max(wave, pl.staggerMs) : 0;
@@ -573,7 +597,8 @@ class MotesInst extends Inst {
   update(now: number): void {
     const t = now - this.t0;
     if (t < 0) return;
-    if (this.group.ended && this.piece.place?.pattern === 'orbit') {
+    // A halted group (cancelled wind-up, dead monster, status over) stops its orbits and repeating waves.
+    if (this.group.halt && (this.persistent || this.cadence)) {
       this.dead = true;
       return;
     }
@@ -592,7 +617,7 @@ class MotesInst extends Inst {
       const ang = this.o.ang();
       for (let k = 0; k < this.n; k++) {
         const l = launch(this.piece, k, this.n, ang, this.o.rng, this.life);
-        this.rt.spawnParticle(this, this.req, this.piece.ramp, this.o.layer, now + l.delay, l, at, this.where, this.o.to, this.o.glow);
+        this.rt.spawnParticle(this.persistent ? this.group : null, this.req, this.piece.ramp, this.o.layer, now + l.delay, l, at, this.where, this.o.to, this.o.glow);
       }
       this.emitted++;
       if (this.cadence && t + this.cadence < this.until) this.nextWave += this.cadence;
@@ -623,8 +648,7 @@ class TrailInst extends Inst {
   update(now: number): void {
     const t = now - this.t0;
     if (t < 0) return;
-    const ctx = this.group.ctx;
-    if (this.group.ended || (ctx.alive && !ctx.alive()) || (this.piece.lifeMs !== undefined && t > this.piece.lifeMs)) {
+    if (this.group.halt || (this.piece.lifeMs !== undefined && t > this.piece.lifeMs)) {
       this.dead = true;
       return;
     }
@@ -790,8 +814,7 @@ class BeadInst extends Inst {
   update(now: number): void {
     const t = now - this.t0;
     if (t < 0) return;
-    const ctx = this.group.ctx;
-    if ((this.o.life !== null && t >= this.o.life) || this.group.ended || (this.o.life === null && ctx.alive && !ctx.alive())) {
+    if ((this.o.life !== null && t >= this.o.life) || this.group.halt) {
       this.dead = true;
       return;
     }
@@ -897,6 +920,14 @@ export class VfxRuntime implements VfxStage {
   private split = { bake: 0, insts: 0, particles: 0 };
   private idle: number | null = null;
   private destroyed = false;
+  /** Telegraph clock (scene ms), held through hit-stops: tellNow(). */
+  private tellAt = -1;
+  /** Flash budget of the current frame (world clock): its summed hero-frame area and the verdict once it counted. */
+  private flashAt = -1;
+  private flashPx = 0;
+  private flashVerdict: boolean | null = null;
+  /** Set while a play over the flash budget spawns: its pieces bake reduce-flash. */
+  private forceReduce = false;
   private readonly onPost = (_t: number, delta: number) => this.update(delta);
   private readonly onPreRender = () => this.atlas.flush();
 
@@ -973,15 +1004,49 @@ export class VfxRuntime implements VfxStage {
     const g = new Group(ctx);
     if (this.destroyed) return g;
     const rng = mulberry32(hashSeed('vfxrt', ctx.seed, this.clock | 0, this.groups.length));
-    for (const p of pieces) {
-      try {
-        this.spawn(g, p, rng);
-      } catch (err) {
-        console.error('[omnipath] vfx piece failed', p.component, err);
+    // Flash budget (docs/VFX.md §9): over it, this play's white hero frames bake as their reduce-flash variant.
+    this.forceReduce = this.overFlashBudget(pieces, ctx);
+    try {
+      for (const p of pieces) {
+        try {
+          this.spawn(g, p, rng);
+        } catch (err) {
+          console.error('[omnipath] vfx piece failed', p.component, err);
+        }
       }
+    } finally {
+      this.forceReduce = false;
     }
     if (g.insts.length) this.groups.push(g);
     return g;
+  }
+
+  /**
+   * Area-weighted flash budget (docs/VFX.md §9 flash): the white / R5 / contrast pixels of every hero piece started
+   * in one frame add up; once a frame's total crosses VFX_BUDGET.flash.areaPx it counts as one flash, allowed at most
+   * 3 per second and 333 ms apart (flashOk). Refused: the rest of that frame's hero pieces play their reduceFlash
+   * bake (WHITE -> R5, no contrast frames), which a not-yet-baked strip covers with the tint-filled fallback.
+   */
+  private overFlashBudget(pieces: readonly VfxPiece[], ctx: PlayCtx): boolean {
+    if (vfxSettings.reduceFlash || ctx.shift) return false;
+    let px = 0;
+    for (const p of pieces) {
+      if (!(p.tags ?? []).includes('hero') || p.lut !== 'base') continue;
+      const e = this.atlas.entry(bakeReq(p, this.optsFor(p)).key);
+      if (!e) continue;
+      let m = 0;
+      for (const f of e.flashPx) if (f > m) m = f;
+      px += m * Math.max(1, p.place?.count ?? 1);
+    }
+    if (!px) return false;
+    if (this.flashAt !== this.clock) {
+      this.flashAt = this.clock;
+      this.flashPx = 0;
+      this.flashVerdict = null;
+    }
+    this.flashPx += px;
+    if (this.flashVerdict === null && this.flashPx >= VFX_BUDGET.flash.areaPx) this.flashVerdict = this.flashOk(this.flashPx);
+    return this.flashVerdict === false;
   }
 
   // ---------------------------------------------------------------- spawning
@@ -1043,7 +1108,7 @@ export class VfxRuntime implements VfxStage {
   private optsFor(p: VfxPiece, shift = false): Partial<BakeOptions> {
     return {
       lut: shift && p.lut === 'base' ? 'shift' : p.lut,
-      reduceFlash: vfxSettings.reduceFlash,
+      reduceFlash: vfxSettings.reduceFlash || (this.forceReduce && (p.tags ?? []).includes('hero')),
       // No biome keyline on missiles or on dithered status units (a keyline round every dither dot turned the freeze
       // crystal into a dark checkerboard on frost ground); they carry their own matter outline.
       keyline: this.profile.keyline.includes(p.ramp as FamilyId) && p.component !== 'missile' && p.component !== 'status',
@@ -1531,27 +1596,31 @@ export class VfxRuntime implements VfxStage {
 
   // ---------------------------------------------------------------- particles
 
-  spawnParticle(owner: MotesInst | null, req: BakeReq, ramp: RampId, layer: VfxLayer, born: number, l: Launch, at: Pt, where: Where | null, to: (() => Pt | null) | null, glow: boolean): void {
+  spawnParticle(grp: Group | null, req: BakeReq, ramp: RampId, layer: VfxLayer, born: number, l: Launch, at: Pt, where: Where | null, to: (() => Pt | null) | null, glow: boolean): void {
     if (this.particles.length >= VFX_BUDGET.particles) return;
-    void owner;
     const slot = layer === 'ground' ? 'gmotes' : layer === 'preview' ? 'pmotes' : layer === 'glow' || layer === 'light' ? 'glow' : 'motes';
     const depth = slot === 'gmotes' ? DEPTH.FX_GROUND : slot === 'pmotes' ? DEPTH.AIM_PREVIEW : MOTE_DEPTH;
     const live = l.mode !== 'free' && where ? () => where.pos(this.clock - born) : null;
     const dirAng = l.mode === 'free' ? Math.atan2(l.vy, l.vx) : 0;
-    this.particles.push({ req, ramp, slot, depth, born, l, ox: at.x, oy: at.y, anchor: live, to, dirAng, bob: null, glowBob: null, glow: glow && this.glowOn });
+    this.particles.push({ req, ramp, slot, depth, born, l, ox: at.x, oy: at.y, anchor: live, to, dirAng, bob: null, glowBob: null, glow: glow && this.glowOn, grp });
     if (this.particles.length > this.stats0.peakParticles) this.stats0.peakParticles = this.particles.length;
   }
 
   private updateParticles(now: number): void {
-    const keep: Particle[] = [];
-    for (const pt of this.particles) {
+    // In-place compaction (no per-frame arrays): kept particles slide down to `w`.
+    const list = this.particles;
+    let w = 0;
+    for (let r = 0; r < list.length; r++) {
+      const pt = list[r];
       const age = now - pt.born;
-      if (age >= pt.l.life) {
+      const grp = pt.grp;
+      if (grp && !grp.halt) grp.check();
+      if (age >= pt.l.life || (grp && grp.halt)) {
         this.bobs.freeBob(pt.bob);
         this.bobs.freeBob(pt.glowBob);
         continue;
       }
-      keep.push(pt);
+      list[w++] = pt;
       if (age < 0) continue;
       const e = this.atlas.entry(pt.req.key);
       if (!e?.ready) continue;
@@ -1637,7 +1706,7 @@ export class VfxRuntime implements VfxStage {
         pt.glowBob = null;
       }
     }
-    this.particles = keep;
+    list.length = w;
   }
 
   // ---------------------------------------------------------------- frame
@@ -1654,30 +1723,46 @@ export class VfxRuntime implements VfxStage {
     if (this.baker.pending) this.baker.pump(budget, false, this.ema > 20, true);
     if (this.baker.pending) this.kickIdle();
     const t1 = performance.now();
-    if (this.ticks.length) {
-      this.ticks = this.ticks.filter((fn) => {
+    // Watchers, groups and instances are compacted in place: no per-frame arrays or closures.
+    const ticks = this.ticks;
+    if (ticks.length) {
+      let w = 0;
+      for (let r = 0; r < ticks.length; r++) {
+        const fn = ticks[r];
+        let keep = false;
         try {
-          return fn();
+          keep = fn();
         } catch (err) {
           console.error('[omnipath] vfx tick failed', err);
-          return false;
         }
-      });
-    }
-    for (const g of this.groups) {
-      for (const i of g.insts) {
-        if (i.dead) continue;
-        // An ended group drops what has not started yet (a refreshed buff's old break, a cancelled charge).
-        if (g.ended && i.t0 > now) i.dead = true;
-        else i.update(now);
-        if (i.dead) i.destroy();
+        if (keep) ticks[w++] = fn;
       }
+      // A watcher may have added watchers while running (they were appended past the read cursor and kept above).
+      ticks.length = w;
     }
-    this.groups = this.groups.filter((g) => {
-      g.insts = g.insts.filter((i) => !i.dead);
-      return g.insts.length > 0;
-    });
-    this.telegraphs.update();
+    const groups = this.groups;
+    let gw = 0;
+    for (let gr = 0; gr < groups.length; gr++) {
+      const g = groups[gr];
+      g.check();
+      const insts = g.insts;
+      let iw = 0;
+      for (let ir = 0; ir < insts.length; ir++) {
+        const i = insts[ir];
+        if (!i.dead) {
+          // A halted group drops what has not started yet (a refreshed buff's old break, a cancelled charge, the
+          // next waves of a dead monster's poison bubbles). A buff's own break starts exactly at its end: it plays.
+          if (g.halt && i.t0 > now) i.dead = true;
+          else i.update(now);
+          if (i.dead) i.destroy();
+        }
+        if (!i.dead) insts[iw++] = i;
+      }
+      insts.length = iw;
+      if (iw > 0) groups[gw++] = g;
+    }
+    groups.length = gw;
+    this.telegraphs.update(this.tellNow());
     const t2 = performance.now();
     this.updateParticles(now);
     const t3 = performance.now();
@@ -1688,6 +1773,17 @@ export class VfxRuntime implements VfxStage {
     k.particles = k.particles * 0.95 + (t3 - t2) * 0.05;
     this.stats0.updateMs = this.stats0.updateMs * 0.9 + ms * 0.1;
     if (ms > this.stats0.peakUpdateMs) this.stats0.peakUpdateMs = ms;
+  }
+
+  /**
+   * Scene time for telegraph progress, held while the world is hit-stopped (MapScene.hitStop: timeScale 0). Combat
+   * shifts the tells' timing records by the frozen gap once the freeze ends (syncClock runs in the scene update,
+   * before this POST_UPDATE), so the fill front never runs ahead during a spark freeze and snaps back after it.
+   */
+  private tellNow(): number {
+    const time = this.scene.time;
+    if (time.timeScale > 0 || this.tellAt < 0) this.tellAt = time.now;
+    return this.tellAt;
   }
 
   /** Quality governor (docs/VFX.md §9) on an EMA of the frame delta. */

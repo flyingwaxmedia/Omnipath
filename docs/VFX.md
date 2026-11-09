@@ -958,7 +958,7 @@ Files: `src/game/vfx/play.ts` (the play contract, Phaser-free), `src/game/vfx/br
   < 15 ms. 0.5: counts ×0.5, every 2nd chunk, no echo pieces; 0.25: no trails, ≤ 3 units, no decals, no glow, no
   ghosts. The Canvas renderer runs at 0.25. `neverGoverned` pieces are exempt. `vfx.setQuality(q | null)` pins.
 - **Reduce shake & flashes**: `setReduceFlash(on)` (runtime/settings.ts): reduce-flash bakes for every new play,
-  trauma × 0.3. The flash budget (`flashOk`) is in place for area flashes.
+  trauma × 0.3. The area flash budget (`flashOk`) gates every frame's hero pieces (§8.11).
 - **Measured** (Playwright + SwiftShader on a shared container CPU, `window.omnipath.scene.vfx.stats()`, 8 AoE-heavy
   skills on the bar, AUTO, 14 monsters kept round the player, discovery cards dismissed, 20 s; grass and a dark crypt,
   several runs): peak body sprites 59-75 / 96, glow 47-58 / 64, ground 4-27 / 40, bobs 267-280 / 280 player share
@@ -1110,6 +1110,69 @@ signature casts in one session.
   50 % neon sheet; the player nova marker fill uses the family's darkest stop (white specks before); the wet aftermath
   starts at 25 % (an r96 50 % disc read as a grey hole); at most two buff aura loops show on the player (the oldest
   gives way; the buff itself stays).
+
+### 8.11 Adversarial review of the runtime integration
+
+Checked against the running build (Playwright, 390 × 844, DPR 1, SwiftShader; scratch scripts) and vitest
+(`tests/vfx-review.test.ts`). Gameplay (hit tests, timings, damage) is unchanged by the runtime: the systems' diffs
+only drop drawing code, chain / nova / projectile timings match the pre-runtime code line for line, the full suite is
+green.
+
+Verified, no change needed:
+- **Lifecycle.** Ten warps across five maps with an AUTO fight on each (WebGL and Canvas): bus listeners, scene /
+  game / renderer / scale listeners, tweens and timers stay flat; textures plateau at the 4 atlas pages + the bolt and
+  tell canvases (run-wide pools); live instances, sprites, bobs and particles return to 0 after each fight; the JS heap
+  plateaus. No console errors.
+- **Telegraph rims vs hit tests, in world space.** For 8 techniques (zone, cone, range, lane; incl. Hollow Regent's
+  140° cone and two lanes) at 50 % and 90 %, every white rim pixel centre lies within [-2.7, +0.4] px of the live
+  hit-test boundary (the 2 px dash inside it) and the outline covers the boundary everywhere (64 samples).
+- **Saves.** The save carries no VFX state; the setting has its own key; Continue restores and plays.
+- **Budgets in a busy fight** (8 heavy skills, AUTO, 8 monsters): body ≤ 55 / 96, ground ≤ 29 / 40, bobs 280 / 280
+  player share (refusals expected), particles ≤ 53 / 250, atlas 4 / 4, blend switches p95 2-4, flash area of any one
+  piece ≤ 3.6k px (the 19k budget is reached only by several heavy pieces in one frame).
+
+Fixed:
+- **Loops outlived their gameplay state.** `PlayCtx.alive` was ignored for loops carrying a lifeMs: a cancelled
+  wind-up kept its charge orb, orbiting motes and landing preview for the rest of the cast time, and a killed
+  monster's status units (poison bubbles, burn tongues) played on over the empty spot for up to 4 s. Groups now read
+  `alive()` once per frame (`Group.halt`) and stop every loop, repeating mote wave, orbit / converge particle and
+  not-yet-started one-shot when it turns false (a buff's own break, timed exactly at its end, still plays).
+- **Deadlines on the wrong clock.** The bridges compared captured scene-time ends (statusApplied / buffApplied
+  `untilMs`) with scene time; Combat shifts the real timers over panel pauses, loop sleeps and hit-stops, so with
+  `alive()` honoured those loops would have ended early after any pause. Ends are now deadlines on the runtime's
+  world clock (`VfxStage.now`, which stands still through the same gaps): player and monster buff auras, monster and
+  player status loops, the hex-ward flare window.
+- **Telegraph front during the spark freeze.** Tells read scene time, which runs on through `MapScene.hitStop`; the
+  fill-up front ran ahead for 150 ms and snapped back when Combat shifted the timing records. The tell clock now holds
+  while the world is hit-stopped (`timeScale` 0).
+- **Canvas renderer rims were white.** Images cannot be tinted on the Canvas renderer, so the danger / hot / lock rim
+  states all drew white. There the state colour is multiplied into the uploaded rim pixels (one small re-upload per
+  state change).
+- **"Reduce shake & flashes" ignored prefers-reduced-motion** whenever localStorage was available (an unset key read
+  as "off"). A fresh install now follows the device; a stored choice wins. Changing it re-warms the loadout and the
+  map's spawns in the new bake variant (`onReduceFlash`), so the next casts do not play fallbacks.
+- **Flash budget not applied.** `flashOk` existed but nothing called it. Hero pieces now add their baked flash area per
+  frame; past 19k px a frame counts as one flash (≤ 3 / s, ≥ 333 ms apart) and, when refused, that frame's remaining
+  hero pieces play their reduce-flash bake.
+- **CPU spikes over the frame budget.** In-frame bake slices started a step even with no time left, and nova c24
+  cores (death pops) took 3-6 ms per direction on the container CPU: single frames reached 6-9 ms. Novas from c24 now
+  bake in idle slices; a slice no longer starts a step its running step-time estimate would overrun; and a size class
+  whose in-frame step overran the slice once is baked in idle slices from then on (adaptive, per device). Busy fight
+  after: 0 of ~600 frames over 3 ms (peak 3.0, EMA ≤ 0.65 ms; before 3-4 frames over, peak 6-9 ms).
+- **Bake retry churn when the atlas is pinned full.** A request that found no room even after evictions was re-queued
+  by every waiting instance every frame, re-baking the whole direction just to fail again; it now backs off 1.5 s (the
+  effect keeps its fallback).
+- **Per-frame allocations.** The runtime's frame loop rebuilt its watcher, group, instance and particle arrays with
+  `filter` (plus a closure per call) every frame; all are compacted in place now, as is the telegraph list; the camera
+  shake's value noise no longer allocates a closure per call. Remaining per-frame garbage is a few small `{x, y}`
+  anchor points per live sprite (young-generation, measured harmless).
+- **A screen flash stuck behind a panel.** The rig steps flash frames in `update()`, which stops while a panel pauses
+  the world: a warden-kill flash caught mid-way stayed up (≤ 0.35 alpha) behind a windowed panel. The stage settles it
+  on the scene's PAUSE.
+
+Not changed (noted): the "24 concurrent effect instances" figure is not a cap in code (busy fights reach ~45 groups);
+the sprite, bob, particle, page and CPU caps bound the cost and are enforced. A thin (1 px) arcane floor band is
+legitimate design, not a cue.
 
 ## 9. Budgets, governors
 
@@ -1380,10 +1443,12 @@ Open:
    fractional breath squash and the player's stunned wobble (actors lane), MapScene's portal-reveal shake (it goes
    through the rig's `install()` shim; the scene keeps its one seam), shade_cloak's alpha.
 8. Settings UI: "Reduce shake & flashes" exists on the runtime (`setReduceFlash`, persisted in localStorage,
-   defaulting to `prefers-reduced-motion`); the toggle in the settings panel is the UI lane's.
+   defaulting to `prefers-reduced-motion` until the player chooses — fixed in §8.11, it read an unset key as "off");
+   the toggle is in the ☰ menu (UI lane).
 9. Device gate (§11.3) still pending: SwiftShader numbers in §8.8 / §8.10 are a regression check only.
 10. From the in-game QA pass (§8.10): single-frame VFX peaks of 4-20 ms (in-frame bakes and per-hop bolt canvases)
-    exceed the 3 ms frame budget although the EMA stays inside it; big rings (r > 128, ~90 chunks each) eat the bob
+    exceeded the 3 ms frame budget although the EMA stayed inside it (in-frame bakes are now capped, §8.11; a first
+    bolt bake per hop can still cost ~1 ms); big rings (r > 128, ~90 chunks each) eat the bob
     share — 20 px chunks for them would halve it; trying many different skills in one session churns the 4-page atlas
     (the first cast of a newly learnt big skill plays the fallback while it bakes; the bar's warm set is fine);
     shadowstep's blink shows nothing for its first ~80 ms (no departure tell); in QA a puddlewisp water spit flown at

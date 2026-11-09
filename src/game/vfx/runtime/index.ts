@@ -17,7 +17,7 @@ import { JuiceRig, type JuiceActor } from '../juice';
 import type { AuraMotif, FamilyId, VfxQuality } from '../types';
 import { WorldBridge, familyOfColor, type WorldExtra } from '../world';
 import { VfxRuntime, type VfxStats } from './runtime';
-import { setReduceFlash, vfxSettings } from './settings';
+import { onReduceFlash, setReduceFlash, vfxSettings } from './settings';
 
 export interface VfxHandle {
   readonly runtime: VfxRuntime;
@@ -87,13 +87,18 @@ export function attachVfx(scene: MapScene): VfxHandle {
     return out;
   };
   // Warm set: the equipped skills (every phase, impact variant and status) and the map's spawns, behind the fade.
-  bridge.warmLoadout(loadout());
-  world.warmMap(
-    scene.combat.monsters.map((m) => m.def),
-    (id) => scene.reg.skill(id),
-  );
+  const warmAll = () => {
+    bridge.warmLoadout(loadout());
+    world.warmMap(
+      scene.combat.monsters.map((m) => m.def),
+      (id) => scene.reg.skill(id),
+    );
+  };
+  warmAll();
   scope.on('barChanged', () => bridge.warmLoadout(loadout()));
   scope.on('skillLearned', (e) => bridge.warmLoadout([e.skill]));
+  // "Reduce shake & flashes" flipped (the ☰ menu pauses the world): bake the set again in the new variant meanwhile.
+  scene.events.once('shutdown', onReduceFlash(warmAll));
   world.refreshClassAura();
 
   // Warden intro pan (once per warden per map entry) and the manual-play lead toward a warden / elite target.

@@ -34,16 +34,18 @@ export const FLASH = { alphaMax: 0.35, minGapMs: 333, perSecond: 3, frameMs: 50 
 const PAN = { inMs: 450, holdMs: 650, outMs: 450, weight: 0.55, maxView: 0.32 } as const;
 const LEAD = { weight: 0.18, maxPx: 24, tau: 0.35 } as const;
 
+/** Lattice value in [-1, 1] for noise1 (module level: no closure per call in the per-frame shake). */
+function lattice(n: number, seed: number): number {
+  const x = Math.sin((n + seed * 101.3) * 127.1) * 43758.5453;
+  return (x - Math.floor(x)) * 2 - 1;
+}
+
 /** Smooth 1-D value noise in [-1, 1] (deterministic: shake never reads Math.random). */
 export function noise1(t: number, seed: number): number {
   const i = Math.floor(t);
   const f = t - i;
-  const h = (n: number) => {
-    const x = Math.sin((n + seed * 101.3) * 127.1) * 43758.5453;
-    return (x - Math.floor(x)) * 2 - 1;
-  };
   const u = f * f * (3 - 2 * f);
-  return h(i) * (1 - u) + h(i + 1) * u;
+  return lattice(i, seed) * (1 - u) + lattice(i + 1, seed) * u;
 }
 
 /** What the rig needs from the scene (structural, so tests drive it without Phaser). */
@@ -143,6 +145,15 @@ export class CameraRig {
     this.pan = { at, t: 0 };
     this.stats.pans++;
     return true;
+  }
+
+  /**
+   * The world paused or went to sleep (a panel opened): a flash mid-way through its frames would otherwise stay on
+   * screen behind a windowed panel for as long as it is open (its frames only step in update()). Ends it now.
+   */
+  settle(): void {
+    this.overlay?.setVisible(false);
+    this.flashFrames = [];
   }
 
   /** A gentle lead toward a target (warden / elite in manual play); null stops it. */

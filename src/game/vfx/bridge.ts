@@ -243,6 +243,16 @@ export class VfxBridge {
     return p ?? undefined;
   }
 
+  /**
+   * A scene-time end (statusApplied.untilMs, a buff's end) as a deadline on the runtime's world clock. Combat shifts
+   * its own timers over panel pauses, loop sleeps and hit-stops; the world clock stands still through the same gaps,
+   * so the effect ends with the status / buff instead of early after a pause (a captured scene-time `until` does not
+   * move when Combat shifts the real one).
+   */
+  private deadline(untilMs: number): number {
+    return this.stage.now() + Math.max(0, untilMs - this.host.sceneNow());
+  }
+
   // ---------------------------------------------------------------- handlers
 
   castStart(e: GameEvents['castStart']): void {
@@ -500,8 +510,8 @@ export class VfxBridge {
       g.end();
       this.auras.delete(k);
     }
-    const until = e.untilMs ?? this.host.sceneNow() + e.durationMs;
-    const ctx: PlayCtx = { owner: 'player', caster: p, ang: 0, seed: this.seed(r, e.castId, 'buff'), alive: () => this.host.sceneNow() < until };
+    const end = this.deadline(e.untilMs ?? this.host.sceneNow() + e.durationMs);
+    const ctx: PlayCtx = { owner: 'player', caster: p, ang: 0, seed: this.seed(r, e.castId, 'buff'), alive: () => this.stage.now() < end };
     this.stage.play(r.phases.cast ?? [], ctx);
     this.auras.set(e.skillId, this.stage.play(r.phases.aura ?? [], ctx));
   }
@@ -565,6 +575,7 @@ export class VfxBridge {
     const m = e.target;
     const src: FamilyId = e.source ? (this.recipe(e.source)?.imbue ?? this.recipe(e.source)?.family ?? 'steel') : 'steel';
     const until = e.untilMs;
+    const end = until === undefined ? undefined : this.deadline(until);
     const pieces = statusPieces(e.kind, src, bodyOf(m), 'player');
     const ctx: PlayCtx = {
       owner: 'player',
@@ -576,7 +587,8 @@ export class VfxBridge {
         return p ? Math.atan2(m.y - p.y, m.x - p.x) : 0;
       })(),
       seed: hashSeed('status', e.kind, Math.round(this.stage.now())),
-      alive: () => m.alive && (until === undefined || this.host.sceneNow() < until),
+      // Ends with the monster (a kill mid-poison) or the status, whichever comes first.
+      alive: () => m.alive && (end === undefined || this.stage.now() < end),
       low: true,
     };
     if (ONE_SHOT.has(e.kind)) {

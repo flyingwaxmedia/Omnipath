@@ -91,6 +91,7 @@ export class WorldBridge {
   private movers = new Map<number, VfxGroup>();
   private playerStatus = new Map<StatusKind, VfxGroup>();
   private auras = new WeakMap<Monster, Map<string, VfxGroup>>();
+  /** The hex ward: its end on the world clock (stage.now) and family, so a blow on the player flares it. */
   private ward: { until: number; family: FamilyId } | null = null;
   private classAuraKey = '';
   private classAuraGroup: VfxGroup | null = null;
@@ -239,6 +240,14 @@ export class WorldBridge {
     if (!p) return 0;
     const d = Math.hypot(p.x - x, p.y - y) - r;
     return d <= 40 ? 1 : d >= 200 ? 0 : 1 - (d - 40) / 160;
+  }
+
+  /**
+   * A scene-time end (untilMs) as a deadline on the runtime's world clock, which stands still through the panel
+   * pauses, loop sleeps and hit-stops Combat shifts its timers over (a captured scene-time end would not move).
+   */
+  private deadline(untilMs: number): number {
+    return this.stage.now() + Math.max(0, untilMs - this.host.sceneNow());
   }
 
   /** Recipe pieces re-timed to the real tell (charge cues): loops live for the wind-up. */
@@ -442,7 +451,7 @@ export class WorldBridge {
       // The hex ward (def buffs draw the 'ward' aura): remembered so a blow on the player flares it.
       try {
         const r = deriveVfx(e.skill, 'player');
-        if (r.carrier.kind === 'buff' && (r.carrier.motif === 'ward' || e.stat === 'def')) this.ward = { until: e.untilMs ?? this.host.sceneNow() + e.durationMs, family: (r.imbue ?? r.family) as FamilyId };
+        if (r.carrier.kind === 'buff' && (r.carrier.motif === 'ward' || e.stat === 'def')) this.ward = { until: this.deadline(e.untilMs ?? this.host.sceneNow() + e.durationMs), family: (r.imbue ?? r.family) as FamilyId };
       } catch {
         /* the player bridge reports it */
       }
@@ -454,10 +463,10 @@ export class WorldBridge {
     let per = this.auras.get(m);
     if (!per) this.auras.set(m, (per = new Map()));
     per.get(e.skillId)?.end();
-    const until = e.untilMs ?? this.host.sceneNow() + e.durationMs;
+    const end = this.deadline(e.untilMs ?? this.host.sceneNow() + e.durationMs);
     const body = bodyOf(m);
     const sized = (ps: readonly VfxPiece[]) => ps.map((p) => (p.component === 'aura' ? ({ ...p, params: { ...p.params, body } } as VfxPiece) : p));
-    const ctx: PlayCtx = { owner: 'monster', caster: m, body: m, ang: 0, seed: this.seed(e.skillId, 'buff'), quota: r.quota, alive: () => m.alive && this.host.sceneNow() < until };
+    const ctx: PlayCtx = { owner: 'monster', caster: m, body: m, ang: 0, seed: this.seed(e.skillId, 'buff'), quota: r.quota, alive: () => m.alive && this.stage.now() < end };
     this.stage.play(sized(r.phases.cast ?? []), ctx);
     per.set(e.skillId, this.stage.play(sized(r.phases.aura ?? []), ctx));
   }
@@ -500,7 +509,7 @@ export class WorldBridge {
     if (e.heavy) this.stage.trauma(0.35);
     // The hex ward flares where the blow lands.
     const w = this.ward;
-    if (w && this.host.sceneNow() < w.until) {
+    if (w && this.stage.now() < w.until) {
       const side = { x: p.x - Math.cos(blow) * 8, y: p.y - 18 - Math.sin(blow) * 4 };
       this.stage.play(
         [
@@ -548,7 +557,8 @@ export class WorldBridge {
     const left = until === undefined ? undefined : Math.max(1, Math.round(until - this.host.sceneNow()));
     const loops = pieces.map((q) => (q.lifeMs !== undefined && left !== undefined ? ({ ...q, lifeMs: left } as VfxPiece) : q));
     // The player's own statuses are never low priority: they must always read.
-    this.playerStatus.set(e.kind, this.stage.play(loops, { ...ctx0, alive: () => until === undefined || this.host.sceneNow() < until }));
+    const end = until === undefined ? undefined : this.deadline(until);
+    this.playerStatus.set(e.kind, this.stage.play(loops, { ...ctx0, alive: () => end === undefined || this.stage.now() < end }));
   }
 
   // ---------------------------------------------------------------- deaths, spawns, enrage

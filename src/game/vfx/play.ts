@@ -48,7 +48,11 @@ export interface PlayCtx {
   shift?: boolean;
   /** Swing sense (odd swings of a multi-hit strike sweep back). */
   sense?: 1 | -1;
-  /** Loops without a lifeMs live while this holds (charge, projectile bodies, auras). */
+  /**
+   * Loops live while this holds (charge, projectile bodies, auras, statuses), read once per frame; a loop's lifeMs
+   * still caps it. So a cancelled wind-up's charge, a dead monster's status units and a run-out buff end at once.
+   * Deadlines belong on the world clock (VfxStage.now), not on scene time: Combat shifts its timers over pauses.
+   */
   alive?: () => boolean;
   /** Event radius for geometryFromEvent pieces (true hit-test radius). */
   r?: number;

@@ -45,10 +45,13 @@ function count(f: IndexFrame, i: number): number {
 }
 
 const clock = (): number => (typeof performance !== 'undefined' ? performance.now() : 0);
+/** A request that found no room waits this long (ms) before it may bake again. */
+const GIVE_UP_MS = 1500;
 
 /**
  * Pieces whose single direction bakes in more than ~2 ms (measured in Node: slash r56 3.4 ms / dir, c56 cores 16 ms,
- * 48² orbit orbs, big decals and erupt units): they never bake inside a frame, only in idle slices.
+ * 48² orbit orbs, big decals and erupt units; in the browser on a shared 4-core container: c24 cores 3-6 ms): they
+ * never bake inside a frame, only in idle slices.
  */
 export function bigBake(p: VfxPiece): boolean {
   switch (p.component) {
@@ -57,7 +60,7 @@ export function bigBake(p: VfxPiece): boolean {
     case 'thrust':
       return p.params.len >= 96;
     case 'nova':
-      return p.params.c >= 40;
+      return p.params.c >= 24;
     case 'orb':
       return p.params.cell >= 48 || !!p.params.orbit;
     case 'decal':
@@ -73,6 +76,12 @@ export function bigBake(p: VfxPiece): boolean {
     default:
       return false;
   }
+}
+
+/** A piece's size class (component + its main size parameter): what the adaptive in-frame budget learns. */
+function sizeClass(p: VfxPiece): string {
+  const q = p.params as { r?: number; c?: number; cell?: number; len?: number; size?: string | number; scale?: string; unit?: string };
+  return `${p.component}:${q.r ?? q.c ?? q.cell ?? q.len ?? q.size ?? q.scale ?? q.unit ?? ''}`;
 }
 
 /** The bake request of a piece under explicit options (key = bake.ts pieceKey). */
@@ -92,6 +101,19 @@ export class Baker {
   failed = 0;
   /** Called when the atlas is full: may evict a page; returns false when nothing could be freed. */
   onFull: () => boolean = () => false;
+  /**
+   * Size classes an in-frame slice measured over its budget on this device: from then on they bake in idle slices
+   * only (their effects play the fallback meanwhile), so the frame budget holds on slow phones without a table.
+   */
+  private slow = new Set<string>();
+  /**
+   * Requests that found no room even after evictions (every page pinned by live effects): not retried for a while,
+   * or each waiting instance would re-bake the whole direction every frame only to fail again (their effects keep
+   * the fallback).
+   */
+  private gaveUp = new Map<string, number>();
+  /** EMA of in-frame step times (ms): a slice does not start a step it would likely overrun. */
+  private stepEma = 0.5;
 
   constructor(
     private readonly atlas: Atlas,
@@ -123,12 +145,17 @@ export class Baker {
     }
     const have = this.atlas.entry(req.key);
     if (have && have.strips.every((s) => s !== null)) return;
+    const gave = this.gaveUp.get(req.key);
+    if (gave !== undefined) {
+      if (this.now() - gave < GIVE_UP_MS) return;
+      this.gaveUp.delete(req.key);
+    }
     const t = templateOf(req.piece.component);
     const dirs = t.dirs(req.piece.params);
     const geometryKey = t.key(req.piece.params, req.piece.motif, { ...req.opts, half: req.piece.anchor?.half });
     const uniq = UNIQUE_DIRS[dirs];
     const entry = have ?? this.atlas.begin(req.key, geometryKey, t.use(req.piece.params), dirs, uniq);
-    const job: Job = { ...req, big: bigBake(req.piece), entry, u: entry.strips.findIndex((s) => s === null), uniq, hero: new Set(), flash: [] };
+    const job: Job = { ...req, big: bigBake(req.piece) || this.slow.has(sizeClass(req.piece)), entry, u: entry.strips.findIndex((s) => s === null), uniq, hero: new Set(), flash: [] };
     if (job.u < 0) return;
     this.queued.add(req.key);
     (urgent ? this.need : this.warm).push(job);
@@ -142,7 +169,14 @@ export class Baker {
     const t0 = clock();
     let n = 0;
     for (;;) {
-      if (n > 0 || !atLeastOne) if (clock() - t0 >= budgetMs) break;
+      // In-frame slices also stop when the typical step would overrun the slice (a hard cap, not a soft one).
+      if (n > 0 || !atLeastOne) {
+        if (clock() - t0 + (smallOnly ? this.stepEma : 0) >= budgetMs) {
+          // Nothing fitted this frame: let the estimate relax so a slow spell (a GC pause) cannot starve the slices.
+          if (smallOnly && n === 0) this.stepEma *= 0.9;
+          break;
+        }
+      }
       // In-frame slices take small jobs only (a big strip waits for an idle slice; its effect plays the fallback).
       const pick = (l: Job[]) => (smallOnly ? l.findIndex((j) => !j.big) : l.length ? 0 : -1);
       let list = this.need;
@@ -156,7 +190,17 @@ export class Baker {
       const job = list[0];
       const s = clock();
       const ok = this.step(job);
-      this.bakedMs += clock() - s;
+      const took = clock() - s;
+      this.bakedMs += took;
+      // An in-frame step over the whole slice: this size class waits for idle slices from now on (its other
+      // directions too).
+      if (smallOnly) {
+        this.stepEma = this.stepEma * 0.8 + took * 0.2;
+        if (took > budgetMs) {
+          this.slow.add(sizeClass(job.piece));
+          job.big = true;
+        }
+      }
       if (!ok) {
         // Atlas full: drop the job, free the least recently used page and queue the request afresh (its partial
         // strips may have lived on the freed page); when nothing can be freed the effect keeps its fallback.
@@ -166,7 +210,11 @@ export class Baker {
         const tries = (this.retries.get(job.key) ?? 0) + 1;
         this.retries.set(job.key, tries);
         if (tries <= 2 && this.onFull()) this.request({ key: job.key, piece: job.piece, opts: job.opts }, list === this.need);
-        else this.failed++;
+        else {
+          this.failed++;
+          this.retries.delete(job.key);
+          this.gaveUp.set(job.key, this.now());
+        }
         continue;
       }
       n++;

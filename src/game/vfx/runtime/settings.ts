@@ -6,7 +6,9 @@ const KEY = 'omnipath.vfx.reduceFlash';
 
 function load(): boolean {
   try {
-    if (typeof localStorage !== 'undefined') return localStorage.getItem(KEY) === '1';
+    // Only a stored choice overrides the device default (a fresh install follows prefers-reduced-motion).
+    const v = typeof localStorage !== 'undefined' ? localStorage.getItem(KEY) : null;
+    if (v === '1' || v === '0') return v === '1';
   } catch {
     /* storage blocked */
   }
@@ -21,9 +23,27 @@ export const vfxSettings = {
   reduceFlash: load(),
 };
 
+const listeners = new Set<(on: boolean) => void>();
+
+/** Called when the setting changes (the runtime re-warms its bakes in the new variant); returns the unsubscribe. */
+export function onReduceFlash(fn: (on: boolean) => void): () => void {
+  listeners.add(fn);
+  return () => listeners.delete(fn);
+}
+
 /** Sets "Reduce shake & flashes" (and remembers it on this device). */
 export function setReduceFlash(on: boolean): void {
+  const changed = vfxSettings.reduceFlash !== on;
   vfxSettings.reduceFlash = on;
+  if (changed) {
+    for (const fn of listeners) {
+      try {
+        fn(on);
+      } catch {
+        /* a listener's failure never blocks the setting */
+      }
+    }
+  }
   try {
     localStorage.setItem(KEY, on ? '1' : '0');
   } catch {

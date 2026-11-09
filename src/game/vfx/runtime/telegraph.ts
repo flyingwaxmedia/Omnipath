@@ -84,12 +84,29 @@ export class TellCanvases {
 
   private scratch = new Uint32Array(4096);
 
-  /** Uploads rectangle `q` of a region (row stride `stride`) placed at (x0, y0); returns the bytes sent. */
-  uploadRect(slot: Slot, x0: number, y0: number, stride: number, data: Uint32Array, q: { x: number; y: number; w: number; h: number }): number {
+  /**
+   * Uploads rectangle `q` of a region (row stride `stride`) placed at (x0, y0); returns the bytes sent. `tint`
+   * (0xRRGGBB) multiplies the colours on the way: the Canvas renderer cannot tint an Image, so the rim's state colour
+   * is baked into its pixels there instead.
+   */
+  uploadRect(slot: Slot, x0: number, y0: number, stride: number, data: Uint32Array, q: { x: number; y: number; w: number; h: number }, tint?: number): number {
     const n = q.w * q.h;
     if (this.scratch.length < n) this.scratch = new Uint32Array(n);
     const buf = this.scratch.subarray(0, n);
     for (let j = 0; j < q.h; j++) buf.set(data.subarray((q.y + j) * stride + q.x, (q.y + j) * stride + q.x + q.w), j * q.w);
+    if (tint !== undefined && tint !== 0xffffff) {
+      const tr = (tint >>> 16) & 255;
+      const tg = (tint >>> 8) & 255;
+      const tb = tint & 255;
+      for (let k = 0; k < n; k++) {
+        const v = buf[k];
+        if (!(v >>> 24)) continue;
+        const r = (((v & 255) * tr) / 255) | 0;
+        const g = ((((v >>> 8) & 255) * tg) / 255) | 0;
+        const b = ((((v >>> 16) & 255) * tb) / 255) | 0;
+        buf[k] = ((v & 0xff000000) | (b << 16) | (g << 8) | r) >>> 0;
+      }
+    }
     this.upload(slot, x0 + q.x, y0 + q.y, q.w, q.h, buf);
     return n * 4;
   }
@@ -145,6 +162,8 @@ class TellInst {
   private edgeImg: Phaser.GameObjects.Image | null = null;
   private dissolve = 0;
   private drawn = false;
+  /** Canvas renderer: the rim tint baked into the uploaded pixels (-1: none yet). */
+  private rimBaked = -1;
   private readonly born: number;
   ended = false;
   dead = false;
@@ -181,14 +200,20 @@ class TellInst {
     const slot = this.slot!;
     const t = ph ? Math.max(0, Math.min(1, (now - ph.start) / Math.max(1, ph.at - ph.start))) : 1;
     const leftMs = ph ? ph.at - now : 0;
-    const need = r.w * r.h * 4 * (r.fill ? 1 : 0) + r.rimRects.reduce((a, q) => a + q.w * q.h * 4, 0);
+    const tint = rimTint(t, leftMs, this.spec.look.danger, this.spec.look.family);
+    // The Canvas renderer cannot tint: the state colour goes into the rim pixels (a re-upload per state change).
+    const bake = !this.fx.canTint;
+    let rimBytes = 0;
+    for (const q of r.rimRects) rimBytes += q.w * q.h * 4;
+    const need = r.w * r.h * 4 * (r.fill ? 1 : 0) + rimBytes;
     if (!this.drawn || this.dissolve || this.fx.uploadLeft >= need) {
       this.drawn = true;
       const ch = r.render({ t, ms: now - this.born, dissolve: this.dissolve as 0 | 1 | 2 });
       if (ch.fill && r.fill) for (const q of r.fillDirty) this.fx.uploadLeft -= this.fx.canvases.uploadRect(slot, 0, 0, r.w, r.fill, q);
-      if (ch.rim) {
+      if (ch.rim || (bake && tint !== this.rimBaked)) {
         // Only the stripes that hold rim pixels (the rest of the box never changes).
-        for (const q of r.rimRects) this.fx.uploadLeft -= this.fx.canvases.uploadRect(slot, 0, this.rimY(), r.w, r.rim, q);
+        for (const q of r.rimRects) this.fx.uploadLeft -= this.fx.canvases.uploadRect(slot, 0, this.rimY(), r.w, r.rim, q, bake ? tint : undefined);
+        this.rimBaked = tint;
       }
     }
     const x = Math.round(anchor.x) - r.ox;
@@ -198,7 +223,8 @@ class TellInst {
       this.fillImg.setPosition(x, y).setVisible(true);
     }
     this.rimImg ??= this.fx.image(slot.key, 'r', DEPTH.TELL_TOP);
-    this.rimImg.setPosition(x, y).setVisible(true).setTint(rimTint(t, leftMs, this.spec.look.danger, this.spec.look.family));
+    this.rimImg.setPosition(x, y).setVisible(true);
+    if (!bake) this.rimImg.setTint(tint);
     this.edge(anchor, r);
   }
 
@@ -230,6 +256,7 @@ class TellInst {
     const blank = new Uint32Array(r.w * r.h);
     if (r.fill) c.upload(this.slot, 0, 0, r.w, r.h, blank);
     c.upload(this.slot, 0, this.rimY(), r.w, r.h, blank);
+    this.rimBaked = -1;
     c.upload(this.slot, 0, ey, EDGE, EDGE, EDGE_PIX);
     // Frames changed under the images: re-bind them.
     this.fillImg?.setFrame('f');
@@ -271,11 +298,15 @@ export class TelegraphFx {
   /** Bytes the tells may still upload this frame. */
   uploadLeft = TELL_UPLOAD_BYTES;
   peak = 0;
+  /** WebGL tints Images; the Canvas renderer does not (the rim colour is then baked into its pixels). */
+  readonly canTint: boolean;
 
   constructor(
     private readonly scene: Phaser.Scene,
     readonly canvases: TellCanvases,
-  ) {}
+  ) {
+    this.canTint = scene.sys.renderer instanceof Phaser.Renderer.WebGL.WebGLRenderer;
+  }
 
   get live(): number {
     return this.insts.length;
@@ -296,19 +327,25 @@ export class TelegraphFx {
     };
   }
 
-  /** Once per frame (after the systems moved): progress, geometry, uploads. */
-  update(): void {
+  /**
+   * Once per frame (after the systems moved): progress, geometry, uploads. `now` is scene time, held by the runtime
+   * through hit-stops (the tells' timing records are shifted by the frozen gap afterwards).
+   */
+  update(now: number = this.scene.time.now): void {
     this.uploadLeft = TELL_UPLOAD_BYTES;
-    const now = this.scene.time.now;
-    for (const i of this.insts) {
+    const list = this.insts;
+    let w = 0;
+    for (let r = 0; r < list.length; r++) {
+      const i = list[r];
       try {
         i.update(now);
       } catch (err) {
         console.error('[omnipath] telegraph failed', err);
         i.kill();
       }
+      if (!i.dead) list[w++] = i;
     }
-    if (this.insts.some((i) => i.dead)) this.insts = this.insts.filter((i) => !i.dead);
+    list.length = w;
   }
 
   view(): Phaser.Geom.Rectangle {

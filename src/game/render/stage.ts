@@ -173,6 +173,8 @@ class PixelStage implements Stage {
   /** Camera rig (render/camera.ts): shake + kicks after the map clamp, the look (pan / lead) before it. */
   readonly rig: CameraRig;
   private readonly onResize = () => this.fit();
+  /** A panel paused the world: a flash mid-frames must not stay up behind it (camera rig). */
+  private readonly onPause = () => this.rig.settle();
 
   constructor(
     private readonly scene: Phaser.Scene,
@@ -198,6 +200,7 @@ class PixelStage implements Stage {
     this.buildStructures();
     if (def.flags?.includes('dark')) this.dark = this.buildDarkness();
     scene.scale.on('resize', this.onResize);
+    scene.events.on(Phaser.Scenes.Events.PAUSE, this.onPause);
   }
 
   get visibleProps(): number {
@@ -275,6 +278,7 @@ class PixelStage implements Stage {
 
   destroy(): void {
     this.scene.scale.off('resize', this.onResize);
+    this.scene.events.off(Phaser.Scenes.Events.PAUSE, this.onPause);
     this.ground?.destroy();
     this.ground = null;
     this.dressing?.destroy();
