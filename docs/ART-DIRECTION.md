@@ -89,5 +89,7 @@ by shape (blade arc, spiral, thrown blade, dash streak, burst, chain bolt, aura)
 element palette, and a per-skill seed for variation. Exposed as Phaser textures (`icon_skill_<id>` …) and as cached
 data URLs for the DOM. Emoji remain only as an accessibility fallback (`aria-label`).
 
-## 7. Camera
-Show more world than v2 on tablets: zoom = clamp(shortSide / 560, 1, 2) (iPad landscape ≈ 1.37, phones 1.0).
+## 7. Camera (pixel-perfect — see docs/QUALITY-PLAN.md §1)
+Render to a low-resolution backbuffer in art pixels and upscale by an INTEGER factor (crisp CSS scaling); camera
+zoom stays 1 so Phaser rounds every sprite to whole art pixels. Choose the factor so the short screen side shows
+≈ 360–560 art px (phones and iPads both show more world than v2). Never use a fractional zoom.

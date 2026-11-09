@@ -95,11 +95,15 @@ function paint(c: Ctx, x0: number, y0: number, x1: number, y1: number, fn: Paint
   const xb = Math.min(c.canvas.width, Math.ceil(x1));
   const ya = Math.max(0, Math.floor(y0));
   const yb = Math.min(c.canvas.height, Math.ceil(y1));
+  let last = '';
   for (let y = ya; y < yb; y++)
     for (let x = xa; x < xb; x++) {
       const col = fn(x + 0.5, y + 0.5);
       if (col) {
-        c.fillStyle = col;
+        if (col !== last) {
+          c.fillStyle = col;
+          last = col;
+        }
         c.fillRect(x, y, 1, 1);
       }
     }
@@ -412,8 +416,8 @@ function onLayer(dst: Ctx, draw: (c: Ctx) => void, outlineColor: string | false 
   dst.drawImage(s.el, 0, 0);
 }
 
-/** Dithered afterimage of whatever `draw` paints, offset by (dx, dy), in one colour. */
-function ghostOf(dst: Ctx, draw: (c: Ctx) => void, dx: number, dy: number, col: string, parity = 0): void {
+/** Flat afterimage of whatever `draw` paints, offset by (dx, dy), in one colour (parity < 0 = solid). */
+function ghostOf(dst: Ctx, draw: (c: Ctx) => void, dx: number, dy: number, col: string, parity = -1): void {
   const w = dst.canvas.width;
   const h = dst.canvas.height;
   const s = scratch(w, h);
@@ -422,7 +426,7 @@ function ghostOf(dst: Ctx, draw: (c: Ctx) => void, dx: number, dy: number, col: 
   dst.fillStyle = col;
   for (let y = 0; y < h; y++)
     for (let x = 0; x < w; x++)
-      if (d[(y * w + x) * 4 + 3] > 128 && ((x + y) & 1) === parity) dst.fillRect(Math.round(x + dx), Math.round(y + dy), 1, 1);
+      if (d[(y * w + x) * 4 + 3] > 128 && (parity < 0 || ((x + y) & 1) === parity)) dst.fillRect(Math.round(x + dx), Math.round(y + dy), 1, 1);
 }
 
 /** Paints a small bitmap ('#' = colour a, '+' = colour b, 'o' = outline). */
@@ -573,23 +577,46 @@ function object(c: Ctx, kind: Obj, x: number, y: number, ang: number, len: numbe
       swoosh(c, x - ca * r * 0.7, y - sa * r * 0.7, r, Math.max(2.2, len * 0.22), ang - 70 * DEG, 140 * DEG, fx, { fade: false, head: 0.5 });
       break;
     }
-    case 'feather':
-      along(c, x, y, ang, -len / 2, len / 2, (s) => 2.4 * Math.pow(Math.max(0, Math.sin(((s + len / 2) / len) * PI)), 0.55) + 0.2, (s, t, h, px0, py0) => {
-        if (Math.abs(t) < 0.45) return R.cream[4];
+    case 'feather': {
+      const wv = Math.max(2.4, len * 0.13);
+      along(c, x, y, ang, -len / 2, len / 2, (s) => wv * Math.pow(Math.max(0, Math.sin(((s + len / 2) / len) * PI)), 0.55) + 0.2, (s, t, h, px0, py0) => {
+        if (Math.abs(t) < 0.5) return s < -len * 0.3 ? R.cream[3] : R.cream[5];
         if (Math.abs(t) > h - 0.9 && (Math.floor(px0) + Math.floor(py0) * 2) % 3 === 0) return null;
         return t * litSign(ang) > 0 ? fx[4] : fx[2];
       });
       break;
-    case 'star':
-      star4(c, x, y, Math.max(2, Math.round(len * 0.35)), fx);
+    }
+    case 'blade':
+      along(c, x, y, ang, -len / 2, len / 2, (s) => (s > len * 0.05 ? 1.35 * (1 - (s - len * 0.05) / (len * 0.45)) + 0.35 : 1.35), (s, t, h, px0, py0) => {
+        if (s < -len * 0.3 && chk(px0, py0)) return null;
+        return shadeAcross(fx, ang)(s, t, h, px0, py0);
+      });
       break;
+    case 'star': {
+      const L = Math.max(2, Math.round(len * 0.36));
+      for (let i = 0; i < 8; i++) {
+        const a = (i / 8) * 2 * PI;
+        const l = i % 2 ? L * 0.55 : L;
+        along(c, x, y, a, 0, l, (s) => (i % 2 ? 0.7 : 1.3) * (1 - s / l) + 0.3, (s) => (s < l * 0.5 ? fx[5] : fx[4]));
+      }
+      ball(c, x, y, Math.max(1.6, L * 0.32), fx);
+      break;
+    }
     case 'prism': {
-      const r = len * 0.42;
-      const p = [x + ca * r, y + sa * r, x + Math.cos(ang + 2.3) * r, y + Math.sin(ang + 2.3) * r, x + Math.cos(ang - 2.3) * r, y + Math.sin(ang - 2.3) * r];
-      fpoly(c, p, (px0, py0) => ((px0 - x) + (py0 - y) < -1 ? fx[5] : (px0 - x) - (py0 - y) > 1 ? fx[2] : fx[4]));
-      const [tx, ty] = back(r * 0.9);
-      seg(c, tx, ty, tx - ca * r * 1.2, ty - sa * r * 1.2, (i) => (i % 2 ? '#e0626a' : null));
-      seg(c, tx + 1, ty + 1, tx - ca * r * 1.2 + 1, ty - sa * r * 1.2 + 1, (i) => (i % 2 ? '#7ee0a0' : null));
+      const r = len * 0.45;
+      const p = [x + ca * r, y + sa * r, x + Math.cos(ang + 2.45) * r, y + Math.sin(ang + 2.45) * r, x + Math.cos(ang - 2.45) * r, y + Math.sin(ang - 2.45) * r];
+      const ls = litSign(ang);
+      fpoly(c, p, (px0, py0) => {
+        const t = (-(px0 - x) * sa + (py0 - y) * ca) * ls;
+        return t > 0.8 ? fx[5] : t < -0.8 ? fx[3] : fx[4];
+      });
+      const [tx, ty] = back(r * 0.55);
+      const ox = -sa;
+      const oy = ca;
+      ['#e0626a', '#f8e264', '#7ee0a0', '#8eb2fa'].forEach((col, i) => {
+        const o = (i - 1.5) * 1.1;
+        seg(c, tx + ox * o, ty + oy * o, tx + ox * o * 1.8 - ca * r * 1.3, ty + oy * o * 1.8 - sa * r * 1.3, (j, n) => (j > n * 0.7 && j % 2 ? null : col));
+      });
       break;
     }
     case 'bubble': {
@@ -1129,7 +1156,6 @@ function motifSpin(c: Ctx, k: SkillCtx): void {
       const w = 12 - i * 1.7;
       const cx = 16 + Math.sin(i * 0.9) * 2;
       ring(c, cx, y, 0, w, (a) => (a < 0.5 ? fx[5 - (i % 2)] : fx[3]), 0, 2 * PI);
-      paint(c, cx - w, y - w, cx + w, y + w, () => null);
     }
     // carve the funnel back into thin bands
     c.globalCompositeOperation = 'destination-out';
@@ -1435,7 +1461,7 @@ function motifNova(c: Ctx, k: SkillCtx): void {
     return;
   }
   if (has(k, 'storm', 'thunder', 'lightning') && !has(k, 'ascendant')) {
-    cloud(c, 16, 10, 14, R.storm.length ? ELEMENT_RAMPS.storm : fx);
+    cloud(c, 16, 10, 14, ELEMENT_RAMPS.storm);
     zap(c, 10, 15, 7, 28, ELEMENT_RAMPS.lightning, rng, 3, 2);
     zap(c, 19, 15, 23, 28, ELEMENT_RAMPS.lightning, rng, 3, 2);
     return;
@@ -2001,7 +2027,7 @@ function classLook(id: string): ClassLook {
     case 'mimic':
       return { main: R.spirit, glyph: (c) => mask(c, 16, 15, R.cream) };
     case 'moonwarden':
-      return { main: R.storm(), glyph: (c) => { ball(c, 16, 15, 7.5, R.cream); dot(c, 13, 13, 1.4, R.cream[2]); dot(c, 19, 17, 1, R.cream[2]); } };
+      return { main: ELEMENT_RAMPS.storm, glyph: (c) => { ball(c, 16, 15, 7.5, R.cream); dot(c, 13, 13, 1.4, R.cream[2]); dot(c, 19, 17, 1, R.cream[2]); } };
     case 'sword_saint':
       return { main: R.rose, glyph: (c) => { ring(c, 16, 9, 3.5, 4.6, R.gold[4]); swordAt(c, 16, 24, -90 * DEG, 14); } };
     case 'magma_knight':
@@ -2138,10 +2164,10 @@ function paintItem(c: Ctx, it: ItemDef | undefined, reg: Registry | null): void 
           const u = (x - 15) / 10;
           const v = (y - 17) / 6.5;
           if (u * u + v * v > 1) return null;
-          return y < 15 ? R.water[4] : y < 19 ? R.steel[4] : R.steel[5];
+          return y < 15 ? ELEMENT_RAMPS.water[4] : y < 19 ? R.steel[4] : R.steel[5];
         });
-        fpoly(l, [24, 17, 30, 10, 29, 17, 30, 24], R.water[3]);
-        fpoly(l, [12, 11, 17, 7, 19, 11], R.water[3]);
+        fpoly(l, [24, 17, 30, 10, 29, 17, 30, 24], ELEMENT_RAMPS.water[3]);
+        fpoly(l, [12, 11, 17, 7, 19, 11], ELEMENT_RAMPS.water[3]);
         px(l, 9, 15, OUT);
         px(l, 8, 15, '#ffffff');
         seg(l, 12, 13, 12, 21, R.steel[2]);

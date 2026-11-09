@@ -23,7 +23,9 @@ Everything in docs/CLIENT-v2.md still applies unless replaced here.
   `placeDressing(scene, planDressing(compiled))` (render/dressing.ts). Both destroyed on scene shutdown.
 - Animation: players play idle / walk (moving) / atk (on cast) from `CHAR_ANIMS`; NPCs idle 2-frame; monsters
   `MONSTER_ANIMS` (walk frames while moving, idle otherwise). Use Phaser `anims.create` once at boot.
-- Camera zoom = clamp(shortSide / 560, 1, 2) (ART-DIRECTION §7). `pixelArt: true`, `roundPixels: true`.
+- Pixel-perfect rendering per docs/QUALITY-PLAN.md §1 (low-res backbuffer + integer upscale, zoom 1). `pixelArt: true`,
+  `roundPixels: true`. Also adopt QUALITY-PLAN Phase A (depth layers, game event bus, pixel + bitmap fonts, boot
+  splash) in this integration.
 - Target chevron `ui_chevron` above the current target and above monsters actively chasing the player.
 - Floating text and name tags use the pixel font (bundled OFL font via npm `@fontsource/pixelify-sans`).
 
