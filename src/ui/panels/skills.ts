@@ -206,10 +206,19 @@ function morphChecklist(host: PanelHost, parent: string, opt: MorphOption, hidde
   ];
   const reqs = opt.morph.requires ?? [];
   opt.requirements.forEach((r, i) => {
-    const veiled = hidden && !r.ok && HIDING.has(reqs[i]?.type);
-    rows.push(veiled ? { text: 'Something out in the world…', ok: false } : r);
+    const req = reqs[i];
+    if (hidden && !r.ok && HIDING.has(req?.type)) rows.push({ text: 'Something out in the world…', ok: false });
+    else if (req?.type === 'skill' && !nameKnown(host, req.id)) rows.push({ text: `??? rank ${req.rank ?? 1}`, ok: r.ok });
+    else rows.push(r);
   });
   return reqList(rows);
+}
+
+/** Whether the player may see a skill's name: known, or a visible morph of a skill they know. */
+function nameKnown(host: PanelHost, id: string): boolean {
+  const { book, reg } = host.ctrl;
+  if (book.has(id)) return true;
+  return reg.morphsTo(id).some((m) => book.has(m.from) && !!book.morphOptions(m.from).find((o) => o.morph.to === id)?.skill);
 }
 
 /** Spark info for a morph that can crack open mid-fight. */
