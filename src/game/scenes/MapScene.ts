@@ -47,6 +47,7 @@ import { textureDataUrl } from '../art/pixel';
 import { uiUrl } from '../art/ui';
 import { type Actors, createActors, createNpcActor, playerLookKey } from '../entities/actors';
 import { Player } from '../entities/Player';
+import { targetRingKey } from '../entities/actorArt';
 import { type Stage, buildStage, type Insets } from '../render/stage';
 import { WorldText, type WorldLabel, worldLabel } from '../render/text';
 import { PRISM_GATE_SIZE, PRISM_SOCKETS } from '../textures';
@@ -443,7 +444,7 @@ export class MapScene extends Phaser.Scene implements GameController {
         const orb = this.add
           .image(gx, gy - PRISM_GATE_SIZE.h * 0.42, 'fx_orb')
           .setTint(0xbfe8ff)
-          .setScale(2.2, 3)
+          .setScale(2, 3)
           .setBlendMode(Phaser.BlendModes.ADD)
           .setDepth(ySort(gy, Y_BIAS.BEHIND));
         this.tweens.add({ targets: orb, alpha: { from: 0.75, to: 0.3 }, yoyo: true, repeat: -1, duration: 1200 });
@@ -690,8 +691,10 @@ export class MapScene extends Phaser.Scene implements GameController {
     this.combat.setTarget(null);
     this.combat.holdAuto();
     this.player.path = this.pathTo(x, y) ?? [];
-    this.moveMarker.setPosition(x, y).setVisible(true).setAlpha(1).setScale(1);
-    this.tweens.add({ targets: this.moveMarker, alpha: 0, scale: 0.6, duration: 500 });
+    this.tweens.killTweensOf(this.moveMarker);
+    this.moveMarker.setPosition(Math.round(x), Math.round(y)).setVisible(true).setAlpha(1);
+    // Stepped fade (no fractional scale on pixel art): 1 → 0.66 → 0.33 → 0.
+    this.tweens.add({ targets: this.moveMarker, alpha: 0, duration: 480, ease: 'Stepped', easeParams: [3] });
   }
 
   private handleKey(e: KeyboardEvent): void {
@@ -747,7 +750,9 @@ export class MapScene extends Phaser.Scene implements GameController {
     const t = this.combat.target;
     if (t?.alive) {
       this.targetRing.setPosition(t.x, t.y + 2);
-      this.targetRing.setScale(t.warden ? 2.4 : t.elite ? 1.5 : 1);
+      // Natively drawn ring per rank (integer-pixel rule: never scale pixel sprites).
+      const ringKey = targetRingKey(this, t.warden ? 'warden' : t.elite ? 'elite' : 'common');
+      if (this.targetRing.texture.key !== ringKey) this.targetRing.setTexture(ringKey);
     } else if (t) this.combat.setTarget(null);
     for (const v of this.portals) {
       if (!v.overlay || v.overlay.alpha === undefined) continue;

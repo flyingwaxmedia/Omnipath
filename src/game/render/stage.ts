@@ -84,7 +84,7 @@ const CHUNK = 16;
 const DARK_SCALE = 3;
 /** Darkness colour / outer alpha (the texture's rim), also used for the plain fill around the texture. */
 const DARK_RGB = [4, 6, 14] as const;
-const DARK_RIM = 0.8;
+const DARK_RIM = 0.85;
 /** How far (art px) the plain fill reaches beyond the texture: wider than any view, whatever the scale. */
 const DARK_REACH = 4096;
 /** Camera smoothing time constant (s): v2's lerp 0.12 per 60 fps frame. */
@@ -519,15 +519,16 @@ class PixelStage implements Stage {
     const tex = textures.createCanvas(key, S, S);
     if (!tex) return key;
     const g = tex.getContext();
-    // (radius as a fraction of the half size, alpha): clear within ~110 px of the player, 0.8 at the rim
+    // (radius as a fraction of the half size, alpha): clear within ~115 px of the player, DARK_RIM outside ~300 px
+    // Tuned to read like the High-tier light map (lantern pool ~130 px, unlit ground ~15-20 %), so Low quality and
+    // the Canvas renderer keep dungeons dark instead of evenly grey.
     const bands: readonly [number, number][] = [
-      [1, 0.8],
-      [0.62, 0.72],
-      [0.48, 0.62],
-      [0.38, 0.5],
-      [0.3, 0.36],
-      [0.24, 0.22],
-      [0.19, 0.1],
+      [1, DARK_RIM],
+      [0.4, 0.8],
+      [0.33, 0.7],
+      [0.27, 0.55],
+      [0.22, 0.38],
+      [0.18, 0.2],
       [0.15, 0],
     ];
     const img = g.createImageData(S, S);
