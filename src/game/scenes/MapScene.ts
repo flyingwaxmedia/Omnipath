@@ -2,21 +2,52 @@
 // `{ session, ui, mapId, arrive }`; init() resets every per-map field, create() builds the map from the cached
 // CompiledMap, and every external listener goes through a disposer list run on SHUTDOWN. The same instance is the
 // UI's GameController for the whole run.
+//
+// v3 seams (docs/INTEGRATION-v3.md §2): static world art and the camera live in render/stage.ts (buildStage), in-world
+// text in render/text.ts, NPC sprites / quest markers / chevrons / class looks in entities/actors.ts, and every v3
+// GameController view in ../views.ts (one-line delegations below). Player-facing messages for book events live in
+// src/ui/announce.ts; wireEvents() here keeps only the game-side effects.
 import Phaser from 'phaser';
 import type { Registry } from '../../core/registry';
 import type { FuseResult, SkillBook } from '../../core/skillbook';
 import type { SkillDef, WeaponType } from '../../core/types';
-import { STRUCTURE_FOOTPRINT, isBlockedPx } from '../../core/world/compile';
+import { isBlockedPx } from '../../core/world/compile';
 import { findPath } from '../../core/world/pathfinding';
 import { COLL, type CompiledMap, type MapDef, type PortalDef } from '../../core/world/types';
 import { NPCS } from '../../data/npcs';
 import { WEAPONS } from '../../data/weapons';
 import { mapById } from '../../data/world';
-import type { GameController, MinimapView, Outcome, TravelTargetView } from '../../ui/controller';
+import type {
+  BarSlotView,
+  ChangeKind,
+  ClassScreenView,
+  GameController,
+  MinimapView,
+  NpcQuestsView,
+  Outcome,
+  PursuitView,
+  QuestLogView,
+  QuestTurnInView,
+  QuickSlotsView,
+  SkillCardView,
+  SlotPickerView,
+  TravelTargetView,
+  WornClassView,
+  ZoneView,
+} from '../../ui/controller';
+import type { StarChartData } from '../../ui/starchart/data';
+import { buildStarChartData } from '../../ui/starchart/data';
 import type { UI } from '../../ui/ui';
-import { bandText, esc, hex, sourceText } from '../../ui/util';
+import { bandText, esc } from '../../ui/util';
+import { type IconKind, iconUrl, pipUrl } from '../art/icons';
+import { textureDataUrl } from '../art/pixel';
+import { uiUrl } from '../art/ui';
+import { type Actors, createActors, createNpcActor, playerLookKey } from '../entities/actors';
 import { Player } from '../entities/Player';
-import { PRISM_GATE_SIZE, PRISM_SOCKETS, TILE_MARGIN, TILE_SPACING } from '../textures';
+import { type Stage, buildStage, type Insets } from '../render/stage';
+import { WorldText, type WorldLabel, worldLabel } from '../render/text';
+import { PRISM_GATE_SIZE, PRISM_SOCKETS } from '../textures';
+import * as views from '../views';
 import { START_MAP, Session, type Stats, computeStats } from '../session';
 import { Combat } from '../systems/Combat';
 import { Interactions, type NodeView, type NpcView, type ObjectView, type PortalView } from '../systems/Interactions';
@@ -54,8 +85,6 @@ export interface MapSceneData {
   arrive?: Arrival;
 }
 
-/** Prop culling chunk size in tiles. */
-const CHUNK = 16;
 const SPAWN_PROTECT_MS = 2000;
 const SOCKET_GREY = 0x4a4f5e;
 
@@ -90,13 +119,12 @@ export class MapScene extends Phaser.Scene implements GameController {
   objects: ObjectView[] = [];
   nodes: NodeView[] = [];
   portals: PortalView[] = [];
-  private chunks: Phaser.GameObjects.Image[][] = [];
-  private chunkCols = 0;
-  private chunkWin = '';
-  private liveChunks = new Set<number>();
-  /** Props currently visible (perf budget ≤ 250 on phones). */
-  visibleProps = 0;
-  private dark: Phaser.GameObjects.Image | null = null;
+  /** Static world art + camera (render lane). */
+  stage!: Stage;
+  /** In-world text: floating numbers and labels (render lane). */
+  text!: WorldText;
+  /** NPC markers, chevrons, looks, animation (actors lane). */
+  actors!: Actors;
   private disposers: (() => void)[] = [];
   private warping = false;
   private arrive: Arrival | undefined;
@@ -106,8 +134,6 @@ export class MapScene extends Phaser.Scene implements GameController {
   private saveT = 0;
   private nodeT = 0;
   private frozenUntil = 0;
-  private floatPool: Phaser.GameObjects.Text[] = [];
-  private tilemap: Phaser.Tilemaps.Tilemap | null = null;
 
   constructor() {
     super('Map');
@@ -132,19 +158,11 @@ export class MapScene extends Phaser.Scene implements GameController {
     this.objects = [];
     this.nodes = [];
     this.portals = [];
-    this.chunks = [];
-    this.chunkCols = 0;
-    this.chunkWin = '';
-    this.liveChunks = new Set();
-    this.visibleProps = 0;
-    this.dark = null;
     this.disposers = [];
     this.warping = false;
     this.hotbarDirty = false;
     this.uiT = this.fogT = this.saveT = this.nodeT = 0;
     this.frozenUntil = 0;
-    this.floatPool = [];
-    this.tilemap = null;
     this.combat = new Combat(this);
     this.skills = new SkillSystem(this.combat);
     this.monsterSkills = new MonsterSkills(this);
@@ -156,18 +174,13 @@ export class MapScene extends Phaser.Scene implements GameController {
     this.def = mapById(this.mapId)!;
     this.base = compiled(this.mapId);
     this.cm = { ...this.base, coll: new Uint8Array(this.base.coll) };
-    const cave = ['cave', 'crypt'].includes(this.def.biome);
-    this.cameras.main.setBackgroundColor(cave ? '#0b0d14' : '#16261a');
-
-    this.buildGround();
-    this.buildProps();
-    this.buildStructures();
+    this.text = new WorldText(this);
+    this.stage = buildStage(this, this);
     this.buildObjects();
     this.buildNodes();
     this.buildNpcs();
     this.buildPortals();
     this.applyPortalBlocks();
-    if (this.def.flags?.includes('dark')) this.dark = this.add.image(0, 0, this.darkTexture()).setDepth(DEPTH.DARKNESS).setScale(6);
 
     const start = this.arrivalPoint();
     this.player = new Player(this, start.x, start.y, s.player.name, s.player.weapon);
@@ -181,11 +194,9 @@ export class MapScene extends Phaser.Scene implements GameController {
     this.combat.protectUntil = this.time.now + SPAWN_PROTECT_MS;
     this.combat.lastInput = this.time.now;
 
+    this.actors = createActors(this);
     const cam = this.cameras.main;
-    cam.startFollow(this.player.sprite, true, 0.12, 0.12);
-    this.fitCamera();
-    cam.centerOn(start.x, start.y);
-    this.listen(this.scale, 'resize', () => this.fitCamera());
+    this.stage.follow(this.player, start.x, start.y);
 
     const onDown = (ptr: Phaser.Input.Pointer) => {
       const wp = ptr.positionToCamera(cam) as Phaser.Math.Vector2;
@@ -211,8 +222,7 @@ export class MapScene extends Phaser.Scene implements GameController {
     this.enterMap();
     this.ui.mapChanged();
     // The hotbar is rendered by mapChanged(): re-fit so the HUD-safe camera bounds see the final HUD layout.
-    this.fitCamera();
-    cam.centerOn(this.player.x, this.player.y);
+    this.stage.fit({ x: this.player.x, y: this.player.y });
     cam.fadeIn(220);
 
     if (!this.book.flag('intro')) {
@@ -258,167 +268,17 @@ export class MapScene extends Phaser.Scene implements GameController {
     this.monsterSkills.clear();
     this.skills.clear();
     this.combat.clear();
-    this.tilemap?.destroy();
-    this.tilemap = null;
+    this.actors.destroy();
+    this.stage.destroy();
+    this.text.destroy();
     this.time.timeScale = 1;
     this.tweens.timeScale = 1;
   }
 
-  private fitCamera(): void {
-    const cam = this.cameras.main;
-    const { width, height } = this.scale;
-    let zoom = Phaser.Math.Clamp(Math.min(width, height) / 380, 1, 1.7);
-    const mw = this.cm.w * TILE;
-    const mh = this.cm.h * TILE;
-    if (this.def.kind === 'arena') zoom = Math.max(0.8, Math.min(zoom, height / mh));
-    cam.setZoom(zoom);
-    // Maps smaller than the view are centred instead of pinned to the top-left. HUD-safe bounds: where something the
-    // player must see or tap (portal, object, node, NPC) lies near a map edge, the camera may scroll past that edge by
-    // the HUD strip on that side (vitals/minimap on top, menu column, hotbar), so it never stays stuck under the HUD
-    // (playtest: mirror_lake#islet and greystone_quarry#shaft were untappable on portrait phones). Edges with nothing
-    // there keep the tight bounds, so no empty margin shows.
-    const vw = width / zoom;
-    const vh = height / zoom;
-    const ins = this.ui?.safeInsets?.() ?? { top: 0, right: 0, bottom: 0, left: 0 };
-    const need = this.edgeThings();
-    const pad = (px: number, side: keyof typeof need) => (px > 0 && need[side] < px / zoom + TILE * 2 ? px / zoom : 0);
-    const minX = Math.min(0, (mw - vw) / 2) - pad(ins.left, 'left');
-    const maxX = Math.max(mw - vw, (mw - vw) / 2) + pad(ins.right, 'right');
-    const minY = Math.min(0, (mh - vh) / 2) - pad(ins.top, 'top');
-    const maxY = Math.max(mh - vh, (mh - vh) / 2) + pad(ins.bottom, 'bottom');
-    cam.setBounds(minX, minY, maxX - minX + vw, maxY - minY + vh);
-    this.chunkWin = '';
-  }
-
-  /** Distance (px) from each map edge to the nearest portal / object / node / NPC (for the HUD-safe camera bounds). */
-  private edgeThings(): { top: number; right: number; bottom: number; left: number } {
-    const mw = this.cm.w * TILE;
-    const mh = this.cm.h * TILE;
-    const out = { top: Infinity, right: Infinity, bottom: Infinity, left: Infinity };
-    const add = (tx: number, ty: number, w = 1, h = 1) => {
-      out.left = Math.min(out.left, tx * TILE);
-      out.top = Math.min(out.top, ty * TILE);
-      out.right = Math.min(out.right, mw - (tx + w) * TILE);
-      out.bottom = Math.min(out.bottom, mh - (ty + h) * TILE);
-    };
-    for (const p of this.def.portals) add(p.tx, p.ty, p.w, p.h);
-    for (const o of this.def.objects ?? []) add(o.tx, o.ty);
-    for (const n of this.def.nodes ?? []) add(n.tx, n.ty);
-    for (const n of this.def.npcs ?? []) add(n.tx, n.ty);
-    return out;
-  }
-
   // =================================================================== building
 
-  /** Soft radial darkness for 'dark' maps (a light hole around the player), generated once per game. */
-  private darkTexture(): string {
-    const key = 'fx_darkness';
-    if (this.textures.exists(key)) return key;
-    const tex = this.textures.createCanvas(key, 256, 256);
-    if (!tex) return key;
-    const g = tex.getContext();
-    // Drawn at 6× scale: clear within ~110 px of the player, ~0.6 dark by ~330 px, 0.78 at the 768 px rim.
-    const grad = g.createRadialGradient(128, 128, 0, 128, 128, 128);
-    grad.addColorStop(0, 'rgba(4,6,14,0)');
-    grad.addColorStop(0.14, 'rgba(4,6,14,0)');
-    grad.addColorStop(0.26, 'rgba(4,6,14,0.35)');
-    grad.addColorStop(0.43, 'rgba(4,6,14,0.62)');
-    grad.addColorStop(1, 'rgba(4,6,14,0.8)');
-    g.fillStyle = grad;
-    g.fillRect(0, 0, 256, 256);
-    tex.refresh();
-    return key;
-  }
-
-  private buildGround(): void {
-    const { w, h, ground } = this.cm;
-    const data: number[][] = [];
-    for (let y = 0; y < h; y++) data.push(Array.from(ground.subarray(y * w, (y + 1) * w)));
-    const tm = this.make.tilemap({ data, tileWidth: TILE, tileHeight: TILE });
-    const ts = tm.addTilesetImage('tiles', 'tiles', TILE, TILE, TILE_MARGIN, TILE_SPACING)!;
-    tm.createLayer(0, ts, 0, 0)!.setDepth(DEPTH.GROUND);
-    this.tilemap = tm;
-  }
-
-  private buildProps(): void {
-    const cols = Math.ceil(this.cm.w / CHUNK);
-    const rows = Math.ceil(this.cm.h / CHUNK);
-    this.chunkCols = cols;
-    this.chunks = Array.from({ length: cols * rows }, () => []);
-    for (const pr of this.cm.props) {
-      if (!this.textures.exists(pr.kind)) continue;
-      const x = pr.tx * TILE + TILE / 2;
-      const y = (pr.ty + 1) * TILE;
-      const img = this.add.image(x, y, pr.kind).setOrigin(0.5, 1).setDepth(ySort(y, Y_BIAS.PROP)).setVisible(false);
-      this.chunks[Math.floor(pr.ty / CHUNK) * cols + Math.floor(pr.tx / CHUNK)].push(img);
-    }
-  }
-
-  /**
-   * Prop culling: props are indexed in 16×16-tile chunks; only chunks touching the camera view are scanned and
-   * only props whose sprite can overlap the view stay visible (tall props reach ~3 tiles above their base).
-   * Runs only when the view moves by a tile.
-   */
-  private cullProps(): void {
-    const v = this.cameras.main.worldView;
-    const left = v.x - TILE;
-    const right = v.right + TILE;
-    const top = v.y - TILE;
-    const bottom = v.bottom + TILE * 3;
-    const key = `${Math.floor(left / TILE)},${Math.floor(top / TILE)},${Math.ceil(right / TILE)},${Math.ceil(bottom / TILE)}`;
-    if (key === this.chunkWin) return;
-    this.chunkWin = key;
-    const span = CHUNK * TILE;
-    const rows = this.chunks.length / Math.max(1, this.chunkCols);
-    const cx0 = Math.max(0, Math.floor(left / span));
-    const cx1 = Math.min(this.chunkCols - 1, Math.floor(right / span));
-    const cy0 = Math.max(0, Math.floor(top / span));
-    const cy1 = Math.min(rows - 1, Math.floor(bottom / span));
-    const next = new Set<number>();
-    let shown = 0;
-    for (let cy = cy0; cy <= cy1; cy++) {
-      for (let cx = cx0; cx <= cx1; cx++) {
-        const ci = cy * this.chunkCols + cx;
-        next.add(ci);
-        for (const img of this.chunks[ci]) {
-          const on = img.x >= left && img.x <= right && img.y >= top && img.y <= bottom;
-          if (img.visible !== on) img.setVisible(on);
-          if (on) shown++;
-        }
-      }
-    }
-    for (const ci of this.liveChunks) {
-      if (next.has(ci)) continue;
-      for (const img of this.chunks[ci]) if (img.visible) img.setVisible(false);
-    }
-    this.liveChunks = next;
-    this.visibleProps = shown;
-  }
-
-  private buildStructures(): void {
-    for (const st of this.def.structures ?? []) {
-      const fp = STRUCTURE_FOOTPRINT[st.kind];
-      const key = `struct_${st.kind}`;
-      if (!fp || !this.textures.exists(key)) continue;
-      const x = (st.tx + fp.w / 2) * TILE;
-      const y = (st.ty + fp.h) * TILE;
-      this.add.image(x, y + 4, key).setOrigin(0.5, 1).setDepth(ySort(y));
-    }
-  }
-
-  private label(x: number, y: number, text: string, color: string, size = 10): Phaser.GameObjects.Text {
-    return this.add
-      .text(x, y, text, {
-        fontFamily: 'system-ui, sans-serif',
-        fontSize: `${size}px`,
-        color,
-        stroke: '#000',
-        strokeThickness: 3,
-        align: 'center',
-      })
-      .setOrigin(0.5, 1)
-      .setResolution(2)
-      .setDepth(DEPTH.NAME_TAG);
+  private label(x: number, y: number, text: string, color: string, size = 10): WorldLabel {
+    return worldLabel(this, x, y, text, { color, size });
   }
 
   private buildObjects(): void {
@@ -489,11 +349,7 @@ export class MapScene extends Phaser.Scene implements GameController {
       if (!def) continue;
       const x = place.tx * TILE + TILE / 2;
       const y = place.ty * TILE + TILE - 6;
-      this.add.image(x, y, 'shadow').setDepth(DEPTH.SHADOW);
-      const sprite = this.add.image(x, y + 2, this.textures.exists(def.texture) ? def.texture : 'npc_hermit').setOrigin(0.5, 1).setDepth(ySort(y));
-      const label = this.label(x, y - sprite.displayHeight - 2, `${def.name}\n${def.title}`, '#ffe9a0');
-      label.setLineSpacing(-2);
-      this.tweens.add({ targets: sprite, scaleY: 1.03, yoyo: true, repeat: -1, duration: 1100 + Math.random() * 300, ease: 'Sine.inOut' });
+      const { sprite, label } = createNpcActor(this, def, x, y);
       this.npcs.push({ kind: 'npc', def, x, y: place.ty * TILE + TILE / 2, sprite, label });
     }
   }
@@ -970,7 +826,7 @@ export class MapScene extends Phaser.Scene implements GameController {
     );
     if (this.combat.windup) p.castBar.setDepth(DEPTH.CAST_BAR);
     for (const m of this.combat.monsters) if (m.alive) m.sync(dt);
-    this.dark?.setPosition(p.x, p.y - 16);
+    this.actors.update(dt, now);
     const t = this.combat.target;
     if (t?.alive) {
       this.targetRing.setPosition(t.x, t.y + 2);
@@ -983,7 +839,7 @@ export class MapScene extends Phaser.Scene implements GameController {
       const d = distToRect(v.def, p.x, p.y);
       v.overlay.setAlpha(Phaser.Math.Clamp((4 * TILE - d) / (2 * TILE), 0, 1) * (0.55 + 0.25 * Math.sin(now / 300)));
     }
-    this.cullProps();
+    this.stage.update(dt, p);
 
     this.uiT += dt;
     if (this.uiT > 0.1) {
@@ -1167,35 +1023,7 @@ export class MapScene extends Phaser.Scene implements GameController {
   // =================================================================== fx
 
   floatText(x: number, y: number, text: string, color: string, size: number): void {
-    let t = this.floatPool.pop();
-    if (!t || !t.active) {
-      t = this.add
-        .text(0, 0, '', {
-          fontFamily: 'system-ui, sans-serif',
-          fontStyle: 'bold',
-          fontSize: '14px',
-          color: '#fff',
-          stroke: '#000',
-          strokeThickness: 3,
-        })
-        .setOrigin(0.5)
-        .setResolution(2)
-        .setDepth(DEPTH.WORLD_TEXT);
-    }
-    const txt = t;
-    txt.setText(text).setColor(color).setFontSize(size).setPosition(x, y).setAlpha(1).setVisible(true);
-    this.tweens.add({ targets: txt, y: y - 26, duration: 300, ease: 'Quad.out' });
-    this.tweens.add({
-      targets: txt,
-      alpha: 0,
-      delay: 450,
-      duration: 400,
-      onComplete: () => {
-        txt.setVisible(false);
-        if (this.floatPool.length < 40) this.floatPool.push(txt);
-        else txt.destroy();
-      },
-    });
+    this.text.float(x, y, text, color, size);
   }
 
   // =================================================================== GameController
