@@ -499,6 +499,7 @@ function hammerAt(c: Ctx, x: number, y: number, ang: number, len: number): void 
 type Obj =
   | 'sword'
   | 'knife'
+  | 'blade'
   | 'axe'
   | 'hammer'
   | 'orb'
@@ -743,8 +744,17 @@ function shield(c: Ctx, cx: number, cy: number, w: number, h: number, body: Ramp
 }
 
 function boot(c: Ctx, x: number, y: number, rp: Ramp): void {
-  bitmap(c, x, y, ['.####...', '.####...', '.#++#...', '.####...', '.####...', '.#####..', '########', '########', '++++++++'], rp[3], rp[1]);
-  rect(c, x + 2, y, 2, 6, rp[4]);
+  bitmap(
+    c,
+    x,
+    y,
+    ['.+###....', '.+###....', '.+###....', '.+###....', '.+###....', '++####...', '+######..', '+#######.', '#########', 'ooooooooo'],
+    rp[3],
+    rp[4],
+  );
+  rect(c, x + 1, y + 1, 4, 1, rp[1]);
+  px(c, x + 1, y, rp[5]);
+  rect(c, x, y + 9, 9, 1, rp[1]);
 }
 
 function wing(c: Ctx, x: number, y: number, rp: Ramp, flip = false): void {
@@ -865,10 +875,32 @@ function planet(c: Ctx, cx: number, cy: number, r: number, rp: Ramp, ringRp: Ram
   });
 }
 
-function horn(c: Ctx, x: number, y: number, rp: Ramp): void {
-  along(c, x, y, -20 * DEG, 0, 15, (s) => 0.6 + s * 0.22, (s, t) => (Math.floor(s) % 4 === 0 ? rp[2] : t < 0 ? rp[5] : rp[4]));
-  ring(c, x + 14.5, y - 5.5, 0, 3.6, rp[3]);
-  ring(c, x + 14.5, y - 5.5, 0, 2, OUT);
+function horn(c: Ctx, x: number, y: number, rp: Ramp, scale = 1): void {
+  const cx = x + 10 * scale;
+  const cy = y + 2 * scale;
+  const R0 = 10 * scale;
+  const a0 = 180 * DEG;
+  const span = 140 * DEG;
+  paint(c, cx - R0 - 6 * scale, cy - R0 - 6 * scale, cx + R0 + 6 * scale, cy + 6 * scale, (px0, py0) => {
+    const d = Math.hypot(px0 - cx, py0 - cy);
+    let a = Math.atan2(py0 - cy, px0 - cx) - a0;
+    a = ((a % (2 * PI)) + 2 * PI) % (2 * PI);
+    const t = a / span;
+    if (t > 1) return null;
+    const th = (0.8 + t * 3.6) * scale;
+    if (Math.abs(d - R0) > th) return null;
+    if (Math.floor(t * 9) % 3 === 2 && t < 0.9) return R.gold[d < R0 ? 5 : 3];
+    return d < R0 - th * 0.3 ? rp[5] : d < R0 + th * 0.4 ? rp[4] : rp[2];
+  });
+  const bx = cx + Math.cos(a0 + span) * R0;
+  const by = cy + Math.sin(a0 + span) * R0;
+  paint(c, bx - 6 * scale, by - 6 * scale, bx + 6 * scale, by + 6 * scale, (px0, py0) => {
+    const u = (px0 - bx) * Math.cos(a0 + span) + (py0 - by) * Math.sin(a0 + span);
+    const v = -(px0 - bx) * Math.sin(a0 + span) + (py0 - by) * Math.cos(a0 + span);
+    const e = (u / (4.8 * scale)) ** 2 + (v / (1.7 * scale)) ** 2;
+    return e <= 1 ? (e < 0.45 ? '#1a120c' : R.gold[4]) : null;
+  });
+  rect(c, x - 1, y + 1, 2 * scale, 2 * scale, R.gold[3]);
 }
 
 function hourglass(c: Ctx, cx: number, cy: number, sand: Ramp): void {
@@ -2230,7 +2262,7 @@ function paintItem(c: Ctx, it: ItemDef | undefined, reg: Registry | null): void 
         }
         break;
       case 'relic_storm':
-        horn(l, 4, 24, R.bone);
+        horn(l, 3, 24, R.bone, 1.35);
         ring(l, 11, 21, 0, 2.6, E.lightning[4]);
         bolt(l, 18, 2, 0.6, E.lightning);
         break;
