@@ -22,16 +22,19 @@ import type {
   ChangeKind,
   ClassScreenView,
   GameController,
+  MenuBadgesView,
   MinimapView,
   NpcQuestsView,
   Outcome,
   PursuitView,
+  QuestCardView,
   QuestLogView,
   QuestTurnInView,
   QuickSlotsView,
   SkillCardView,
   SlotPickerView,
   TravelTargetView,
+  UnlocksView,
   WornClassView,
   ZoneView,
 } from '../../ui/controller';
@@ -255,12 +258,6 @@ export class MapScene extends Phaser.Scene implements GameController {
     this.events.once(Phaser.Scenes.Events.UPDATE, pauseIfOpen);
     this.disposers.push(() => this.events.off(Phaser.Scenes.Events.UPDATE, pauseIfOpen));
     this.save();
-  }
-
-  /** Registers an external listener that is removed on SHUTDOWN. */
-  private listen(target: Phaser.Events.EventEmitter, event: string, fn: (...args: never[]) => void): void {
-    target.on(event, fn);
-    this.disposers.push(() => target.off(event, fn));
   }
 
   private shutdown(): void {
@@ -570,13 +567,16 @@ export class MapScene extends Phaser.Scene implements GameController {
 
   // =================================================================== events
 
+  /**
+   * Game-side effects of SkillBook events (per map, removed on SHUTDOWN). Every player-facing message for these
+   * events (log lines, toasts, discovery cards, banners) lives in src/ui/announce.ts.
+   */
   private wireEvents(): void {
     const ev = this.book.events;
     const ui = this.ui;
-    const reg = this.reg;
     const add = (off: () => void) => this.disposers.push(off);
     add(
-      ev.on('learned', ({ skill, source }) => {
+      ev.on('learned', ({ skill }) => {
         this.session.autoSlot(skill.id);
         if (!this.book.flag('tip_autocast') && this.session.player.hotbar.includes(skill.id)) {
           this.book.incFlag('tip_autocast');
@@ -584,127 +584,39 @@ export class MapScene extends Phaser.Scene implements GameController {
         }
         this.combat.invalidateSparks();
         this.hotbarDirty = true;
-        const origin = sourceText(source, reg);
-        ui.log(`📖 Learned <b>${esc(skill.name)}</b> <small>(${esc(origin)})</small>`, 'rare');
-        if (!source.startsWith('spark:') && source !== 'debug') {
-          const el = skill.element ? reg.element(skill.element) : undefined;
-          ui.discovery({
-            icon: skill.icon,
-            kicker: source.startsWith('class:')
-              ? 'SIGNATURE SKILL'
-              : source.startsWith('echo:')
-                ? 'ECHO LEARNED'
-                : source.startsWith('lesson:')
-                  ? 'TECHNIQUE LEARNED'
-                  : skill.generated
-                    ? 'NEW INFUSION'
-                    : 'NEW SKILL',
-            title: skill.name,
-            body: `${esc(skill.desc)}<br><small>${esc(origin)}</small>`,
-            accent: el ? hex(el.color) : undefined,
-          });
-        }
         this.save();
       }),
     );
     add(
-      ev.on('element', ({ element, source }) => {
-        ui.log(`${element.icon} Attuned to <b>${element.name}</b>!`, 'rare');
-        ui.discovery({
-          icon: element.icon,
-          kicker: 'ELEMENT ATTUNED',
-          title: element.name,
-          body: `${esc(element.desc)}<br><small>${esc(sourceText(source, reg))}</small><br><br>Combine it with a skill at a <b>⚗️ Fusion Altar</b>.`,
-          accent: hex(element.color),
-        });
+      ev.on('element', () => {
         this.refreshPortals();
         this.save();
       }),
     );
     add(
       ev.on('rankUp', ({ skill, rank }) => {
+        // LANE game: in-world text cannot draw emoji (bitmap pixel font) — drop skill.icon, e.g. "Slash ★3".
         this.floatText(this.player.x, this.player.y - 50, `${skill.icon} ${skill.name} R${rank}`, '#9fe0ff', 13);
-        ui.log(`⬆ <b>${esc(skill.name)}</b> reached rank ${rank}.`, 'good');
         this.hotbarDirty = true;
       }),
     );
-    add(
-      ev.on('mastered', ({ skill }) => {
-        const opts = this.book.morphOptions(skill.id);
-        const avail = opts.filter((o) => o.available && !o.owned).length;
-        ui.discovery({
-          icon: skill.icon,
-          kicker: '★ MASTERED',
-          title: skill.name,
-          body: opts.length
-            ? `${avail} form${avail === 1 ? '' : 's'} ready to morph${opts.length > avail ? `, ${opts.length - avail} still sealed` : ''}.
-               Open <b>📖 Skills</b> to morph it — you keep ${esc(skill.name)}.`
-            : 'Its future lies in fusion. Keep training it: overmastery opens a second essence slot.',
-        });
-      }),
-    );
-    add(
-      ev.on('charge', ({ skill, charges }) => {
-        this.hotbarDirty = true;
-        if (charges > 1) ui.toast(`✨ ${esc(skill.name)}: another morph charge (${charges})`);
-      }),
-    );
+    add(ev.on('charge', () => (this.hotbarDirty = true)));
     add(
       ev.on('classDiscovered', ({ cls, worn }) => {
         if (worn) gameBus.emit('classChanged', { classId: cls.id, prev: null, reason: 'discovered' });
-        ui.log(`🏛️ Class discovered: <b>${esc(cls.name)}</b>`, 'rare');
-        ui.discovery({
-          icon: cls.icon,
-          kicker: 'CLASS DISCOVERED',
-          title: cls.name,
-          body: `${esc(cls.desc)}<br><small>${worn ? 'You now wear it.' : 'Wear it from 🏛️ Class in a safe town.'}</small>`,
-          accent: '#c9a0ff',
-        });
         ui.updateVitals();
       }),
     );
-    add(ev.on('classRank', ({ cls, rank }) => ui.toast(`🏛️ <b>${esc(cls.name)}</b> reached Class Rank ${rank}`)));
-    add(ev.on('hint', ({ text }) => ui.log(`🌫️ <i>“${esc(text)}”</i>`, 'info')));
     add(
-      ev.on('spark', ({ from, to }) => {
+      ev.on('spark', () => {
         this.hitStop(250);
         this.skills.fxRing(this.player.x, this.player.y - 10, 90, 0xffe9a0, true);
         this.cameras.main.flash(160, 255, 236, 170);
-        ui.sparkBanner(`✦ New form: ${to.name}`, `${from.name} cracked open mid-fight`);
         try {
           navigator.vibrate?.(60);
         } catch {
           /* not supported */
         }
-      }),
-    );
-    add(
-      ev.on('witness', ({ skill, status, marks, need, anchorShape }) => {
-        if (status === 'progress') ui.toast(`👁 Witnessed ${Math.min(marks, need)}/${need}: <b>${esc(skill.name)}</b>`);
-        else if (status === 'blocked')
-          ui.log(
-            `🌫️ <i>The echo of <b>${esc(skill.name)}</b> slips away — you need a ${anchorShape} skill at rank 3 to hold it.</i>`,
-            'info',
-          );
-      }),
-    );
-    add(ev.on('echo', ({ skill, monster }) => ui.log(`👁 You echo the ${esc(monster.name)}: <b>${esc(skill.name)}</b>`, 'rare')));
-    add(
-      ev.on('passive', ({ def, rank }) => {
-        ui.toast(`✧ Passive <b>${esc(def.name)}</b>${rank > 1 ? ` rank ${rank}` : ''}`);
-        ui.log(`✧ Passive: <b>${esc(def.name)}</b> rank ${rank} — ${esc(def.desc)}`, 'good');
-      }),
-    );
-    add(
-      ev.on('essence', ({ essence, added, source }) => {
-        if (source.startsWith('drop:')) ui.toast(`${essence.icon} Essence of <b>${esc(essence.name)}</b>`);
-        ui.log(`${essence.icon} +${added} Essence of <b>${esc(essence.name)}</b>`, 'loot');
-      }),
-    );
-    add(ev.on('lesson', ({ lesson, trainer }) => ui.log(`📜 ${esc(trainer.title)}: <b>${esc(lesson.name)}</b>`, 'good')));
-    add(
-      ev.on('bestiary', ({ monster, stars, starUp }) => {
-        if (starUp) ui.toast(`📕 Bestiary: <b>${esc(monster.name)}</b> ${'★'.repeat(stars)}`);
       }),
     );
     add(ev.on('morphed', () => (this.hotbarDirty = true)));
@@ -722,7 +634,7 @@ export class MapScene extends Phaser.Scene implements GameController {
 
   // =================================================================== input
 
-  private hitSprite(img: Phaser.GameObjects.Image, x: number, y: number): boolean {
+  private hitSprite(img: Phaser.GameObjects.Image | Phaser.GameObjects.Sprite, x: number, y: number): boolean {
     const decal = img.originY === 0.5;
     const cy = decal ? img.y : img.y - img.displayHeight * 0.5;
     const r = Math.max(26, (decal ? Math.max(img.displayWidth, img.displayHeight) : img.displayHeight) * 0.5);
@@ -1393,6 +1305,142 @@ export class MapScene extends Phaser.Scene implements GameController {
       this.session.world.y = this.player.y;
     }
     this.session.save();
+  }
+
+  // =================================================================== GameController v3 (views in ../views.ts)
+
+  /** StageHost: CSS px the persistent HUD covers along each edge. */
+  safeInsets(): Insets {
+    return this.ui?.safeInsets?.() ?? { top: 0, right: 0, bottom: 0, left: 0 };
+  }
+
+  /** Props currently visible (perf budget ≤ 250 on phones; debug info). */
+  get visibleProps(): number {
+    return this.stage?.visibleProps ?? 0;
+  }
+
+  onChange(fn: (what: ChangeKind) => void): () => void {
+    return views.onChange(this, fn);
+  }
+
+  barSlots(): BarSlotView[] {
+    return views.barSlots(this);
+  }
+
+  equipSkill(skillId: string, slot?: number): Outcome {
+    return views.equipSkill(this, skillId, slot);
+  }
+
+  clearSlot(slot: number): void {
+    views.clearSlot(this, slot);
+  }
+
+  slotPicker(slot: number): SlotPickerView {
+    return views.slotPicker(this, slot);
+  }
+
+  skillCard(skillId: string): SkillCardView {
+    return views.skillCard(this, skillId);
+  }
+
+  starChartData(): StarChartData {
+    return buildStarChartData(this.reg, this.book);
+  }
+
+  classCards(): ClassScreenView {
+    return views.classCards(this);
+  }
+
+  becomeClass(id: string | null): Outcome {
+    return views.becomeClass(this, id);
+  }
+
+  wornClass(): WornClassView | null {
+    return views.wornClass(this);
+  }
+
+  npcQuests(npcId: string): NpcQuestsView {
+    return views.npcQuests(this, npcId);
+  }
+
+  acceptQuest(id: string, npcId: string): Outcome {
+    return views.acceptQuest(this, id, npcId);
+  }
+
+  turnInQuest(id: string, npcId: string): QuestTurnInView {
+    return views.turnInQuest(this, id, npcId);
+  }
+
+  abandonQuest(id: string): Outcome {
+    return views.abandonQuest(this, id);
+  }
+
+  trackQuest(id: string, on: boolean): Outcome {
+    return views.trackQuest(this, id, on);
+  }
+
+  questLog(): QuestLogView {
+    return views.questLog(this);
+  }
+
+  pursuits(): PursuitView[] {
+    return views.pursuits(this);
+  }
+
+  questMarker(npcId: string): '!' | '?' | '…' | null {
+    return this.book.questMarker(npcId);
+  }
+
+  questCard(id: string): QuestCardView | null {
+    return views.questCardById(this, id);
+  }
+
+  zone(): ZoneView {
+    return views.zone(this);
+  }
+
+  quickSlots(): QuickSlotsView {
+    return views.quickSlots(this);
+  }
+
+  useQuick(kind: 'heal' | 'recall' | 'potion' | 'rest'): Outcome {
+    return views.useQuick(this, kind);
+  }
+
+  cycleTarget(): void {
+    if (this.combat && this.player && !this.combat.dead) views.cycleTarget(this);
+  }
+
+  unlocks(): UnlocksView {
+    return views.unlocks(this);
+  }
+
+  badges(): MenuBadgesView {
+    return views.badges(this);
+  }
+
+  firstTime(key: string): boolean {
+    return views.firstTime(this, key);
+  }
+
+  iconUrl(kind: IconKind, id: string): string {
+    return iconUrl(this, kind, id);
+  }
+
+  pipUrl(kind: 'el' | 'mod', id: string): string {
+    return pipUrl(this, kind, id);
+  }
+
+  uiUrl(key: string): string {
+    return uiUrl(this, key);
+  }
+
+  portraitUrl(): string {
+    return this.outfitUrl(this.book.state.worn);
+  }
+
+  outfitUrl(classId: string | null): string {
+    return textureDataUrl(this, playerLookKey(this, this.session.player.weapon, classId));
   }
 
   // =================================================================== debug (tests / dev only)

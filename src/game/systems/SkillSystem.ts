@@ -455,9 +455,9 @@ export class SkillSystem {
         const cy = o.y + Math.sin(ang) * d;
         const delay = s.delay ?? 200;
         this.fxTelegraph(cx, cy, s.radius, color, delay);
-        gameBus.emit('novaTelegraph', { owner: 'player', skillId: skill.id, skill, element: skill.element, x: cx, y: cy, radius: s.radius, delayMs: delay });
+        gameBus.emit('novaTelegraph', { owner: 'player', skillId: skill.id, skill, element: skill.element, castId: cast.id, x: cx, y: cy, radius: s.radius, delayMs: delay, timing: { start: scene.time.now, at: scene.time.now + delay } });
         scene.time.delayedCall(delay, () => {
-          gameBus.emit('novaBlast', { owner: 'player', skillId: skill.id, skill, element: skill.element, x: cx, y: cy, radius: s.radius, heavy: skill.power >= 2 || skill.tags.includes('heavy') });
+          gameBus.emit('novaBlast', { owner: 'player', skillId: skill.id, skill, element: skill.element, castId: cast.id, x: cx, y: cy, radius: s.radius, heavy: skill.power >= 2 || skill.tags.includes('heavy') });
           this.fxNova(cx, cy, s.radius, color, skill.element, skill.power >= 2 || skill.tags.includes('heavy'));
           for (const m of this.host.liveMonsters()) {
             if (Math.hypot(m.x - cx, m.y - cy) <= s.radius + m.radius) this.host.hit(m, { ...cast, origin: { x: cx, y: cy } });
@@ -535,7 +535,7 @@ export class SkillSystem {
       else scene.time.delayedCall(delay, () => this.fxLightning([from, { x: m.x, y: m.y - 10 }], color));
       scene.time.delayedCall(delay + (knives ? step : 0), () => {
         if (!m.alive) return;
-        gameBus.emit('chainHop', { owner: 'player', skillId: skill.id, skill, element: skill.element, from, to, index: i, target: m, knives });
+        gameBus.emit('chainHop', { owner: 'player', skillId: skill.id, skill, element: skill.element, castId: cast.id, from, to, index: i, target: m, knives });
         const roll = this.host.hit(m, cast, Math.pow(0.85, i));
         // Conduct: one extra jump on chain shapes (once per cast).
         if (roll?.combo?.extraJump && !extended) {
@@ -610,7 +610,7 @@ export class SkillSystem {
       }
       if (dead) {
         const sk = pr.cast.skill;
-        gameBus.emit('projectileEnd', { owner: 'player', obj: pr.img, skillId: sk.id, skill: sk, element: sk.element, x: pr.x, y: pr.y, reason: pr.returning ? 'return' : pr.traveled >= pr.range ? 'range' : isBlockedPx(map, pr.x, pr.y) ? 'wall' : 'hit' });
+        gameBus.emit('projectileEnd', { owner: 'player', obj: pr.img, mover: pr, skillId: sk.id, skill: sk, element: sk.element, castId: pr.cast.id, x: pr.x, y: pr.y, reason: pr.returning ? 'caught' : pr.traveled >= pr.range ? 'expire' : isBlockedPx(map, pr.x, pr.y) ? 'wall' : 'hit' });
         if (pr.returning) this.fxFlash(p.x, p.y - 20, 12, pr.color);
         else this.fxImpactAt(pr.x, pr.y - 14, pr.cast.skill, pr.color, 4);
         pr.img.destroy();
@@ -724,7 +724,7 @@ export class SkillSystem {
     if (!plain) img.setTint(color);
     img.setBlendMode(look.add ? ADD : NORMAL);
     img.rotation = a;
-    this.projectiles.push({
+    const pr: Projectile = {
       cast,
       img,
       x: cast.origin.x,
@@ -743,9 +743,10 @@ export class SkillSystem {
       color,
       trailT: 0,
       returning: false,
-    });
+    };
+    this.projectiles.push(pr);
     const sk = cast.skill;
-    gameBus.emit('projectileSpawn', { owner: 'player', obj: img, skillId: sk.id, skill: sk, element: sk.element, x: cast.origin.x, y: cast.origin.y, angle: a, speed, range, size });
+    gameBus.emit('projectileSpawn', { owner: 'player', obj: img, mover: pr, skillId: sk.id, skill: sk, element: sk.element, castId: cast.id, x: cast.origin.x, y: cast.origin.y, angle: a, speed, range, size });
   }
 
   private dash(cast: Cast, ang: number, distance: number, width: number, spin: boolean, color: number) {
@@ -763,7 +764,7 @@ export class SkillSystem {
     }
     const scene = this.host.world;
     const dur = 170;
-    gameBus.emit('dash', { owner: 'player', skillId: cast.skill.id, skill: cast.skill, element: cast.skill.element, from: { x: sx, y: sy }, to: { x: ex, y: ey }, durationMs: dur, width });
+    gameBus.emit('dash', { owner: 'player', skillId: cast.skill.id, skill: cast.skill, element: cast.skill.element, castId: cast.id, from: { x: sx, y: sy }, to: { x: ex, y: ey }, durationMs: dur, width, spin });
     p.path = [];
     p.lockedUntil = scene.time.now + dur + 30;
     for (let i = 0; i < 5; i++) {

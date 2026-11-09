@@ -1,5 +1,7 @@
 // Shared panel plumbing: the host every panel renders through, tabs, and small HTML helpers.
 import type { GameController } from '../controller';
+import type { DialogOption, DiscoveryCard } from '../dialogs';
+import type { LogKind } from '../hud';
 import { $$, esc } from '../util';
 
 export interface PanelHost {
@@ -14,6 +16,18 @@ export interface PanelHost {
   render(): void;
   close(): void;
   toast(msg: string): void;
+  /** Speaker dialog (NPC talk, objects): text may hold <b>/<small>; options close it unless `keep`. */
+  dialog(speaker: string, portrait: string, text: string, options: DialogOption[]): void;
+  // v3 (docs/INTEGRATION-v3.md §2.6): members the UI facade already implements, so panels never need a cast.
+  // Frozen while lanes run: a NEW member must already exist on UI (src/ui/ui.ts) or be optional.
+  /** Queues a discovery / reward card (shown after the current panel or card). */
+  discovery(card: DiscoveryCard): void;
+  /** Big centre banner ("You are now a Pyroblade"). */
+  headline(title: string, sub?: string, accent?: string): void;
+  /** One line in the HUD log. */
+  log(msg: string, kind?: LogKind): void;
+  /** Re-renders the open panel and the skill bar. */
+  refresh(): void;
 }
 
 export type PanelRender = (host: PanelHost, arg?: string) => void;

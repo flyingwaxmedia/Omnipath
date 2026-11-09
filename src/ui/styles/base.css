@@ -14,6 +14,9 @@
   --safe-b: env(safe-area-inset-bottom, 0px);
   --safe-l: env(safe-area-inset-left, 0px);
   --safe-r: env(safe-area-inset-right, 0px);
+  /* Fonts (docs/INTEGRATION-v3.md §2): the render lane redefines these once the OFL pixel fonts are bundled. */
+  --font-ui: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-small: var(--font-ui);
 }
 
 * {
@@ -27,7 +30,7 @@ body {
   overflow: hidden;
   background: #0f1424;
   color: var(--ink);
-  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  font-family: var(--font-ui);
   -webkit-user-select: none;
   user-select: none;
   -webkit-tap-highlight-color: transparent;

@@ -50,6 +50,13 @@ export interface BarSlotView {
   classId?: string;
   /** Hotkey label: '1'..'8'. */
   key: string;
+  /** Filled slots only (plain data so the bar never reads core internals): name, ★ rank of maxRank, element pip,
+   *  and ✨ when the skill can transform now. */
+  name?: string;
+  rank?: number;
+  maxRank?: number;
+  element?: ElementId;
+  transformReady?: boolean;
 }
 
 /** One choice in the own-slot picker grid (docs/UX-SIMPLE.md §3). */
@@ -85,7 +92,10 @@ export type SkillCardAction =
 
 /** The simple skill card (docs/UX-SIMPLE.md §3): big icon, name, ★ rank, one line, cooldown/SP, one action. */
 export interface SkillCardView {
+  /** The id asked for: a skill id, or 'el:<element>' for an element star (Star Chart, The Heart). */
   id: string;
+  /** 'element' for 'el:<id>' cards (no rank / cooldown / SP; action is the one step to find it, or none). */
+  kind?: 'skill' | 'element';
   name: string;
   /** One short line, written like a game ("Spin and slash everything around you."). */
   line: string;
@@ -133,7 +143,8 @@ export interface ClassScreenView {
   unlocked: ClassCardView[];
   /** Locked classes worth showing (riddle heard or close), nearest first. */
   locked: ClassCardView[];
-  /** Changing class works here (safe towns only). */
+  /** Becoming another class works right now (SPEC-v2 §5.1 v3.1: any time, instant — the game lane may only block
+   *  it mid-fight or while dead). */
   canChange: boolean;
   /** Why not, in one line ("Change class in a town."). */
   changeHint?: string;
@@ -250,6 +261,39 @@ export interface WornClassView {
   color: string;
 }
 
+/**
+ * Progressive disclosure (docs/UX-SIMPLE.md rule 7): which systems the player has met, so every lane hides the same
+ * things until they matter. The HUD hides Fuse until `fusion`; the Star Chart shows its Passives / Essences tabs
+ * after `passives` / `essences`; the Class screen shows Keepsakes after `keepsakes`; the Codex shows Quests after
+ * `quests`.
+ */
+export interface UnlocksView {
+  /** First element attuned: the Fuse button and fusion hints. */
+  fusion: boolean;
+  /** First essence owned: the Essences tab and Rune sockets. */
+  essences: boolean;
+  /** First passive (Mastery bonus) learned: the Passives tab. */
+  passives: boolean;
+  /** First class unlocked: class slots, the Class screen's cards. */
+  classes: boolean;
+  /** First Class Level 5 reached: Keepsakes. */
+  keepsakes: boolean;
+  /** Any quest accepted (or completed): the Codex Quests tab. */
+  quests: boolean;
+}
+
+/** Gold "something new" dots on the top-right buttons (by panel name). */
+export interface MenuBadgesView {
+  /** A skill can transform now. */
+  skills: boolean;
+  /** A class is unlocked but has never been worn, or a class point is unspent. */
+  classes: boolean;
+  /** A tracked / active quest is ready to turn in. */
+  codex: boolean;
+  /** Standing at an altar with two things that could fuse. */
+  altar: boolean;
+}
+
 /** Left-edge quick buttons: what they would use, and how many are left. */
 export interface QuickSlotsView {
   heal: { itemId: string; count: number } | null;
@@ -357,6 +401,8 @@ export interface GameController {
   pursuits(): PursuitView[];
   /** Marker over an NPC's head: '!' available, '?' ready to turn in, '…' in progress, null. */
   questMarker(npcId: string): '!' | '?' | '…' | null;
+  /** One quest's card (log focus `quests:<id>`, progress toasts, reward previews); null for unknown ids. */
+  questCard(id: string): QuestCardView | null;
 
   // -------------------------------------------------------------------- v3: HUD helpers
 
@@ -368,6 +414,15 @@ export interface GameController {
   useQuick(kind: 'heal' | 'recall' | 'potion' | 'rest'): Outcome;
   /** Target button: cycles to the next nearest enemy (none nearby → toast). */
   cycleTarget(): void;
+  /** Which systems the player has met (progressive disclosure, docs/UX-SIMPLE.md rule 7). */
+  unlocks(): UnlocksView;
+  /** Gold dots on the top-right buttons. */
+  badges(): MenuBadgesView;
+  /**
+   * "Teach in the moment" (docs/UX-SIMPLE.md rule 9): true exactly once per save for `key` (then remembered), so a
+   * one-line hint toast shows only the first time ("Hold ⚔ to keep swinging"). Keys are plain slugs ('hold_attack').
+   */
+  firstTime(key: string): boolean;
 
   // -------------------------------------------------------------------- v3: art for the DOM (data URLs, cached)
 

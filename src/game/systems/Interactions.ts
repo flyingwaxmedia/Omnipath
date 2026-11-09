@@ -6,8 +6,10 @@ import type { NodeDef, NodeKind, ObjectDef, PortalDef } from '../../core/world/t
 import type { NpcDef } from '../../data/npcs';
 import { WEAPONS } from '../../data/weapons';
 import type { WeaponType } from '../../core/types';
+import type { DialogOption } from '../../ui/dialogs';
 import { esc } from '../../ui/util';
 import { gameBus } from '../events';
+import type { WorldLabel } from '../render/text';
 import type { MapScene } from '../scenes/MapScene';
 import {
   TILE,
@@ -25,8 +27,9 @@ export interface NpcView {
   def: NpcDef;
   x: number;
   y: number;
-  sprite: Phaser.GameObjects.Image;
-  label: Phaser.GameObjects.Text;
+  /** Animated by the actors lane (entities/actors.ts). */
+  sprite: Phaser.GameObjects.Sprite;
+  label: WorldLabel;
 }
 export interface ObjectView {
   kind: 'object';
@@ -34,7 +37,7 @@ export interface ObjectView {
   x: number;
   y: number;
   sprite: Phaser.GameObjects.Image;
-  label: Phaser.GameObjects.Text | null;
+  label: WorldLabel | null;
 }
 export interface NodeView {
   kind: 'node';
@@ -56,7 +59,7 @@ export interface PortalView {
   overlay: Phaser.GameObjects.Image | null;
   /** Everything else drawn for the portal (chevrons, door, gate, sockets, label). */
   parts: Phaser.GameObjects.GameObject[];
-  label: Phaser.GameObjects.Text | null;
+  label: WorldLabel | null;
 }
 export type Interactable = NpcView | ObjectView | NodeView | PortalView;
 
@@ -185,6 +188,11 @@ export class Interactions {
     return npc.lines[Math.floor(Math.random() * npc.lines.length)] ?? '...';
   }
 
+  /** Opens the NPC dialog (src/ui/panels/npc.ts renders it with the NPC's quests). */
+  private say(npc: NpcDef, line: string, options: DialogOption[]): void {
+    this.s.ui.npcDialog({ npcId: npc.id, name: npc.name, title: npc.title, portrait: npc.portrait, line, options });
+  }
+
   private lessonsOpt(npc: NpcDef) {
     return npc.trainer ? [{ label: '📜 Lessons', action: () => this.s.ui.open('trainer', npc.id) }] : [];
   }
@@ -210,7 +218,7 @@ export class Interactions {
           : `Work the forge with me. Do it right ${FORGES_FOR_FIRE} times and the heat will get into your bones. <small>(${Math.min(forged, FORGES_FOR_FIRE)}/${FORGES_FOR_FIRE})</small>`;
         const forSale = (Object.keys(WEAPONS) as WeaponType[]).filter((w) => !pl.ownedWeapons.includes(w));
         const ore = s.session.count('ore');
-        ui.dialog(npc.name, npc.portrait, `${fireLine}<br><br>Each forging takes <b>2 ore</b>. You have <b>${ore}</b>.`, [
+        this.say(npc, `${fireLine}<br><br>Each forging takes <b>2 ore</b>. You have <b>${ore}</b>.`, [
           { label: '🔥 Forge', action: () => this.forge(), disabled: ore < 2 },
           ...this.lessonsOpt(npc),
           ...forSale.map((w) => ({
@@ -233,7 +241,7 @@ export class Interactions {
         let text = 'Be healed, traveler. <i>(HP and SP restored.)</i><br><br>';
         if (!book.hasElement('holy') && n >= 3) {
           text += 'Three elements dwell within you, in balance. Then you are ready for the light.';
-          ui.dialog(npc.name, npc.portrait, text, [
+          this.say(npc, text, [
             { label: 'Receive the light', action: () => book.learnElement('holy', "Sister Alba's blessing") },
             ...this.lessonsOpt(npc),
           ]);
@@ -242,24 +250,24 @@ export class Interactions {
         text += book.hasElement('holy')
           ? esc(this.line(npc))
           : `When <b>three elements</b> dwell in you, return to me. <small>(${n}/3)</small>`;
-        ui.dialog(npc.name, npc.portrait, text, [{ label: 'Thank you' }, ...this.lessonsOpt(npc)]);
+        this.say(npc, text, [{ label: 'Thank you' }, ...this.lessonsOpt(npc)]);
         return;
       }
       case 'fisher': {
         const caught = book.flag('fish_caught');
         const extra = book.hasElement('water') ? '' : ` <small>(${Math.min(caught, FISH_FOR_WATER)}/${FISH_FOR_WATER} fish)</small>`;
-        ui.dialog(npc.name, npc.portrait, `${esc(this.line(npc))}${extra}`, [{ label: 'Got it' }, ...this.lessonsOpt(npc)]);
+        this.say(npc, `${esc(this.line(npc))}${extra}`, [{ label: 'Got it' }, ...this.lessonsOpt(npc)]);
         return;
       }
       case 'hermit':
       case 'trainer':
-        ui.dialog(npc.name, npc.portrait, esc(this.line(npc)), [...this.lessonsOpt(npc), { label: 'Leave' }]);
+        this.say(npc, esc(this.line(npc)), [...this.lessonsOpt(npc), { label: 'Leave' }]);
         return;
       case 'waykeeper': {
         const wsId = waystoneOf(s.def);
         const key = wsId ? objectKey(s.mapId, wsId) : null;
         const here = key !== null && s.session.world.savePoint === key;
-        ui.dialog(npc.name, npc.portrait, esc(this.line(npc)), [
+        this.say(npc, esc(this.line(npc)), [
           ...(key
             ? [
                 {
@@ -279,7 +287,7 @@ export class Interactions {
         return this.loremaster(npc);
       case 'villager':
       default:
-        ui.dialog(npc.name, npc.portrait, esc(this.line(npc)), [{ label: 'Bye' }]);
+        this.say(npc, esc(this.line(npc)), [{ label: 'Bye' }]);
     }
   }
 
@@ -300,7 +308,7 @@ export class Interactions {
         text += `<br><br><i>She reads from the Codex:</i> “${esc(cls.hint)}”<br><small>(Riddle added to your Codex.)</small>`;
       } else if (!cls) text += '<br><br><small>I have no riddles left that you have not already heard.</small>';
     }
-    s.ui.dialog(npc.name, npc.portrait, text, [{ label: 'Thank you' }]);
+    this.say(npc, text, [{ label: 'Thank you' }]);
   }
 
   private setSavePoint(key: string): void {

@@ -1,7 +1,14 @@
 // UI facade (docs/CLIENT-v2.md §1/§7): created ONCE in main.ts and handed to every MapScene restart. Composes the
 // HUD, minimap, dialogs and panels, and owns the shared modal (which panel is open, the discovery-card queue,
 // pausing the world while anything modal is up). Everything the game asks of the DOM goes through here.
-import type { GameController } from './controller';
+//
+// v3 (docs/INTEGRATION-v3.md §2): owned by the HUD lane. Panels come from three registries — PANELS (panels lane,
+// ./panels/index.ts), STARCHART_PANELS (starchart lane, ./starchart/index.ts) and HUD_PANELS (HUD lane, ./picker.ts)
+// — so lanes add panels without editing this file. Player-facing messages for game events: ./announce.ts (panels
+// lane). Opening / closing the modal emits uiOpen / uiClose on the game bus; showing a card emits discovery.
+import { gameBus } from '../game/events';
+import { wireAnnouncements } from './announce';
+import type { GameController, NpcDialogView } from './controller';
 import {
   type DialogOption,
   type DiscoveryCard,
@@ -13,29 +20,22 @@ import {
 } from './dialogs';
 import { Hud, type CastInfo, type LogKind, type TargetInfo } from './hud';
 import { Minimap } from './minimap';
-import { renderAltar } from './panels/altar';
-import { renderBag } from './panels/bag';
-import { renderClasses } from './panels/classes';
-import { renderCodex } from './panels/codex';
 import type { PanelHost, PanelRender } from './panels/common';
-import { renderMap } from './panels/map';
-import { renderSkills } from './panels/skills';
-import { renderTrainer } from './panels/trainer';
+import { PANELS as LANE_PANELS, PANELS_FULLSCREEN } from './panels/index';
+import { openNpcDialog } from './panels/npc';
+import { HUD_PANELS } from './picker';
+import { STARCHART_FULLSCREEN, STARCHART_PANELS } from './starchart/index';
 import { $ } from './util';
 
 export { esc } from './util';
 export type { DialogOption, DiscoveryCard } from './dialogs';
 export type { CastInfo, TargetInfo } from './hud';
 
-const PANELS: Record<string, PanelRender> = {
-  skills: renderSkills,
-  altar: renderAltar,
-  classes: renderClasses,
-  codex: renderCodex,
-  bag: renderBag,
-  trainer: renderTrainer,
-  map: renderMap,
-};
+/** Every panel by name (ui.open(name, arg)); the three lane registries never share a name. */
+const PANELS: Record<string, PanelRender> = { ...LANE_PANELS, ...STARCHART_PANELS, ...HUD_PANELS };
+
+/** Panels that cover the whole screen (uiOpen.fullscreen: the render lane may sleep the game loop). */
+const FULLSCREEN: ReadonlySet<string> = new Set([...STARCHART_FULLSCREEN, ...PANELS_FULLSCREEN]);
 
 export class UI implements PanelHost {
   readonly root: HTMLElement;
@@ -72,6 +72,8 @@ export class UI implements PanelHost {
     this.root.addEventListener('contextmenu', (e) => e.preventDefault());
     // v2 discovery cards (spark, echo, passive, essence, class rank…): the book outlives map restarts, so once.
     wireDiscoveryCards(this, ctrl);
+    // Logs, toasts, cards and banners for every book / game-bus event (also once).
+    wireAnnouncements(this, ctrl);
   }
 
   // ================================================================ HUD passthroughs
@@ -109,6 +111,16 @@ export class UI implements PanelHost {
 
   sparkBanner(title: string, sub = ''): void {
     this.hud.sparkBanner(title, sub);
+  }
+
+  /** Big centre banner ("You are now a Pyroblade"). LANE hud: its own look (today the spark banner). */
+  headline(title: string, sub = '', _accent?: string): void {
+    this.hud.sparkBanner(title, sub);
+  }
+
+  /** Talking to an NPC (Interactions): the NPC dialog with its quests (./panels/npc.ts). */
+  npcDialog(view: NpcDialogView): void {
+    openNpcDialog(this, view);
   }
 
   setTarget(t: TargetInfo | null): void {
@@ -192,13 +204,16 @@ export class UI implements PanelHost {
     this.panelArg = arg;
     this.modal.classList.remove('hidden');
     this.ctrl.setPaused(true);
+    gameBus.emit('uiOpen', { panel: name, ...(arg !== undefined ? { arg } : {}), fullscreen: FULLSCREEN.has(name) });
     this.render();
   }
 
   close(): void {
+    const was = this.panel;
     this.panel = null;
     this.panelArg = undefined;
     if (this.showingDiscovery) return;
+    if (was) gameBus.emit('uiClose', { panel: was });
     this.modal.classList.add('hidden');
     this.modal.innerHTML = '';
     this.ctrl.setPaused(false);
@@ -245,6 +260,7 @@ export class UI implements PanelHost {
       this.modal.dataset.panel = 'dialog';
       this.modal.classList.remove('hidden');
       this.ctrl.setPaused(true);
+      gameBus.emit('uiOpen', { panel: 'dialog', fullscreen: false });
       renderDialog(this.modal, speaker, portrait, text, options.length ? options : [{ label: 'OK' }], () => this.close());
     };
     // A discovery card is up: show the dialog right after the cards.
@@ -285,6 +301,7 @@ export class UI implements PanelHost {
     this.modal.classList.remove('hidden');
     this.modal.dataset.panel = 'discovery';
     this.ctrl.setPaused(true);
+    gameBus.emit('discovery', { kind: card.kind ?? card.kicker.toLowerCase(), title: card.title });
     renderDiscovery(this.modal, card, this.discoveries.length > 0, () => {
       this.showingDiscovery = false;
       if (this.discoveries.length) this.nextDiscovery();
@@ -298,6 +315,7 @@ export class UI implements PanelHost {
         this.modal.classList.add('hidden');
         this.modal.innerHTML = '';
         this.ctrl.setPaused(false);
+        gameBus.emit('uiClose', { panel: 'discovery' });
         this.renderHotbar();
       }
     });
@@ -309,6 +327,7 @@ export class UI implements PanelHost {
       this.modal.dataset.panel = 'minigame';
       this.modal.classList.remove('hidden');
       this.ctrl.setPaused(true);
+      gameBus.emit('uiOpen', { panel: 'minigame', fullscreen: false });
       run(this.modal, (v) => {
         this.close();
         resolve(v);

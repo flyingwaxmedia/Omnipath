@@ -6,10 +6,13 @@ import { emptyState, type SkillBookState } from '../core/state';
 import type { Registry } from '../core/registry';
 import type { BuffStat, StatBonus, WeaponType } from '../core/types';
 import { WEAPON_TYPES } from '../core/types';
+import { NPCS } from '../data/npcs';
 import { WEAPONS } from '../data/weapons';
+import { mapById } from '../data/world';
 import { gameBus } from './events';
 
 export const HOTBAR_SIZE = 6;
+const NPC_NAMES = new Map(NPCS.map((n) => [n.id, n.name]));
 export const SAVE_KEY = 'omnipath.save.v2';
 export const SAVE_KEY_V1 = 'omnipath.save.v1';
 /** Where new characters (and migrated v1 saves) start. */
@@ -244,6 +247,8 @@ export class Session {
       coins: () => this.player.coins,
       spend: (cost) => this.spend(cost),
     };
+    // Quest texts name NPCs and maps ('Speak with Fisher Pell', 'Visit Mirror Lake').
+    this.book.names = { npc: (id) => NPC_NAMES.get(id), map: (id) => mapById(id)?.name };
     // The book lives as long as the session: forward the events the game bus mirrors (docs/INTEGRATION-v3.md §4).
     const ev = this.book.events;
     ev.on('learned', ({ skill, source }) => gameBus.emit('skillLearned', { skillId: skill.id, skill, element: skill.element, source }));

@@ -1,7 +1,7 @@
 // GameController v3 views (game lane; docs/INTEGRATION-v3.md §5). MapScene delegates every v3 controller method
 // here in one line, so the scene stays a thin host. Everything returned is plain data in plain words
 // (docs/UX-SIMPLE.md): ids only as keys. Spots the game lane still has to finish are marked `// LANE game:`.
-import { CLASS_SLOTS, barEligible, classMaxRank, classXpToNext } from '../core/classes';
+import { CLASS_SLOTS, barEligible, canBuyNode, classMaxRank, classXpToNext } from '../core/classes';
 import type { QuestView } from '../core/skillbook';
 import type { ElementId, QuestDef, QuestReward, Requirement } from '../core/types';
 import { NPCS } from '../data/npcs';
@@ -11,6 +11,7 @@ import type {
   BarSlotView,
   ChangeKind,
   ClassCardView,
+  MenuBadgesView,
   ClassScreenView,
   NpcQuestView,
   NpcQuestsView,
@@ -24,6 +25,7 @@ import type {
   SkillCardAction,
   SkillCardView,
   SlotPickerView,
+  UnlocksView,
   WornClassView,
   ZoneView,
 } from '../ui/controller';
@@ -74,13 +76,25 @@ export function classSlotCount(s: MapScene): number {
 export function barSlots(s: MapScene): BarSlotView[] {
   const worn = s.book.state.worn;
   const n = classSlotCount(s);
-  return s.session.player.hotbar.map((skillId, index) => ({
-    index,
-    skillId,
-    kind: index < n ? 'class' : 'own',
-    ...(index < n && worn ? { classId: worn } : {}),
-    key: String(index + 1),
-  }));
+  return s.session.player.hotbar.map((skillId, index) => {
+    const sk = skillId ? s.reg.skill(skillId) : undefined;
+    return {
+      index,
+      skillId,
+      kind: index < n ? 'class' : 'own',
+      ...(index < n && worn ? { classId: worn } : {}),
+      key: String(index + 1),
+      ...(sk
+        ? {
+            name: sk.name,
+            rank: s.book.rank(sk.id),
+            maxRank: sk.maxRank,
+            ...(sk.element ? { element: sk.element } : {}),
+            transformReady: s.book.has(sk.id) && s.book.canMorph(sk.id),
+          }
+        : {}),
+    };
+  });
 }
 
 /** Whether a skill may sit on the bar at all. */
@@ -134,10 +148,28 @@ export function slotPicker(s: MapScene, slot: number): SlotPickerView {
 
 // ====================================================================== skill card
 
+/** The card of an element star ('el:<id>', The Heart). */
+function elementCard(s: MapScene, id: string): SkillCardView {
+  const el = s.reg.element(id.slice(3) as ElementId);
+  const known = !!el && s.book.hasElement(el.id);
+  const base = { id, kind: 'element' as const, rank: 0, maxRank: 0, progress: 0, cooldown: 0, sp: 0, transformReady: false, details: [] };
+  if (!el) return { ...base, name: '?', line: 'An unknown element.', known: false, action: { kind: 'none' } };
+  // LANE game: the one way to find an unknown element in plain words ("Forge at Brann's anvil.", "Fuse fire and water.").
+  return {
+    ...base,
+    name: known ? el.name : '?',
+    line: known ? firstSentence(el.desc) : 'An element you have not found yet.',
+    element: el.id,
+    known,
+    action: known ? { kind: 'none' } : { kind: 'step', text: 'Not found yet.' },
+  };
+}
+
 export function skillCard(s: MapScene, id: string): SkillCardView {
+  if (id.startsWith('el:')) return elementCard(s, id);
   const sk = s.reg.skill(id);
   if (!sk) {
-    return { id, name: '?', line: 'An unknown skill.', known: false, rank: 0, maxRank: 0, progress: 0, cooldown: 0, sp: 0, transformReady: false, action: { kind: 'none' }, details: [] };
+    return { id, kind: 'skill', name: '?', line: 'An unknown skill.', known: false, rank: 0, maxRank: 0, progress: 0, cooldown: 0, sp: 0, transformReady: false, action: { kind: 'none' }, details: [] };
   }
   const book = s.book;
   const known = book.has(id);
@@ -174,6 +206,7 @@ export function skillCard(s: MapScene, id: string): SkillCardView {
   if (el) details.push({ label: 'Element', value: el.name });
   return {
     id,
+    kind: 'skill',
     name: sk.name,
     line: firstSentence(sk.desc),
     element: sk.element,
@@ -246,6 +279,8 @@ export function classCards(s: MapScene): ClassScreenView {
     .sort((a, b) => b.v.progress - a.v.progress)
     .map(({ c }) => cards.find((x) => x.id === c.id)!)
     .filter(Boolean);
+  // LANE game: SPEC-v2 §5.1 v3.1 — becoming a class works any time (block it only mid-fight / while dead, with a
+  // one-line changeHint such as "Finish the fight first."); becomeClass / wearClass must follow the same rule.
   const canChange = s.isSafe();
   return { current, unlocked, locked, canChange, ...(canChange ? {} : { changeHint: 'Change class in a town.' }) };
 }
@@ -316,9 +351,16 @@ export function questCard(s: MapScene, v: QuestView): QuestCardView {
     ...(q.chain ? { chain: q.chain } : {}),
     objectives: s.book.questProgress(q.id).map((o) => ({ text: o.text, have: o.have, need: o.need, done: o.done })),
     rewards: rewardView(s, q.rewards),
-    tracked: s.book.state.quests.tracked.includes(q.id),
+    tracked: (s.book.state.quests?.tracked ?? []).includes(q.id),
     repeatable: !!q.repeatable,
   };
+}
+
+/** One quest's card by id (null for unknown ids). */
+export function questCardById(s: MapScene, id: string): QuestCardView | null {
+  const quest = s.reg.quest(id);
+  if (!quest) return null;
+  return questCard(s, { quest, status: s.book.questStatus(id), turnIn: quest.turnIn ?? quest.giver });
 }
 
 export function npcQuests(s: MapScene, npcId: string): NpcQuestsView {
@@ -401,7 +443,7 @@ export function pursuits(s: MapScene): PursuitView[] {
     .map((c) => ({ c, v: s.book.classProgress(c) }))
     .filter(({ v }) => v.codex === 'near')
     .sort((a, b) => b.v.progress - a.v.progress)[0];
-  if (near) goals.push({ key: `goal:class:${near.c.id}`, kind: 'goal', title: near.c.name, line: classHint(s, near.c.id), progress: near.v.progress, icon: { kind: 'cls', id: near.c.id }, open: { panel: 'classes' } });
+  if (near) goals.push({ key: `goal:class:${near.c.id}`, kind: 'goal', title: near.c.name, line: classHint(s, near.c.id), progress: near.v.progress, icon: { kind: 'cls', id: near.c.id }, open: { panel: 'classes', arg: near.c.id } });
   return [...out, ...goals.slice(0, 2)];
 }
 
@@ -500,6 +542,47 @@ export function cycleTarget(s: MapScene): void {
   const at = s.combat.target ? live.indexOf(s.combat.target) : -1;
   s.combat.lastInput = s.time.now;
   s.combat.setTarget(live[(at + 1) % live.length]);
+}
+
+// ====================================================================== progressive disclosure, badges, tips
+
+export function unlocks(s: MapScene): UnlocksView {
+  const st = s.book.state;
+  const q = st.quests;
+  return {
+    fusion: Object.keys(st.elements).length > 0,
+    essences: Object.values(st.essences).some((n) => n > 0),
+    passives: s.book.passives().length > 0,
+    classes: Object.keys(st.classes).length > 0,
+    keepsakes: s.book.imprintSlots() > 0,
+    quests: !!q && (Object.keys(q.active).length > 0 || Object.keys(q.done).length > 0),
+  };
+}
+
+export function badges(s: MapScene): MenuBadgesView {
+  const book = s.book;
+  const st = book.state;
+  const worn = st.worn ? s.reg.classDef(st.worn) : undefined;
+  const prog = worn ? st.classes[worn.id] : undefined;
+  const node = !!worn && !!prog && (worn.tree ?? []).some((n) => canBuyNode(worn, prog, n.id).ok);
+  // LANE game: "unlocked but never worn" needs a seen-marker per class (e.g. a 'seen_class:<id>' flag set by the
+  // Class screen); today: a class is unlocked and none is worn.
+  const unworn = !st.worn && Object.keys(st.classes).length > 0;
+  return {
+    skills: book.known().some((sk) => book.canMorph(sk.id)),
+    classes: node || unworn,
+    codex: Object.keys(st.quests?.active ?? {}).some((id) => book.questStatus(id) === 'ready'),
+    altar: s.atAltar() && Object.keys(st.elements).length > 0,
+  };
+}
+
+/** True exactly once per save for `key` (the flag `tip_<key>` remembers it). */
+export function firstTime(s: MapScene, key: string): boolean {
+  const flag = `tip_${key}`;
+  if (s.book.flag(flag) > 0) return false;
+  s.book.incFlag(flag);
+  s.requestSave();
+  return true;
 }
 
 /** First unmet requirement text of a list ('' when all are met). */

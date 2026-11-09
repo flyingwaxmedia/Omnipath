@@ -1,8 +1,9 @@
-import Phaser from 'phaser';
 import { MASTERY } from './core/mastery';
 import type { ElementId } from './core/types';
 import { createRegistry } from './data';
 import { mapById } from './data/world';
+import { gameBus } from './game/events';
+import { createGame } from './game/render/config';
 import { BootScene } from './game/scenes/BootScene';
 import { MapScene } from './game/scenes/MapScene';
 import { Session } from './game/session';
@@ -23,19 +24,11 @@ if (import.meta.env.DEV) {
   if (errs.length) console.warn('[omnipath] data problems:', errs);
 }
 
-const game = new Phaser.Game({
-  type: Phaser.AUTO,
-  parent: 'game',
-  backgroundColor: '#16261a',
-  pixelArt: true,
-  roundPixels: true,
-  scale: { mode: Phaser.Scale.RESIZE, width: window.innerWidth, height: window.innerHeight },
-  input: { activePointers: 3 },
-  scene: [BootScene, MapScene],
-});
+// Phaser config, pixel-perfect scaling and fonts: src/game/render/config.ts (render lane).
+const game = createGame([BootScene, MapScene], reg);
 
 interface OmnipathHandle {
-  game: Phaser.Game;
+  game: ReturnType<typeof createGame>;
   session?: Session;
   reg: typeof reg;
   scene?: MapScene;
@@ -150,7 +143,34 @@ game.events.once('omnipath:ready', async () => {
       const em = session.book.events as unknown as { listeners: Map<string, Set<unknown>> };
       let book = 0;
       for (const set of em.listeners.values()) book += set.size;
-      return { book, resize: game.scale.listenerCount('resize'), sceneEvents: scene.events.eventNames().reduce((a, n) => a + scene.events.listenerCount(n), 0) };
+      return {
+        book,
+        bus: gameBus.count(),
+        resize: game.scale.listenerCount('resize'),
+        sceneEvents: scene.events.eventNames().reduce((a, n) => a + scene.events.listenerCount(n), 0),
+      };
+    },
+    /** v3 views (docs/INTEGRATION-v3.md §8): what the HUD / panels see. */
+    bar: () => scene.barSlots(),
+    quests: (npcId?: string) => (npcId ? scene.npcQuests(npcId) : scene.questLog()),
+    classes: () => scene.classCards(),
+    pursuits: () => scene.pursuits(),
+    card: (skillId: string) => scene.skillCard(skillId),
+    stars: () => {
+      const d = scene.starChartData();
+      return { stars: d.stars.length, links: d.links.length, charted: d.charted, total: d.total };
+    },
+    /** Counts game-bus events by name until called again with false (sound / VFX / quest hook checks). */
+    tapBus: (on = true) => {
+      const w = window as unknown as { __busTap?: { counts: Record<string, number>; off: () => void } };
+      w.__busTap?.off();
+      delete w.__busTap;
+      if (!on) return null;
+      const counts: Record<string, number> = {};
+      const names = ['hit', 'kill', 'castStart', 'castFire', 'projectileSpawn', 'projectileEnd', 'chainHop', 'novaTelegraph', 'novaBlast', 'dash', 'buffApplied', 'statusApplied', 'combo', 'heal', 'playerHurt', 'death', 'levelUp', 'gather', 'mapEnter', 'warp', 'talk', 'interact', 'questChanged', 'uiOpen', 'uiClose', 'discovery', 'classChanged', 'skillLearned', 'barChanged', 'spark', 'monsterTelegraph', 'dotTick', 'skillPulse', 'monsterTelegraphEnd', 'enrage'] as const;
+      const offs = names.map((n) => gameBus.on(n, () => (counts[n] = (counts[n] ?? 0) + 1)));
+      w.__busTap = { counts, off: () => offs.forEach((o) => o()) };
+      return counts;
     },
   };
 });

@@ -1,4 +1,4 @@
-// Named depth layers (docs/QUALITY-PLAN.md §2, docs/INTEGRATION-v3.md §3). EVERY setDepth in src/game/** uses
+// Named depth layers (docs/QUALITY-PLAN.md §2, docs/INTEGRATION-v3.md §4). EVERY setDepth in src/game/** uses
 // these — never a bare number — so new systems (VFX, quest markers, canopies, light maps) slot in without
 // colliding. One camera draws everything; Phaser sorts by depth, ties by creation order.
 //
@@ -30,6 +30,8 @@
 //   CHEVRON         the target chevron above the current target and chasing monsters
 //   DARKNESS        the darkness overlay of dark maps (v3: the light map)
 //   LIGHT           what pierces the darkness: spark bursts (LIGHT_TOP: the spark star)
+//   TELL_TOP        danger read-outs that must survive darkness and glow (VFX rim duplicates, aim beads, edge
+//                   indicators — docs/VFX.md §8.3)
 //   WORLD_TEXT      floating combat text (damage, heals, level up) — always readable
 //   SCREEN_FX       world-space full-screen overlays (reserved: warp pixelation, flashes drawn as sprites)
 //
@@ -66,6 +68,7 @@ export const DEPTH = {
   DARKNESS: 150000,
   LIGHT: 150001,
   LIGHT_TOP: 150002,
+  TELL_TOP: 150010,
   WORLD_TEXT: 200000,
   SCREEN_FX: 210000,
 } as const;

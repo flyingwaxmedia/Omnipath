@@ -10,12 +10,13 @@
 //
 // Events (when each fires):
 //   hit              a PLAYER skill hit a monster (Combat.hit, after damage; resisted hits too, damage 0)
-//   dotTick          a damage-over-time tick hurt a monster (burn / poison / bleed) (Combat.damageMonsterRaw)
-//   kill             a monster died to the player (Combat.kill, before rewards are logged)
+//   dotTick          a damage-over-time tick hurt a monster (burn / poison / bleed) (Combat.updateMonster)
+//   kill             a monster died to the player (Combat.kill, after exp / coins / drops): rewards & quests
 //   castStart        the player began a wind-up (castMs > 0) (Combat.castSkill)
 //   castFire         a player skill's effect fires: SP paid, cooldown started (Combat.fire), basics included
 //   projectileSpawn  a projectile left its owner (SkillSystem.spawnProjectile, MonsterSkills.shoot)
-//   projectileEnd    a projectile was removed: hit (pierce spent / struck the player), range, wall, or caught on return
+//   projectileEnd    a projectile was removed: hit (pierce spent / struck the player), expire (range), wall, or caught
+//                    (a returning projectile back in the caster's hand)
 //   chainHop         one hop of a chain landed on a monster (SkillSystem.chain), before its hit
 //   novaTelegraph    the player's nova landing marker appears (SkillSystem nova; lasts delayMs)
 //   novaBlast        a nova detonates (player: SkillSystem; monster: MonsterSkills), before its hits
@@ -26,7 +27,7 @@
 //   combo            a status combo landed: Shatter / Conduct / Fan the Flames (Combat.applyCombo)
 //   heal             the player healed from a hit rider (leech, smite) (Combat)
 //   playerHurt       the player lost HP: a monster hit or a damage-over-time tick (Combat.hurtPlayer / tickPlayer)
-//   death            the player fell (Combat.die)
+//   death            an actor died — a monster (Combat.kill, right after `kill`) or the player (Combat.die): visuals
 //   levelUp          the player reached a new base level (Combat.gainExp, once per level gained)
 //   gather           a gather node paid out (Interactions.node: mining, herbs, shards, fishing…)
 //   mapEnter         the player entered a map (MapScene.create → enterMap), every entry, `first` on discovery
@@ -41,8 +42,15 @@
 //   barChanged       the skill bar's contents changed (assign, auto-slot, class refill)
 //   spark            Sudden insight: a skill cracked open into a new form mid-fight (forwarded from SkillBook 'spark')
 //   monsterTelegraph a monster began a technique wind-up (MonsterSkills.start): shape, where it lands, how long
+//
+// Declared for the game lane to emit (docs/INTEGRATION-v3.md §4, docs/VFX.md §8.2 — the names the VFX bridge uses):
+//   skillPulse          each strike swing / spin pulse / nova release / volley launch of ONE cast (player:
+//                       SkillSystem; monster: MonsterSkills swing / pulse) — the VFX never re-times swings
+//   monsterTelegraphEnd a telegraphed monster technique resolved (its hits ran) or was cancelled (death, stun)
+//   enrage              a warden became enraged below half HP (MonsterSkills.enrage)
+// Optional fields marked "(VFX request)" are filled in by the game lane; listeners must cope with them missing.
 import type Phaser from 'phaser';
-import type { BuffStat, ElementId, MonsterDef, ShapeKind, SkillDef, StatusKind } from '../core/types';
+import type { BuffStat, ElementId, MonsterDef, MonsterRank, ShapeKind, SkillDef, StatusKind } from '../core/types';
 import type { NodeKind } from '../core/world/types';
 import type { Monster } from './entities/Monster';
 
@@ -56,11 +64,27 @@ export interface Pt {
 /** Who did / suffered something: the player, or a monster instance (valid only while its map is loaded). */
 export type Actor = 'player' | Monster;
 
-/** Fields every skill event carries. `def` is the composed SkillDef (cheap: already in hand at every emitter). */
+/** Fields every skill event carries. `skill` is the composed SkillDef (cheap: already in hand at every emitter). */
 export interface SkillRef {
   skillId: string;
   skill: SkillDef;
   element?: ElementId;
+  /**
+   * The player's cast (SkillSystem Cast.id): links castFire → projectiles / hops / novas / hits of the SAME cast
+   * (a reprise keeps its id). Absent for wind-ups (no cast yet) and monster techniques.
+   */
+  castId?: number;
+  /** The reprised copy of a cast (same castId) (VFX request). */
+  reprise?: boolean;
+}
+
+/** A live projectile record (SkillSystem Projectile / MonsterSkills Shot): read it every frame while it flies. */
+export interface Mover {
+  readonly x: number;
+  readonly y: number;
+  readonly vx: number;
+  readonly vy: number;
+  readonly returning?: boolean;
 }
 
 export interface HitEvent extends SkillRef, Pt {
@@ -79,6 +103,12 @@ export interface HitEvent extends SkillRef, Pt {
   killed: boolean;
   /** Index of this hit within its cast (0 = the cast's first hit: an "engaged" cast). */
   hitIndex: number;
+  /** Blow direction (radians, from the cast origin toward the target). */
+  ang: number;
+  /** How the blow arrived when not directly: an arc-rider zap, a pierce, a returning projectile (VFX request). */
+  via?: 'arc' | 'pierce' | 'return';
+  /** Arc rider: where the zap came from (VFX request). */
+  from?: Pt;
 }
 
 export interface DotTickEvent extends Pt {
@@ -119,16 +149,26 @@ export interface ProjectileSpawnEvent extends SkillRef, Pt {
   owner: Actor;
   /** The projectile's image (attach trails to it; it is destroyed by its owner system). */
   obj: Phaser.GameObjects.Image;
+  /** The live projectile record (position / velocity every frame; identity until projectileEnd). */
+  mover: Mover;
   angle: number;
   speed: number;
   range: number;
   size: number;
+  /** Unique per projectile (projectileEnd carries the same id) (VFX request). */
+  id?: number;
+  /** Volley position: index of count (VFX request). */
+  index?: number;
+  count?: number;
 }
 
 export interface ProjectileEndEvent extends SkillRef, Pt {
   owner: Actor;
   obj: Phaser.GameObjects.Image;
-  reason: 'hit' | 'range' | 'wall' | 'return';
+  mover: Mover;
+  reason: 'hit' | 'expire' | 'wall' | 'caught';
+  /** Same id as its projectileSpawn (VFX request). */
+  id?: number;
 }
 
 export interface ChainHopEvent extends SkillRef {
@@ -147,6 +187,8 @@ export interface NovaTelegraphEvent extends SkillRef, Pt {
   owner: Actor;
   radius: number;
   delayMs: number;
+  /** Scene-time window of the marker: progress = (now - start) / (at - start). */
+  timing: { start: number; at: number };
 }
 
 export interface NovaBlastEvent extends SkillRef, Pt {
@@ -161,6 +203,8 @@ export interface DashEvent extends SkillRef {
   to: Pt;
   durationMs: number;
   width: number;
+  /** The caster spins through the dash. */
+  spin: boolean;
 }
 
 export interface BuffAppliedEvent extends SkillRef, Pt {
@@ -168,6 +212,8 @@ export interface BuffAppliedEvent extends SkillRef, Pt {
   stat: BuffStat;
   amount: number;
   durationMs: number;
+  /** Scene time the buff ends (VFX request). */
+  untilMs?: number;
 }
 
 export interface StatusAppliedEvent extends Pt {
@@ -175,17 +221,25 @@ export interface StatusAppliedEvent extends Pt {
   kind: StatusKind;
   /** Crowd-control immunity stopped it (player stuns / freezes only). */
   blocked?: boolean;
+  /** Scene time the status ends (VFX request). */
+  untilMs?: number;
+  /** The skill that applied it (VFX request). */
+  source?: SkillDef;
 }
 
 export interface ComboEvent extends SkillRef, Pt {
   target: Monster;
   name: string;
   consumes: StatusKind;
+  /** Fan the Flames: where the burn spread to (VFX request). */
+  spreadTo?: Pt[];
 }
 
 export interface HealEvent extends Pt {
   amount: number;
   source: 'leech' | 'smite';
+  /** The struck target the heal streams from (VFX request). */
+  from?: Pt;
 }
 
 export interface PlayerHurtEvent extends Pt {
@@ -200,11 +254,24 @@ export interface PlayerHurtEvent extends Pt {
   heavy: boolean;
   /** Set for damage-over-time ticks. */
   dot?: StatusKind;
+  /** The monster that struck (not for DoT ticks) and its technique, when known (VFX request). Monster blows on
+   *  the player stay `playerHurt` — `hit` is only ever the player's hit on a monster. */
+  attacker?: Monster;
+  skillId?: string;
+  skill?: SkillDef;
 }
 
 export interface DeathEvent extends Pt {
-  from: string;
-  expLost: number;
+  /** Who died: 'player' or the monster (its sprite is still on screen this frame). */
+  target: Actor;
+  /** Monster rank (monster deaths). */
+  rank?: MonsterRank;
+  /** What killed the player (player deaths). */
+  from?: string;
+  /** EXP the player lost (player deaths). */
+  expLost?: number;
+  /** The player's cast that killed the monster (VFX request). */
+  killer?: SkillRef;
 }
 
 export interface LevelUpEvent extends Pt {
@@ -280,11 +347,28 @@ export interface SkillLearnedEvent extends SkillRef {
 export interface BarChangedEvent {
   /** Slot indexes that changed (empty = the whole bar). */
   slots: number[];
+  /**
+   * Why (src/ui/announce.ts words the toast; absent = 'assign'):
+   *   assign       the player put a skill in (or moved it) — no toast
+   *   clear        the player emptied a slot — no toast
+   *   learned      a newly learned skill dropped into an empty own slot ("Flame Spin is on your bar")
+   *   class        becoming a class refilled the class slots (the classChanged headline covers it)
+   *   classLearned the worn class took a newly learned matching skill ("Pyroblade equipped Flame Spin")
+   *   load         a save was padded / repaired on load — no toast
+   */
+  reason?: 'assign' | 'clear' | 'learned' | 'class' | 'classLearned' | 'load';
+  /** The skill placed (learned / classLearned). */
+  skillId?: string;
+  /** The worn class (class / classLearned). */
+  classId?: string;
 }
 
 export interface SparkEvent {
   from: SkillDef;
   to: SkillDef;
+  /** Where it happened: the struck target (VFX request). */
+  x?: number;
+  y?: number;
 }
 
 export interface MonsterTelegraphEvent extends SkillRef, Pt {
@@ -298,6 +382,44 @@ export interface MonsterTelegraphEvent extends SkillRef, Pt {
   radius?: number;
   /** An echo technique the player can learn by witnessing. */
   echo: boolean;
+  /** Unique per tell; monsterTelegraphEnd carries the same id (VFX request). */
+  id?: number;
+  /** The live pending record (MonsterSkills.shiftTime moves it): progress = (now - start) / (at - start) (VFX request). */
+  timing?: { readonly start: number; readonly at: number };
+  /** Exact geometry as MonsterSkills draws and hit-tests it (VFX request). */
+  tell?: TellShape;
+  rank?: MonsterRank;
+}
+
+/** Exact telegraph geometry (angles in radians); structurally the VFX's TellGeometry (src/game/vfx/types.ts). */
+export type TellShape =
+  | { kind: 'zone'; x: number; y: number; rx: number; ry: number }
+  | { kind: 'cone'; x: number; y: number; r: number; ang: number; arc: number }
+  | { kind: 'lane'; x0: number; y0: number; x1: number; y1: number; width: number }
+  | { kind: 'aim'; x: number; y: number; angs: readonly number[]; len: number }
+  | { kind: 'range'; x: number; y: number; r: number }
+  | { kind: 'aura'; x: number; y: number; rx: number; ry: number };
+
+/** One phase of a cast: a strike swing, spin pulse, nova release or volley launch (docs/VFX.md §8.2 skillPulse). */
+export interface SkillPulseEvent extends SkillRef, Pt {
+  owner: Actor;
+  /** 0-based phase index of `count` phases in this cast. */
+  index: number;
+  count: number;
+  /** Swing / pulse direction (radians). */
+  ang: number;
+  aim?: Pt;
+}
+
+export interface MonsterTelegraphEndEvent {
+  /** The monsterTelegraph id. */
+  id: number;
+  monster: Monster;
+  reason: 'resolve' | 'cancel';
+}
+
+export interface EnrageEvent extends Pt {
+  monster: Monster;
 }
 
 /** Every game event and its payload. */
@@ -334,6 +456,10 @@ export interface GameEvents {
   barChanged: BarChangedEvent;
   spark: SparkEvent;
   monsterTelegraph: MonsterTelegraphEvent;
+  // Declared for the game lane (VFX requests, docs/VFX.md §8.2); not emitted yet.
+  skillPulse: SkillPulseEvent;
+  monsterTelegraphEnd: MonsterTelegraphEndEvent;
+  enrage: EnrageEvent;
 }
 
 export type GameEventName = keyof GameEvents;

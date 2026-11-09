@@ -295,7 +295,7 @@ export class MonsterSkills {
             const [ex, ey] = this.dashEnd(m.x, m.y, a, sh.distance);
             const len = Math.hypot(ex - m.x, ey - m.y);
             this.sweeps.push({ m, sx: m.x, sy: m.y, ex, ey, w, t: 0, dur: Math.max(140, len / 1.1), done: false, trailT: 0, hit });
-            gameBus.emit('dash', { owner: m, skillId: skill.id, skill, element: skill.element, from: { x: m.x, y: m.y }, to: { x: ex, y: ey }, durationMs: Math.max(140, len / 1.1), width: w });
+            gameBus.emit('dash', { owner: m, skillId: skill.id, skill, element: skill.element, from: { x: m.x, y: m.y }, to: { x: ex, y: ey }, durationMs: Math.max(140, len / 1.1), width: w, spin: false });
           },
         );
         total += Math.max(140, sh.distance / 1.1);
@@ -485,8 +485,9 @@ export class MonsterSkills {
       .setRotation(a)
       .setBlendMode(look.add ? Phaser.BlendModes.ADD : Phaser.BlendModes.NORMAL)
       .setDepth(ySort(m.y, Y_BIAS.PROJECTILE));
-    this.shots.push({ m, img, x: m.x, y: m.y, vx: Math.cos(a) * speed, vy: Math.sin(a) * speed, traveled: 0, range, size, spin: look.spin, trailT: 0, hit });
-    gameBus.emit('projectileSpawn', { owner: m, obj: img, skillId: hit.skill.id, skill: hit.skill, element: hit.skill.element, x: m.x, y: m.y, angle: a, speed, range, size });
+    const shot: Shot = { m, img, x: m.x, y: m.y, vx: Math.cos(a) * speed, vy: Math.sin(a) * speed, traveled: 0, range, size, spin: look.spin, trailT: 0, hit };
+    this.shots.push(shot);
+    gameBus.emit('projectileSpawn', { owner: m, obj: img, mover: shot, skillId: hit.skill.id, skill: hit.skill, element: hit.skill.element, x: m.x, y: m.y, angle: a, speed, range, size });
   }
 
   // ---------------------------------------------------------------- update
@@ -569,7 +570,7 @@ export class MonsterSkills {
       }
       if (dead) {
         const sk = sh.hit.skill;
-        gameBus.emit('projectileEnd', { owner: sh.m, obj: sh.img, skillId: sk.id, skill: sk, element: sk.element, x: sh.x, y: sh.y, reason: sh.traveled >= sh.range ? 'range' : isBlockedPx(s.cm, sh.x, sh.y) ? 'wall' : 'hit' });
+        gameBus.emit('projectileEnd', { owner: sh.m, obj: sh.img, mover: sh, skillId: sk.id, skill: sk, element: sk.element, x: sh.x, y: sh.y, reason: sh.traveled >= sh.range ? 'expire' : isBlockedPx(s.cm, sh.x, sh.y) ? 'wall' : 'hit' });
         s.skills.fxImpactAt(sh.x, sh.y - 14, sh.hit.skill, sh.hit.color, 3);
         sh.img.destroy();
         this.shots.splice(i, 1);

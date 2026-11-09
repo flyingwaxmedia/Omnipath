@@ -599,7 +599,7 @@ export class Combat implements CombatHost {
     const rank = Math.max(1, s.book.rank(skill.id));
     const cast = s.skills.newCast(skill, rank, { x: p.x, y: p.y });
     if (skill.shape.kind === 'buff' && this.inCombat(now)) s.book.recordBuffUse(skill.id, this.maxEngagedThreat());
-    gameBus.emit('castFire', { skillId: skill.id, skill, element: skill.element, x: p.x, y: p.y, shape: skill.shape.kind, aim, target, rank, basic, map: s.mapId });
+    gameBus.emit('castFire', { skillId: skill.id, skill, element: skill.element, castId: cast.id, x: p.x, y: p.y, shape: skill.shape.kind, aim, target, rank, basic, map: s.mapId });
     s.skills.execute(cast, aim, target);
     s.onCast(skill, aim);
     if (target && !this.target && skill.shape.kind !== 'dash') this.setTarget(target);
@@ -691,7 +691,7 @@ export class Combat implements CombatHost {
     const top = m.y - m.sprite.displayHeight;
     const color = this.colorFor(skill);
     if (roll.resisted) {
-      gameBus.emit('hit', { source: 'player', target: m, skillId: skill.id, skill, element: skill.element, x: m.x, y: m.y, damage: 0, crit: false, resisted: true, multiplier: 0, killed: false, hitIndex: cast.tally.hits });
+      gameBus.emit('hit', { source: 'player', target: m, skillId: skill.id, skill, element: skill.element, castId: cast.id, x: m.x, y: m.y, damage: 0, crit: false, resisted: true, multiplier: 0, killed: false, hitIndex: cast.tally.hits, ang: Math.atan2(m.y - cast.origin.y, m.x - cast.origin.x) });
       s.floatText(m.x, top, 'Resist', '#9aa0aa', 12);
       if (!this.target && m.alive) this.setTarget(m);
       return roll;
@@ -729,7 +729,7 @@ export class Combat implements CombatHost {
 
     const killed = m.hp <= 0;
     const hitIndex = cast.tally.hits++;
-    gameBus.emit('hit', { source: 'player', target: m, skillId: skill.id, skill, element: skill.element, x: m.x, y: m.y, damage: roll.amount, crit: roll.crit, resisted: false, multiplier: roll.multiplier, combo: roll.combo?.name, killed, hitIndex });
+    gameBus.emit('hit', { source: 'player', target: m, skillId: skill.id, skill, element: skill.element, castId: cast.id, x: m.x, y: m.y, damage: roll.amount, crit: roll.crit, resisted: false, multiplier: roll.multiplier, combo: roll.combo?.name, killed, hitIndex, ang: Math.atan2(m.y - cast.origin.y, m.x - cast.origin.x) });
     const instanceHits = m.hitGrants.get(skill.id) ?? 0;
     book.recordHit(skill.id, { monster: m.def, killed, hitIndex, instanceHits });
     if (hitIndex < MASTERY.maxHitsPerUse) m.hitGrants.set(skill.id, instanceHits + 1);
@@ -766,7 +766,7 @@ export class Combat implements CombatHost {
   private applyCombo(m: Monster, roll: DamageRoll, cast: Cast, top: number, now: number): void {
     const s = this.scene;
     const c = roll.combo!;
-    gameBus.emit('combo', { target: m, name: c.name, consumes: c.consumes, skillId: cast.skill.id, skill: cast.skill, element: cast.skill.element, x: m.x, y: m.y });
+    gameBus.emit('combo', { target: m, name: c.name, consumes: c.consumes, skillId: cast.skill.id, skill: cast.skill, element: cast.skill.element, castId: cast.id, x: m.x, y: m.y });
     delete m.status.marks[c.consumes];
     const y = m.y - Math.min(24, m.sprite.displayHeight * 0.45);
     if (c.consumes === 'freeze') {
@@ -933,6 +933,7 @@ export class Combat implements CombatHost {
     }
     m.witnessed.clear();
     gameBus.emit('kill', { monster: m, def: m.def, x: m.x, y: m.y, exp: m.def.exp, coins, elite: m.elite, warden: m.warden });
+    gameBus.emit('death', { target: m, rank: m.def.rank, x: m.x, y: m.y });
     s.requestSave();
   }
 
@@ -1151,7 +1152,7 @@ export class Combat implements CombatHost {
     this.pushDest = null;
     const lost = Math.floor(pl.exp * 0.05);
     pl.exp -= lost;
-    gameBus.emit('death', { from, expLost: lost, x: this.player.x, y: this.player.y });
+    gameBus.emit('death', { target: 'player', from, expLost: lost, x: this.player.x, y: this.player.y });
     s.ui.log(`💀 You were defeated by ${esc(from)}. Lost ${lost} EXP.`, 'warn');
     this.player.sprite.setAngle(90).setAlpha(0.7);
     for (const m of this.monsters) m.provoked = false;

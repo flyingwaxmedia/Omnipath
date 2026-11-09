@@ -2,7 +2,7 @@
 //
 // Two work packages meet here and nowhere else (docs/VFX.md §10):
 //   P  painter + ramps + glyphs + components/* + bake.ts   -> consumes VfxPiece, produces IndexFrame / BakedPiece
-//   R  families.ts + recipe.ts + signatures.ts             -> consumes SkillDef, produces VfxRecipe (made of VfxPiece)
+//   R  families.ts + recipe.ts + signatures.ts (+ pieces.ts) -> consumes SkillDef, produces VfxRecipe (made of VfxPiece)
 // Neither package imports the other. This file is frozen for both; change it only through docs/VFX.md.
 //
 // Rules for everything under src/game/vfx except the later Phaser runtime: no Phaser import, no DOM, no Math.random,
@@ -576,7 +576,7 @@ export type VfxBlend = 'normal' | 'add' | 'multiply';
 /**
  * Render layers. The runtime maps them to src/game/render/depths.ts:
  * ground -> DEPTH.FX_GROUND, preview -> DEPTH.AIM_PREVIEW, tell -> DEPTH.TELEGRAPH, body -> ySort(y, bias),
- * rim -> DEPTH.TELL_TOP (requested; DEPTH.RIM until it exists), glow -> DEPTH.FX_GLOW, light -> DEPTH.LIGHT.
+ * rim -> DEPTH.TELL_TOP (above glow and darkness), glow -> DEPTH.FX_GLOW, light -> DEPTH.LIGHT.
  */
 export type VfxLayer = 'ground' | 'preview' | 'tell' | 'body' | 'rim' | 'glow' | 'light';
 
@@ -675,10 +675,10 @@ export interface VfxPieceOf<C extends ComponentId> {
 export type VfxPiece = { [C in ComponentId]: VfxPieceOf<C> }[ComponentId];
 
 /**
- * Phases. Each fires on a game event (docs/VFX.md §8):
- * telegraph novaTelegraph / monsterTelegraph | charge castStart | cast castFire, dash, buffApplied |
- * body projectileSpawn, chainHop | trail follows a body or dash | impact hit | area castFire (nova release, heavy
- * landings, spin floor bands) | status statusApplied | aura buffApplied.
+ * Phases. Each fires on a VfxEvents event (docs/VFX.md §8.2):
+ * telegraph novaTelegraph / monsterTelegraph | charge castStart | cast pulse (strike swings, spin pulses), castFire
+ * (muzzles), dash, buffApplied | body projectileSpawn, chainHop | trail follows a body or dash | impact hit |
+ * area novaBlast, heavy landings, spin floor bands | status statusApplied | aura buffApplied.
  */
 export type PhaseId = 'telegraph' | 'charge' | 'cast' | 'body' | 'trail' | 'impact' | 'area' | 'status' | 'aura';
 
@@ -923,17 +923,22 @@ export interface VfxActor {
   readonly height: number;
 }
 
-/** Live projectile view (SkillSystem's Projectile and MonsterSkills' Shot satisfy it structurally). */
+/**
+ * Live projectile view, read every frame. GameEvents.projectileSpawn's `obj` (the Image SkillSystem / MonsterSkills
+ * move) supplies x/y; `angle` comes from the spawn payload until the mover reports `returning`.
+ */
 export interface VfxMover {
   readonly x: number;
   readonly y: number;
-  readonly vx: number;
-  readonly vy: number;
+  readonly active?: boolean;
   readonly returning?: boolean;
 }
 
 export interface VfxCastRef {
-  /** Unique per cast (SkillSystem cast.id; MonsterSkills its own counter). */
+  /**
+   * Unique per cast (SkillSystem cast.id; MonsterSkills its own counter). Until the bus carries it, the bridge uses
+   * hashSeed(skillId, castFire time) so tick sparks and per-cast seeds still work (docs/VFX.md §8.2).
+   */
   castId: number;
   skill: SkillDef;
   owner: VfxOwner;
@@ -951,29 +956,42 @@ export type TellGeometry =
   | { kind: 'aura'; x: number; y: number; rx: number; ry: number };
 
 /**
- * Payloads the VFX runtime needs from src/game/events.ts. The bus may carry more fields; these must be present.
- * Times are scene (gameplay) ms unless named *Real.
+ * The normalized stream the VFX runtime consumes. `runtime/bridge.ts` (later step) subscribes to the game bus
+ * (src/game/events.ts GameEvents) and emits these, deriving what the bus does not carry yet (docs/VFX.md §8.2 maps
+ * every field). Times are scene (gameplay) ms.
  */
 export interface VfxEvents {
+  /** GameEvents.castStart. */
   castStart: { cast: VfxCastRef; caster: VfxActor; aim: Pt; durationMs: number };
-  /** Strike swing, spin pulse, nova release or volley launch (index = swing / pulse number). */
-  castFire: { cast: VfxCastRef; caster: VfxActor; at: Pt; ang: number; index: number; count: number };
-  projectileSpawn: { cast: VfxCastRef; id: number; mover: VfxMover; index: number; count: number };
+  /** GameEvents.castFire: once per cast when its effect fires (monster techniques: at resolve). */
+  castFire: { cast: VfxCastRef; caster: VfxActor; at: Pt; aim: Pt };
+  /** Each strike swing / spin pulse (bus addition requested: GameEvents.skillPulse). */
+  pulse: { cast: VfxCastRef; caster: VfxActor; at: Pt; ang: number; index: number; count: number };
+  /** GameEvents.projectileSpawn (`id` = a bridge counter keyed by the payload's obj). */
+  projectileSpawn: { cast: VfxCastRef; id: number; mover: VfxMover; angle: number; size: number };
+  /** GameEvents.projectileEnd: range -> 'expire', return -> 'caught'. */
   projectileEnd: { cast: VfxCastRef; id: number; at: Pt; reason: 'hit' | 'expire' | 'wall' | 'caught' };
+  /** GameEvents.chainHop. */
   chainHop: { cast: VfxCastRef; from: Pt; to: Pt; index: number; knife: boolean };
-  /** Player nova landing marker; progress = (now - startMs) / (atMs - startMs), read every frame. */
-  novaTelegraph: { cast: VfxCastRef; at: Pt; r: number; aspect: Aspect; timing: { start: number; at: number } };
+  /** GameEvents.novaTelegraph; timing = { start: now, at: now + delayMs } on the world clock. */
+  novaTelegraph: { cast: VfxCastRef; at: Pt; r: number; aspect: Aspect; timing: { readonly start: number; readonly at: number } };
+  /** GameEvents.novaBlast: the area phase. */
+  novaBlast: { cast: VfxCastRef; at: Pt; r: number; aspect: Aspect; heavy: boolean };
+  /** GameEvents.dash (spin from skill.shape). */
   dash: { cast: VfxCastRef; actor: VfxActor; from: Pt; to: Pt; width: number; durationMs: number; spin: boolean };
+  /** GameEvents.buffApplied. */
   buffApplied: { cast?: VfxCastRef; actor: VfxActor; skill: SkillDef; stat: BuffStat; untilMs: number; owner: VfxOwner };
+  /** GameEvents.statusApplied (blocked ones are dropped); untilMs from the bus, else Combat's fixed durations. */
   statusApplied: { target: VfxActor; targetOwner: VfxOwner; kind: StatusKind; untilMs: number; source?: SkillDef };
+  /** GameEvents.hit (monster targets) and GameEvents.playerHurt (player target; dot ticks are dropped). */
   hit: {
-    /** Absent for monster auto-attacks (then `attacker` is set). */
+    /** Absent for monster auto-attacks (then `attacker` is set when known). */
     cast?: VfxCastRef;
     attacker?: AttackerLook;
     target: VfxActor;
     targetOwner: VfxOwner;
     at: Pt;
-    /** Blow direction (radians). */
+    /** Blow direction (radians): from the cast origin / caster to the target. */
     ang: number;
     index: number;
     amount: number;
@@ -983,11 +1001,17 @@ export interface VfxEvents {
     via?: 'arc' | 'pierce' | 'return';
     /** Arc rider: where the zap came from. */
     from?: Pt;
-    /** Leech rider: HP healed by this hit. */
-    healed?: number;
   };
+  /** GameEvents.heal (leech / smite): stream from the struck target to the player. */
+  heal: { amount: number; at: Pt; from?: Pt; source: 'leech' | 'smite' };
+  /** GameEvents.combo (consumes -> combo id: freeze shatter, soak conduct, burn fan). */
   combo: { cast: VfxCastRef; target: VfxActor; combo: ComboId; spreadTo: readonly Pt[] };
+  /** GameEvents.kill (monster) and GameEvents.death (player). */
   death: { target: VfxActor; owner: VfxOwner; rank?: MonsterRank; killer?: VfxCastRef };
+  /**
+   * GameEvents.monsterTelegraph (+ requested monsterTelegraphEnd). Until the bus carries `tell` and `timing`, the
+   * bridge derives them from skill.shape, monster.radius, `at` and durationMs with MonsterSkills' rules (§8.1).
+   */
   monsterTelegraph: {
     /** Pending technique id (unique per tell). */
     id: number;
@@ -1002,7 +1026,7 @@ export interface VfxEvents {
   };
 }
 
-/** Optional events; the runtime exposes imperative calls until the bus carries them. */
+/** Bus events the VFX also uses, beyond the stream above (GameEvents.spark, levelUp; enrage requested). */
 export interface VfxExtraEvents {
   spark: { at: Pt; skill: SkillDef };
   levelUp: { actor: VfxActor };
@@ -1011,7 +1035,7 @@ export interface VfxExtraEvents {
 
 export type VfxEventName = keyof VfxEvents;
 
-/** Structural view of the game bus (src/core/emitter.ts Emitter satisfies it). */
+/** Structural view of the normalized stream (src/core/emitter.ts Emitter<VfxEvents> satisfies it). */
 export interface VfxBus {
   on<K extends VfxEventName>(type: K, fn: (payload: VfxEvents[K]) => void): () => void;
 }
