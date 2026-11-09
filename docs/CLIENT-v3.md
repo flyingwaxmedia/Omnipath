@@ -7,6 +7,9 @@ v3 is the presentation pass driven by the owner's feedback:
 4. **Every NPC has quests; trainers teach only as quest rewards** (docs/QUESTS.md).
 5. **The player's sprite changes to match the worn class.**
 
+6. **Sandbox loadouts** (docs/SPEC-v2.md §5.1): learned skills work with any weapon; the 8-slot skill bar IS the
+   build — 4–5 similar skills make you a class, 2–3 slots are personal picks.
+
 Everything in docs/CLIENT-v2.md still applies unless replaced here.
 
 ## 1. Art integration
@@ -34,7 +37,7 @@ Layout per ART-DIRECTION §5 with **no joystick**:
   (next morph, echo witness, nearest class); tap a quest → quest log; tap a goal → the relevant panel;
 - left edge round buttons: quick heal (count), recall shard (count), rest;
 - bottom-left compact log (3 lines, fades) above the EXP bar;
-- bottom-centre horizontal skill bar: 6 framed slots with pixel icons (`iconUrl`), cooldown sweep, rank badge, element
+- bottom-centre horizontal skill bar: **8** framed slots (portrait: two rows of 4) with pixel icons (`iconUrl`), cooldown sweep, rank badge, element
   pip, auto-cast ring + badge, spark rune; hold = auto-cast toggle (unchanged behaviour);
 - bottom-right attack cluster: big round attack button (`ui_round_big`), small round buttons on its arc: AUTO, Target
   (cycle to the next nearest enemy), Potion (count);
@@ -86,3 +89,15 @@ v2 skills panel views).
   `player_<w>__<classId>` (+ `_idle_1`, `_walk_0..3`, `_atk_0..1`), using the character module's look-based drawer.
 - The player switches look on wear, on equip-weapon and on load; the class discovery card and the Class panel show an
   outfit preview.
+
+## 6. Sandbox loadouts (docs/SPEC-v2.md §5.1)
+- `HOTBAR_SIZE = 8`; saves pad old 6-slot bars; keys 1–8 cast, Shift+1–8 toggles auto-cast.
+- `usable()` no longer checks the equipped weapon (only tier-0 basics are weapon-bound and never sit on the bar).
+- Every skill-bar change (assign, clear, learn auto-slot, load) calls `book.setLoadout(hotbar ids)`; on
+  `classActive` the player's outfit (§5) and the HUD class line update instantly, with a short "You fight as a
+  <Class>" banner (or "Wanderer" when no class qualifies).
+- Class panel: header = active class (or "No class — equip 4 similar skills"), the qualifying classes with a
+  "Prefer" toggle, and for each discovered class a loadout line ("Equipped 3 / 4 blade skills") with a one-tap
+  "Show matching skills" filter into the star chart / list. Wearing is replaced by preferring.
+- Star chart + skill list: equipped skills are marked; a skill's info card lists the classes it counts toward.
+- Pursuits tracker adds a loadout goal when a discovered or near class is 1–2 equipped skills away.

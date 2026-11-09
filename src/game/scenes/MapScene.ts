@@ -1226,9 +1226,11 @@ export class MapScene extends Phaser.Scene implements GameController {
   usable(id: string): { ok: boolean; reason?: string } {
     const s = this.reg.skill(id);
     if (!s || !this.book.has(id)) return { ok: false, reason: 'Unknown skill.' };
+    // Sandbox rule (docs/SPEC-v2.md §5.1): learned skills work with ANY weapon. Only tier-0 basic attacks stay
+    // bound to their weapon, because they ARE that weapon's auto-attack.
     const w = this.session.player.weapon;
-    if (s.weapons && !s.weapons.includes(w))
-      return { ok: false, reason: `Requires ${s.weapons.map((x) => WEAPONS[x].name).join(' or ')}.` };
+    if (s.tier === 0 && s.weapons && !s.weapons.includes(w))
+      return { ok: false, reason: `${s.name} is the ${s.weapons.map((x) => WEAPONS[x].name).join(' / ')}'s basic attack.` };
     return { ok: true };
   }
 
