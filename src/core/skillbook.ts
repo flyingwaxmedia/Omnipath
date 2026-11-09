@@ -41,7 +41,13 @@ import type { Registry } from './registry';
 import { countTagged, describeRequirement, meetsRequirement } from './requirements';
 import { hashSeed, mulberry32 } from './rng';
 import { BOOK_FLAGS, migrateBookState } from './save';
-import { DEFAULT_SPARK_PARENT_RANK, rollSpark, sparkWindow as sparkWindowFor, type SparkContext, type SparkWindow } from './spark';
+import {
+  DEFAULT_SPARK_PARENT_RANK,
+  rollSpark,
+  sparkWindow as sparkWindowFor,
+  type SparkContext,
+  type SparkWindow,
+} from './spark';
 import { emptyState, type SkillBookState, type SkillProgress } from './state';
 import { lessonState as lessonStateFor, type LessonState, type TrainerContext } from './trainers';
 import {
@@ -371,7 +377,11 @@ export interface SkillBookEvents {
 type BookContext = TrainerContext & FusionContext & SparkContext & EchoContext;
 
 /** Unmet requirements of these types hide a morph's result (world progress the player must find). */
-const HIDING_REQUIREMENTS: ReadonlySet<Requirement['type']> = new Set<Requirement['type']>(['flag', 'mapVisited', 'item']);
+const HIDING_REQUIREMENTS: ReadonlySet<Requirement['type']> = new Set<Requirement['type']>([
+  'flag',
+  'mapVisited',
+  'item',
+]);
 
 const DEFAULT_MORPH_HINT = 'Something stirs within this technique...';
 
@@ -697,7 +707,8 @@ export class SkillBook {
     const starUp = stars > bestiaryStars(before);
     if (starUp) this.invalidate();
     const essence = this.rollEssence(monster, kills);
-    this.events.emit('bestiary', essence ? { monster, kills, stars, starUp, essence } : { monster, kills, stars, starUp });
+    const event: BestiaryEvent = { monster, kills, stars, starUp };
+    this.events.emit('bestiary', essence ? { ...event, essence } : event);
     if (starUp && stars === 2 && monster.element) this.whisperRelated([monster.element], 'bestiary');
     return essence ? { stars, starUp, essence } : { stars, starUp };
   }
