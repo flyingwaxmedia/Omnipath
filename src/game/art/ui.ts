@@ -387,21 +387,26 @@ export function pixelSnap(cssPx: number, artPx: number, dpr: number = typeof win
   return (k * artPx) / dpr;
 }
 
-/** Recommended OFL pixel font (bundle with `npm i @fontsource/pixelify-sans`, import its 400/700 css). */
-export const UI_FONT_STACK = "'Pixelify Sans', 'Silkscreen', ui-monospace, monospace";
+/**
+ * Recommended OFL pixel fonts (docs/QUALITY-PLAN.md §4): Pixelify Sans for UI text (`@fontsource/pixelify-sans`,
+ * weights 400/700) and Tiny5 for small labels / numbers (`@fontsource/tiny5`). Ship their LICENSE files.
+ */
+export const UI_FONT_STACK = "'Pixelify Sans', ui-monospace, monospace";
+export const UI_FONT_SMALL_STACK = "'Tiny5', 'Pixelify Sans', ui-monospace, monospace";
 
 /**
  * A CSS block exposing every UI texture as custom properties on :root plus ready-made helper classes.
  *   --ui-frame-<name>: url(data:…)   --ui-frame-<name>-slice: <n>   (9-slice frames; use with border-image)
  *   --ui-<piece>: url(data:…)                                        (fixed pieces, bar fills, chevron, glyphs)
  *   --ui-px: art-pixel scale (default 1px; set 2px on large tablets / desktop if wanted)
+ *   --ui-font / --ui-font-small: pixel font stacks (see UI_FONT_STACK)
  * Classes: .ui-frame-<name> (border-image frame, content sits inside the border), .ui-round-big|small,
  * .ui-medallion, .ui-badge-level, .ui-bar (+ .ui-bar > .ui-bar-fill.hp|sp|exp), .ui-pill(-safe…), .ui-ico-<glyph>.
  * Inject once: `const st = document.createElement('style'); st.textContent = uiCss(scene); document.head.append(st)`.
  */
 export function uiCss(scene: Phaser.Scene): string {
   drawUi(scene);
-  const vars: string[] = ['  --ui-px: 1px;', `  --ui-font: ${UI_FONT_STACK};`];
+  const vars: string[] = ['  --ui-px: 1px;', `  --ui-font: ${UI_FONT_STACK};`, `  --ui-font-small: ${UI_FONT_SMALL_STACK};`];
   const rules: string[] = [];
   for (const [key, slice] of Object.entries(UI_SLICES)) {
     const name = key.replace(/^ui_/, '').replace(/_/g, '-');
