@@ -1,14 +1,19 @@
 // Skill-bar loadout (game lane; docs/SPEC-v2.md §5.1, docs/CLIENT-v3.md §6, docs/INTEGRATION-v3.md §2.3).
 //
 // The bar has HOTBAR_SIZE (8) slots. While a class is worn, slots 0..4 are CLASS slots: the class fills them by itself
-// with its best known skills (SkillBook.classSkills). Slots 5..7 are YOUR slots and the class never touches them —
-// a class skill you already put in one of your slots stays there, and the class takes its next pick instead. With no
-// class, all 8 slots are yours. New skills drop into an empty slot by themselves ("automatic by default").
+// with its most relevant known skills (SkillBook.classSkills: pattern matches first, then related skills). Slots 5..7
+// are YOUR slots. With no class, all 8 slots are yours. New skills drop into an empty slot by themselves ("automatic
+// by default").
 //
-// The invariant every helper keeps: class slots = the class's best skills that are not in your slots. The slot-fill
-// rules are pure functions (unit-tested in tests/loadout.test.ts); the small runtime glue below applies them to a
-// Session and announces each change on the game bus (`barChanged` with its reason — src/ui/announce.ts words it).
-import { CLASS_SLOTS, barEligible } from '../core/classes';
+// BECOMING a class (SPEC-v2 §5.1): a class pick that sits in one of your slots moves into the class slots and frees
+// your slot (no duplicates, nothing lost); your other picks stay where they are. Every other refresh (a player edit,
+// loading) leaves your slots alone: a class skill you put there yourself stays, and the class takes its next pick.
+// LEARNING a skill the class relates to fills an empty class slot, or replaces the weakest class skill only when it is
+// clearly better (a closer fit, or a higher tier) — the "Pyroblade equipped Flame Spin" toast.
+//
+// The slot-fill rules are pure functions (unit-tested in tests/loadout.test.ts); the small runtime glue below applies
+// them to a Session and announces each change on the game bus (`barChanged` with its reason — src/ui/announce.ts).
+import { CLASS_SLOTS, barEligible, classSkillFit } from '../core/classes';
 import type { SkillBook } from '../core/skillbook';
 import type { Registry } from '../core/registry';
 import { gameBus, type BarChangedEvent } from './events';
@@ -50,6 +55,8 @@ export interface ClassFill {
   changed: number[];
   /** Skills that entered a class slot. */
   added: string[];
+  /** Skills that moved from one of your slots into a class slot (becoming a class), freeing that slot. */
+  pulled: string[];
   /** Skills that left the bar. */
   dropped: string[];
 }
@@ -58,8 +65,10 @@ export interface FillOptions {
   /** Class slots at the front of the bar (default CLASS_SLOTS). */
   classSlots?: number;
   /**
-   * Keep a pick that already sits in a class slot where it is and fill only the freed slots (refreshes, learning a
-   * skill). Off (becoming a class): the picks are laid out best first.
+   * A refresh (a player edit, loading): a pick that already sits in a class slot keeps its place, only the freed
+   * slots are filled, and your slots are never touched (a class pick you put there stays and the class takes its
+   * next pick). Off = BECOMING a class: the picks are laid out best first, and a pick that sits in one of your slots
+   * moves into the class slots, freeing that slot (SPEC-v2 §5.1).
    */
   stable?: boolean;
   /**
@@ -71,8 +80,9 @@ export interface FillOptions {
 
 /**
  * Fills the class slots from `picks` (the class's choices, best first — ask for more than the class-slot count so a
- * pick that sits in one of your slots can be replaced by the next one). Your slots are never changed, except that
- * `rehome` drops displaced class-slot skills into empty ones. Fewer picks than class slots leave the rest empty.
+ * pick that sits in one of your slots can be replaced by the next one on a refresh). Becoming a class (not `stable`)
+ * pulls the first picks out of your slots; a refresh never changes your slots. `rehome` drops displaced class-slot
+ * skills into empty slots of yours. Fewer picks than class slots leave the rest empty.
  */
 export function fillClassSlots(bar: Bar, picks: readonly string[], opts: FillOptions = {}): ClassFill {
   const n = Math.min(opts.classSlots ?? CLASS_SLOTS, bar.length);
@@ -81,9 +91,11 @@ export function fillClassSlots(bar: Bar, picks: readonly string[], opts: FillOpt
   const chosen: string[] = [];
   for (const id of picks) {
     if (chosen.length >= n) break;
-    if (!own.has(id) && !chosen.includes(id)) chosen.push(id);
+    if (opts.stable && own.has(id)) continue; // a refresh leaves your slots alone
+    if (!chosen.includes(id)) chosen.push(id);
   }
   const before = bar.slice(0, n);
+  const pulled: string[] = [];
   if (opts.stable) {
     for (let i = 0; i < n; i++) if (next[i] !== null && !chosen.includes(next[i]!)) next[i] = null;
     for (const id of chosen) {
@@ -93,6 +105,13 @@ export function fillClassSlots(bar: Bar, picks: readonly string[], opts: FillOpt
     }
   } else {
     for (let i = 0; i < n; i++) next[i] = chosen[i] ?? null;
+    // A pick that sat in one of your slots moved into the class slots: that slot is free now.
+    for (let i = n; i < next.length; i++) {
+      if (next[i] !== null && chosen.includes(next[i]!)) {
+        pulled.push(next[i]!);
+        next[i] = null;
+      }
+    }
   }
   const after = next.slice(0, n);
   const displaced = before.filter((x): x is string => !!x && !after.includes(x));
@@ -104,7 +123,7 @@ export function fillClassSlots(bar: Bar, picks: readonly string[], opts: FillOpt
   }
   const changed: number[] = [];
   for (let i = 0; i < next.length; i++) if (next[i] !== bar[i]) changed.push(i);
-  return { bar: next, changed, added: after.filter((x): x is string => !!x && !before.includes(x)), dropped };
+  return { bar: next, changed, added: after.filter((x): x is string => !!x && !before.includes(x)), pulled, dropped };
 }
 
 /** First empty slot at or after `from` (-1 when full). */
@@ -121,19 +140,46 @@ export interface LearnPlacement {
   slot: number;
 }
 
+/** Whether skill `a` is clearly better than skill `b` for the worn class (a closer fit, or a higher tier). */
+export type Beats = (a: string, b: string) => boolean;
+
 /**
- * Where a newly learned skill goes: into the class slots when the worn class would pick it now (an empty class slot,
- * or the place of the weakest class skill it beats), else into the first empty slot of yours. Null when it is
- * already on the bar or there is no room.
+ * Where a newly learned skill goes. A skill the worn class picks (`picks`, best first) takes an empty class slot, or
+ * replaces the weakest class skill (the one latest in `picks`; one the class no longer picks counts as weakest) only
+ * when it is clearly better (`beats`; without it, when the class ranks it above that skill). Anything else drops
+ * into the first empty slot of yours. Null when it is already on the bar or there is no room.
  */
-export function placeLearned(bar: Bar, skillId: string, picks: readonly string[] | null, classSlots: number): LearnPlacement | null {
+export function placeLearned(
+  bar: Bar,
+  skillId: string,
+  picks: readonly string[] | null,
+  classSlots: number,
+  beats?: Beats,
+): LearnPlacement | null {
   if (bar.includes(skillId)) return null;
-  if (picks && classSlots > 0) {
-    const fill = fillClassSlots(bar, picks, { classSlots, stable: true });
-    const slot = fill.bar.indexOf(skillId);
-    if (slot >= 0 && slot < classSlots) return { bar: fill.bar, changed: fill.changed, reason: 'classLearned', slot };
+  const n = Math.min(classSlots, bar.length);
+  if (picks && n > 0 && picks.includes(skillId)) {
+    let slot = bar.slice(0, n).indexOf(null);
+    if (slot < 0) {
+      let worst = -1;
+      for (let i = 0; i < n; i++) {
+        const at = picks.indexOf(bar[i]!);
+        const pos = at < 0 ? Infinity : at;
+        if (pos > worst) {
+          worst = pos;
+          slot = i;
+        }
+      }
+      const better = beats ? beats(skillId, bar[slot]!) : picks.indexOf(skillId) < worst;
+      if (!better) slot = -1;
+    }
+    if (slot >= 0) {
+      const next = [...bar];
+      next[slot] = skillId;
+      return { bar: next, changed: [slot], reason: 'classLearned', slot };
+    }
   }
-  const at = firstEmpty(bar, classSlots);
+  const at = firstEmpty(bar, n);
   if (at < 0) return null;
   const next = [...bar];
   next[at] = skillId;
@@ -196,15 +242,33 @@ export function refillClassSlots(
 }
 
 /**
- * A skill was just learned: the worn class takes it when it would pick it (`classLearned`), else it drops into an
- * empty slot of yours (`learned`). Weapon basics and monster techniques never go on the bar.
+ * "Clearly better" for the worn class: a pattern match beats a merely related skill, a related skill beats an
+ * unrelated one, and at the same fit a higher tier wins. Null with no class.
+ */
+export function classBeats(host: LoadoutHost): Beats | null {
+  const worn = host.book.state.worn;
+  const cls = worn ? host.reg.classDef(worn) : undefined;
+  if (!cls) return null;
+  const fit = (id: string) => {
+    const skill = host.reg.skill(id);
+    const f = skill ? classSkillFit(host.reg, cls, skill) : null;
+    return f === 'match' ? 2 : f === 'related' ? 1 : 0;
+  };
+  const tier = (id: string) => host.reg.skill(id)?.tier ?? 0;
+  return (a, b) => fit(a) > fit(b) || (fit(a) === fit(b) && tier(a) > tier(b));
+}
+
+/**
+ * A skill was just learned: the worn class takes it when it relates to it and there is an empty class slot or it is
+ * clearly better than the weakest class skill (`classLearned`), else it drops into an empty slot of yours
+ * (`learned`). Weapon basics and monster techniques never go on the bar.
  */
 export function slotLearned(host: LoadoutHost, skillId: string): LearnPlacement | null {
   const skill = host.reg.skill(skillId);
   if (!skill || !barEligible(skill) || !host.book.has(skillId)) return null;
   const worn = host.book.state.worn;
   const bar = host.player.hotbar;
-  const placed = placeLearned(bar, skillId, classPicks(host), classSlotsFor(worn, bar.length));
+  const placed = placeLearned(bar, skillId, classPicks(host), classSlotsFor(worn, bar.length), classBeats(host) ?? undefined);
   if (!placed) return null;
   setBar(host, placed.bar);
   emit({ slots: placed.changed, reason: placed.reason, skillId, ...(placed.reason === 'classLearned' && worn ? { classId: worn } : {}) });

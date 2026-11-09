@@ -23,6 +23,8 @@ export interface BakeReq {
 }
 
 interface Job extends BakeReq {
+  /** Too big for an in-frame slice (docs/VFX.md §8.5: > ~2 ms per direction): idle slices only. */
+  big: boolean;
   entry: AtlasEntry;
   u: number;
   uniq: number;
@@ -43,6 +45,35 @@ function count(f: IndexFrame, i: number): number {
 }
 
 const clock = (): number => (typeof performance !== 'undefined' ? performance.now() : 0);
+
+/**
+ * Pieces whose single direction bakes in more than ~2 ms (measured in Node: slash r56 3.4 ms / dir, c56 cores 16 ms,
+ * 48² orbit orbs, big decals and erupt units): they never bake inside a frame, only in idle slices.
+ */
+export function bigBake(p: VfxPiece): boolean {
+  switch (p.component) {
+    case 'slash':
+      return p.params.r >= 56 || p.params.form === 'chop';
+    case 'thrust':
+      return p.params.len >= 96;
+    case 'nova':
+      return p.params.c >= 40;
+    case 'orb':
+      return p.params.cell >= 48 || !!p.params.orbit;
+    case 'decal':
+      return p.params.r >= 64;
+    case 'erupt':
+      return p.params.scale !== 's';
+    case 'aura':
+      return true;
+    case 'ring':
+      return p.params.r > 48 && (p.params.anim === 'expand' || p.params.anim === 'contract' || p.params.anim === 'sweep');
+    case 'sigil':
+      return p.params.r >= 32;
+    default:
+      return false;
+  }
+}
 
 /** The bake request of a piece under explicit options (key = bake.ts pieceKey). */
 export function bakeReq(piece: VfxPiece, opts: Partial<BakeOptions> = {}): BakeReq {
@@ -97,7 +128,7 @@ export class Baker {
     const geometryKey = t.key(req.piece.params, req.piece.motif, { ...req.opts, half: req.piece.anchor?.half });
     const uniq = UNIQUE_DIRS[dirs];
     const entry = have ?? this.atlas.begin(req.key, geometryKey, t.use(req.piece.params), dirs, uniq);
-    const job: Job = { ...req, entry, u: entry.strips.findIndex((s) => s === null), uniq, hero: new Set(), flash: [] };
+    const job: Job = { ...req, big: bigBake(req.piece), entry, u: entry.strips.findIndex((s) => s === null), uniq, hero: new Set(), flash: [] };
     if (job.u < 0) return;
     this.queued.add(req.key);
     (urgent ? this.need : this.warm).push(job);
@@ -107,12 +138,21 @@ export class Baker {
    * Bakes directions until `budgetMs` is spent (always at least one when anything is queued and `atLeastOne`).
    * Urgent work first. Returns the number of directions baked.
    */
-  pump(budgetMs: number, atLeastOne = true, urgentOnly = false): number {
+  pump(budgetMs: number, atLeastOne = true, urgentOnly = false, smallOnly = false): number {
     const t0 = clock();
     let n = 0;
-    while (this.need.length || (!urgentOnly && this.warm.length)) {
+    for (;;) {
       if (n > 0 || !atLeastOne) if (clock() - t0 >= budgetMs) break;
-      const list = this.need.length ? this.need : this.warm;
+      // In-frame slices take small jobs only (a big strip waits for an idle slice; its effect plays the fallback).
+      const pick = (l: Job[]) => (smallOnly ? l.findIndex((j) => !j.big) : l.length ? 0 : -1);
+      let list = this.need;
+      let at = pick(list);
+      if (at < 0 && !urgentOnly) {
+        list = this.warm;
+        at = pick(list);
+      }
+      if (at < 0) break;
+      if (at > 0) list.unshift(...list.splice(at, 1));
       const job = list[0];
       const s = clock();
       const ok = this.step(job);

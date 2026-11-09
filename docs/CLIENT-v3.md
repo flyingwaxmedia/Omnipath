@@ -46,6 +46,12 @@ Layout per ART-DIRECTION §5 with **no joystick**:
 - bottom-right attack cluster: big round attack button (`ui_round_big`), small round buttons on its arc: AUTO, Target
   (cycle to the next nearest enemy), Potion (count);
 - full-width thin EXP bar at the very bottom with percentage.
+**HUD pixel size**: the HUD's art pixels are the world's — every HUD length is in art px (`calc(N * var(--px))`,
+`--px` = `--ui-px`) and the HUD sets `--ui-px` = k / devicePixelRatio CSS px (k = the world's device px per art px), so
+1 HUD art px = k device px exactly (iPad: 1.5 CSS px = 3 device px; desktop 1440×900: 2 CSS px). Where the layout would
+not fit at that size it takes the largest whole-device-pixel size that fits, never below 1 CSS px (44-art-px touch
+targets); re-evaluated on resize / orientation / DPR change (`src/ui/hud/layout.ts` `hudScale`). The screen-size
+variants (portrait phone, narrow, short landscape) are measured in art px too (classes on `#hud-root`).
 Frames via `uiCss(scene)` custom properties (`border-image`), palette and font from ART-DIRECTION. Portrait and
 landscape phones, iPad and desktop must all look intentional (portrait: tracker collapses to a tab, button row wraps
 into two rows of 4, skill bar stays bottom-centre above the attack cluster).
@@ -98,8 +104,11 @@ v2 skills panel views).
 - `HOTBAR_SIZE = 8`: slots 1–5 class slots, 6–8 your slots; saves pad old bars. Keys 1–8 cast, A toggles AUTO.
 - Class slots are framed in the active class's colour with its emblem; empty class slots show a faint class icon.
   Your slots are plain. With no class all 8 are your slots.
-- "Become <Class>" (Class screen) → `book.wear(id)` → refill class slots with `classSkills(…, 5)` + a short banner
-  "You are now a Pyroblade" + outfit change. Learning a matching skill auto-updates class slots (toast).
+- "Become <Class>" (Class screen) → `book.wear(id)` → refill class slots with `classSkills(…, 5)` (pattern matches
+  first, then RELATED skills; a class pick in one of your slots moves in and frees it — SPEC-v2 §5.1) + a short banner
+  "You are now a Pyroblade" / "All class slots filled" ("3 class skills equipped"; "Learn fire skills to fill your
+  class slots" when nothing related is known) + outfit change. Learning a related skill fills an empty class slot, or swaps out the weakest
+  class skill only when clearly better (toast).
 - Tapping one of YOUR slots (or "Equip" on a skill) opens a simple picker: a grid of skill icons with names, sorted
   newest first, tap to equip; tapping a class slot shows that skill's card (class slots are managed by the class).
 - `usable()` never checks the weapon (only tier-0 basics are weapon-bound and never on the bar).

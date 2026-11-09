@@ -6,6 +6,7 @@
 // Restraint rules: the first hit of a cast plays full, later hits of the same cast (multi-target spins, novas,
 // volleys) get quieter; simultaneous hits collapse through the voice groups (src/game/audio/voices.ts); status
 // ticks and footsteps sit at the bottom of the priority list.
+import { hashSeed, mulberry32 } from '../../core/rng';
 import type { Biome, MapKind } from '../../core/world/types';
 import type { Family, MonsterRank, Size, WeaponType } from '../../core/types';
 import { type EventBus, type GameEvents, gameBus, Scope } from '../events';
@@ -55,7 +56,14 @@ export interface AudioScene {
     sprite?: { anims?: { currentAnim?: { key: string } | null; currentFrame?: { index: number } | null } };
   };
   cm?: GroundGrid;
-  def?: { id: string; biome: Biome; kind: MapKind; flags?: readonly string[]; objects?: readonly { id: string; kind: string }[] };
+  def?: {
+    id: string;
+    biome: Biome;
+    kind: MapKind;
+    flags?: readonly string[];
+    objects?: readonly { id: string; kind: string; tx: number; ty: number }[];
+    nodes?: readonly { id: string; kind: string; tx: number; ty: number }[];
+  };
   session?: { player: { weapon: WeaponType }; world?: { chests: readonly string[] } };
 }
 
@@ -69,6 +77,42 @@ const RANK_RATE: Readonly<Record<MonsterRank, number>> = { common: 1, elite: 0.9
 const monsterRate = (m: MonsterLike): number => (SIZE_RATE[m.def.size] ?? 1) * (RANK_RATE[m.def.rank] ?? 1);
 const isMonster = (a: unknown): a is MonsterLike => typeof a === 'object' && a !== null && 'def' in a;
 const clock = (): number => (typeof performance !== 'undefined' ? performance.now() : Date.now());
+
+const TILE = 32;
+
+/** A sounding thing placed on the map (ambience positional emitters, docs/QUALITY-PLAN.md §13). */
+interface EmitterDef {
+  sound: string;
+  /** Seconds between plays. */
+  every: [number, number];
+  /** Audible within this many tiles of the player (linear fade). */
+  radius: number;
+  gain?: number;
+  rate?: [number, number];
+}
+
+/** Map objects / gather nodes that sound by themselves when the player is near. */
+export const EMITTERS: Readonly<Record<string, readonly EmitterDef[]>> = {
+  campfire: [{ sound: 'amb_crackle', every: [0.5, 1.4], radius: 7 }],
+  ember_vent: [
+    { sound: 'amb_crackle', every: [1, 2.5], radius: 6 },
+    { sound: 'amb_lava_bubble', every: [3, 7], radius: 6, gain: 0.8 },
+  ],
+  wind_chime: [{ sound: 'amb_chime', every: [4, 9], radius: 8, rate: [1.05, 1.25] }],
+  sun_spring: [{ sound: 'amb_drip', every: [1.5, 3.5], radius: 6, rate: [1.2, 1.5] }],
+  fishing: [{ sound: 'amb_plop', every: [5, 12], radius: 7 }],
+  storm_tree: [{ sound: 'amb_crackle', every: [3, 7], radius: 6, rate: [1.3, 1.6] }],
+  frost_crystal: [{ sound: 'amb_chime', every: [6, 12], radius: 6, gain: 0.5, rate: [1.4, 1.6] }],
+  altar: [{ sound: 'amb_chime', every: [8, 14], radius: 5, gain: 0.7, rate: [0.78, 0.84] }],
+  wind_shrine: [{ sound: 'amb_gust', every: [6, 12], radius: 6, gain: 0.6 }],
+};
+
+interface Emitter {
+  def: EmitterDef;
+  x: number;
+  y: number;
+  next: number;
+}
 
 /** Quieter for every later hit of the same cast. */
 export function hitRestraint(hitIndex: number): number {
@@ -102,6 +146,26 @@ export function createAudioBridge(scene: AudioScene, sink: AudioSink, bus: Event
     sink.play(name, o);
   };
   const weapon = (): WeaponType => scene.session?.player.weapon ?? 'sword';
+
+  // Positional emitters from the map's objects and nodes (seeded per map, so a place keeps its rhythm).
+  const rng = mulberry32(hashSeed('omnipath-emitters', scene.def?.id ?? ''));
+  const between = ([a, b]: readonly [number, number]) => a + rng() * (b - a);
+  const emitters: Emitter[] = [];
+  for (const placed of [...(scene.def?.objects ?? []), ...(scene.def?.nodes ?? [])]) {
+    for (const def of EMITTERS[placed.kind] ?? []) {
+      emitters.push({ def, x: placed.tx * TILE + TILE / 2, y: placed.ty * TILE + TILE / 2, next: clock() + between(def.every) * 1000 });
+    }
+  }
+  const tickEmitters = (px: number, py: number): void => {
+    const now = clock();
+    for (const e of emitters) {
+      if (now < e.next) continue;
+      e.next = now + between(e.def.every) * 1000;
+      const d = Math.hypot(e.x - px, e.y - py) / TILE;
+      if (d >= e.def.radius) continue;
+      at(e.def.sound, e.x, e.y, { gain: (e.def.gain ?? 1) * (1 - d / e.def.radius), rate: e.def.rate ? between(e.def.rate) : 1 });
+    }
+  };
 
   // ---------------------------------------------------------------- the player's casts
   scope.on('castStart', (e) => {
@@ -330,6 +394,7 @@ export function createAudioBridge(scene: AudioScene, sink: AudioSink, bus: Event
   const onUpdate = (): void => {
     const p = scene.player;
     if (!p) return;
+    if (emitters.length) tickEmitters(p.x, p.y);
     if (!p.moving) {
       lastFrame = -1;
       stepDist = 0;

@@ -6,7 +6,9 @@ item is fixed below; §2.1 says where.
 
 - Shared contract: `src/game/vfx/types.ts`. It is frozen for both work packages; change it only through this document.
 - Work package **P** (pixels) and work package **R** (recipes) are built in parallel and share no other file (§10).
-- Runtime wiring into SkillSystem / MonsterSkills / Combat is a later step (§8). It is not part of P or R.
+- Runtime wiring into SkillSystem / MonsterSkills / Combat is a later step (§8). It is not part of P or R. The PLAYER
+  half is built (§8.8: `src/game/vfx/runtime/**`, `src/game/vfx/bridge.ts`); monster techniques, auto-attacks,
+  telegraphs, player statuses and death pops are still the legacy helpers (§8.7, open items in §13).
 - 15-minute path: §2, §5, §6.1–6.3, §7 and §10. The rest is reference for the package that needs it.
 
 Counts in this document come from the data at the time of writing: 160 authored `SkillDef`s in `SKILLS` (10
@@ -745,7 +747,9 @@ Other values:
 - Arc rider: 120 px radius, zaps at 50 + 40·i ms.
 - Status durations: burn 1.6 s (ticks every 500 ms) · poison 4 s · bleed 2 s · slow / soak / freeze 2.2 s · stun 0.65 s
   · shock 1.2 s · smite 1 s.
-- PLAYER_R is 12 in Combat and 14 in MonsterSkills.
+- PLAYER_R: one constant, 12 px (`SkillSystem.PLAYER_R`), used by Combat and MonsterSkills (§13 item 4).
+- Monster zone (nova / spin) and cone (strike) tells last at least `fairTellMs(tell, r)` = max(tell, min(900, 350 +
+  2.5 r)) ms, r = the zone radius (spins and cones: + m.radius) (`recipe.ts`, MonsterSkills; §13 item 3).
 
 VFX consequences:
 - Player rings and fills use aspect 1. Monster zones use 0.65. The monster chain range uses aspect 1.
@@ -777,6 +781,7 @@ read it directly. A small bridge (`src/game/vfx/runtime/bridge.ts`, a later step
 | death | kill (monster); death (player) | — | death pop |
 | monsterTelegraph | monsterTelegraph (`shape`, `at`, `durationMs`, `radius`) | tell from the §8.1 rules (zone rx = radius + m.radius, ry 0.65·rx; cone r = range + m.radius; lane to dashEnd; aim to the player; range circle); timing = { now, now + durationMs }; state `cancel` when the monster dies or `monsterTelegraphEnd` says so | telegraph + charge |
 | spark / levelUp (extra) | spark / levelUp | spark at = last hit target | extras |
+| (chain links) | **chainLaunch** (runtime addition) `{ from, to, index, target \| null, knives, flightMs }` | — | a link leaves: lightning shows at once, knives fly `flightMs` (90) before their chainHop; also the fizzle of a chain with no target |
 
 Bus additions requested from the events.ts owner (one-line emits; behaviour unchanged):
 1. **`skillPulse`** `{ skill, owner, index, count, x, y, aim }`, emitted per strike swing and spin pulse (player and
@@ -872,7 +877,7 @@ Extras:
 ### 8.6 Integration requests (owned by other agents; not done by P or R)
 
 1. ~~`DEPTH.TELL_TOP` in depths.ts~~ (done: 150010).
-2. events.ts gains the §8.2 bus additions (`skillPulse` first).
+2. ~~events.ts gains the §8.2 bus additions (`skillPulse` first).~~ (done; `chainLaunch` added by the runtime step).
 3. Monster:
    - local hit-stop / slow / freeze implemented on its bob, squash, charge and position integrator (sprites are Images
      without anims, so `anims.timeScale` does nothing)
@@ -880,9 +885,11 @@ Extras:
    - overlay anchors mapped through the sprite transform
 4. art/monsters.ts exports each texture's hide colour (elite tint applied) and top-edge anchor points, so nothing is
    read back from the GPU.
-5. Settings: "Reduce shake & flashes" (trauma ×0.3, no screen flash, `reduceFlash` bakes, shock tint → R4).
+5. Settings: "Reduce shake & flashes" (trauma ×0.3, no screen flash, `reduceFlash` bakes, shock tint → R4). (runtime side
+   done: `runtime/settings.ts`; the settings-panel toggle is the UI lane's)
 6. The juice rig replaces direct `cameras.main.shake` / `flash` calls (trauma `offset = round(6·τ²·noise(t·25))`, τ
-   decays 2/s; flash alpha ≤ 0.35, ≥ 333 ms apart).
+   decays 2/s; flash alpha ≤ 0.35, ≥ 333 ms apart). (done for player casts: `Stage.addTrauma`; the monster / hurt /
+   warden shakes and flashes in Combat and MonsterSkills are the World lane's)
 7. Shade_cloak sets the actor's alpha to 0.55; the player's class aura Graphics move to the aura loop.
 
 ### 8.7 Migration
@@ -896,6 +903,71 @@ time, behind `?vfx=legacy` for A/B comparison until each gallery sheet is signed
 5. then the legacy code and the `cfx_*` / `fx_*` textures are deleted
 
 Graphics objects leave the VFX path entirely; only debug overlays keep them.
+
+### 8.8 Runtime as built (player skills)
+
+Files: `src/game/vfx/play.ts` (the play contract, Phaser-free), `src/game/vfx/bridge.ts` (bus → plays, Phaser-free,
+`tests/vfx-bridge.test.ts`), `src/game/vfx/runtime/` — `index.ts` (`attachVfx(scene)`: MapScene's one seam),
+`runtime.ts` (instances, placement, particles, governor), `atlas.ts`, `baker.ts`, `bolts.ts`, `pools.ts`,
+`place.ts`, `settings.ts`. The camera rig is `Stage.addTrauma()` in `render/stage.ts`.
+
+- **Seam.** `MapScene.create()` calls `this.vfx = attachVfx(this)` after the stage and player exist; the bridge
+  subscribes through `sceneScope` and the runtime tears down on SHUTDOWN. The atlas, the baker queue and the bolt
+  canvases are run-wide (one per Phaser.Game): a map change keeps everything baked.
+- **What the bridge plays** (player only): castStart → charge (alive while `Combat.windup.castId` matches; a
+  cancelled wind-up ends it); castFire → ends the charge, chain muzzles; skillPulse → cast phase per swing / pulse
+  (odd swings `sense -1`; `firstHitOnly` / `laterHits` / `lastHit` filtering; the merge `extra` piece replaces the
+  carrier on the final swing; spin floor bands each pulse; heavy strike ground impact on the last swing);
+  projectileSpawn → body + trail following the mover (drawn at y − 14, sorted by its ground y; heading from its
+  velocity), returns rider via a per-frame watcher (turn glint, bead tether); projectileEnd → fizzle / dust / catch;
+  chainLaunch → cast-time bolt or a knife flying a quadratic bow; novaTelegraph / novaBlast → marker / area;
+  dash → cast, trail (ghosts by distance), landing; buffApplied → activation + aura loop (a refresh ends the old
+  loop and its pending break); hit → `impactPieces` (tick sparks within 100 ms), victim hold on the first spark
+  (juice hit-stop + 17 ms on crits, ≤ 100 ms, a visual hold only: gameplay untouched), trauma once per cast, arc
+  zaps from `hit.from`, leech streams (paired with the `heal` event of the same hit); statusApplied on monsters →
+  status units (≤ 2 loops per target by priority, one-shots exempt, loops live until `untilMs`); combo; spark;
+  levelUp. Warm set: the bar's recipes + impact variants + statuses, re-warmed on barChanged / skillLearned.
+- **Removed legacy** (player path): SkillSystem `fxStrike/fxSpin/fxNova/fxTelegraph/fxGhost/fxKnifeHop/fxArcZap/
+  fxSpark/fxStream/fxImpact`, projectile textures, trails and tethers, dash ghosts, buff rings and their camera
+  shakes; Combat's hit / combo / arc / leech / spark / knockback / level-up visuals and monster status motes;
+  MapScene's spark ring + camera flash. Timings, hit tests and gameplay are unchanged (vitest green).
+- **Atlas.** ≤ 4 pages of 1024², best-fit shelves, 2 px gutters; a strip direction stays on one page; white glow
+  twins stored once per geometry key; repeated frames share one rectangle. Uploads are dirty rectangles via
+  `texSubImage2D` on the page's own GL texture (Phaser's binding restored), ≤ 1 MB per frame in PRE_RENDER; a strip
+  draws only when uploaded. Full atlas → the least recently used page with no live user is freed.
+- **Baker.** One unique direction per step (mirrors `bakePiece`). In-frame: urgent small strips within 2 ms; big
+  strips (`bigBake`: smears r ≥ 56, c ≥ 40 cores, orbit orbs, big decals, auras, m / l units) and the warm set run in
+  `requestIdleCallback` slices (≤ 8 ms), which also run while a panel pauses the scene. Until a strip is ready the
+  piece plays the family fallback (steel burst tint-filled R3; a steel charge orb tinted R3 for bodies).
+- **Placement.** Strips are pooled Images (origin 0,0; trimmed frames placed at anchor − (ox, oy); flips mirror
+  around the anchor pixel); body pieces sort with `ySort(anchor y, bias)`; whole body-layer rings and auras round an
+  actor bake `half: back / front` and sort at y − 1 / y + 1 (glow on the front half only). Rings over 64 px and
+  aim-relative arcs are 10 px band chunks on Blitter bobs (sweep / expand ink from per-ink chunk sets; dim / thin
+  bands and a crowded pool place every 2nd or 3rd chunk; cue rings never thin). Motes are runtime particles on
+  shared Blitters (closed-form drag + gravity, age-stepped frames, directional kinds by velocity); mote blitters
+  sit at `VFX_DEPTH.FX_MOTES` (89000, over the y-sorted band). Glow twins: one ADD Layer at `FX_GLOW`
+  (`LIGHT` on dark maps), tinted family R4 at the biome gain. Afterimages snapshot the actor's frame
+  (tint-fill R3, stepped alpha). Bolts bake per hop into pooled 256² / 512² canvases (bead line when none is free).
+- **Simplifications.** A slash bakes one sweep sense; flipped headings are not mirror-corrected (a left-facing swing
+  sweeps the other way round); multi-hit strikes also warm sense −1 for their back-swings. Far-half erupt units
+  keep the base LUT. The screen flash for ultimate novas is not drawn (trauma only).
+- **Governor.** EMA of the frame delta: 1 → 0.5 after 30 frames > 20 ms, → 0.25 after 30 > 26 ms, back up after 120
+  < 15 ms. 0.5: counts ×0.5, every 2nd chunk, no echo pieces; 0.25: no trails, ≤ 3 units, no decals, no glow, no
+  ghosts. The Canvas renderer runs at 0.25. `neverGoverned` pieces are exempt. `vfx.setQuality(q | null)` pins.
+- **Reduce shake & flashes**: `setReduceFlash(on)` (runtime/settings.ts): reduce-flash bakes for every new play,
+  trauma × 0.3. The flash budget (`flashOk`) is in place for area flashes.
+- **Measured** (Playwright + SwiftShader on a shared container CPU, `window.omnipath.scene.vfx.stats()`, 8 AoE-heavy
+  skills on the bar, AUTO, 14 monsters kept round the player, discovery cards dismissed, 20 s; grass and a dark crypt,
+  several runs): peak body sprites 59-75 / 96, glow 47-58 / 64, ground 4-27 / 40, bobs 267-280 / 280 player share
+  (≤ 14 chunks refused: rings thin to every 2nd / 3rd chunk under pressure), particles 74-96 / 250, atlas 3 / 4 pages
+  (1.6 pages of pixels), ≤ 6 mote blitters. VFX update EMA 1.3-2.4 ms (instances 0.9-1.3, in-frame bakes ≤ 0.3,
+  particles ≤ 0.2) against the 1.5 ms budget, single-frame peaks 7-11 ms (cast-time bolt bakes). Status units are
+  low priority (≤ 2/3 of the sprite pools) and > 8 affected targets show pips, so casts and sparks are never starved.
+  Frames p50 / p95: 17-24 / 24-46 ms with VFX vs 17 / 30 ms without (software GL is fill-rate bound; the governor
+  sat at 0.25-0.5). The device gate (§11.3) is still to do.
+- **QA.** `window.omnipath.scene.vfx` exposes `stats()`, `resetPeaks()`, `setReduceFlash()`, `setQuality()`.
+  Effects were checked mid-frame by stepping `game.step()` with the loop asleep, with the hit-test geometry drawn
+  over them (rims sit on the hit circles; strike smears ride 12 px up at swing height, as SkillSystem draws them).
 
 ## 9. Budgets, governors
 
@@ -1141,13 +1213,30 @@ Rules:
 
 ## 13. Owner decisions and open items
 
-1. **Ground geometry.** Player hit tests are circles and monster zones are 0.65 ellipses; the VFX draws each truthfully.
-   Recommendation: pick one for both. Ellipses are the classic 3/4 read and need a SkillSystem hit-test change; circles
-   need a MonsterSkills change.
-2. **Spark freeze** is 250 ms, against QUALITY-PLAN's 150 ms/s hit-stop budget. Recommendation: 150 ms, with the
-   star's hero frame held through it. Until then the spark freeze is the single exemption.
-3. **Telegraph length on tap-to-move.** Recommended minimum: T ≥ 250 + 120 + (r + 12)/playerSpeed ms. Today's 300–400
-   ms tells are fair only for small zones.
-4. **PLAYER_R** differs between Combat (12) and MonsterSkills (14). VFX uses the hit test's own value per path.
-5. Deferred for simplicity: a Web Worker for bakes and an IndexedDB page cache. Revisit only if a measured bake exceeds
-   the §8.5 budgets.
+Decided (implemented with the runtime step):
+1. **Ground geometry stays truthful.** Player hit tests are circles and monster zones are 0.65 ellipses; the VFX
+   draws each exactly as hit-tested (rims verified against a hit-test overlay in the browser, §8.8). No gameplay
+   geometry change.
+2. **Spark freeze is 150 ms** (MapScene `hitStop(150)`), inside QUALITY-PLAN's 150 ms/s hit-stop budget; the spark
+   star (`extraPieces('spark')`) holds through it. The old 250 ms exemption is gone, and so are the spark's
+   `cameras.main.flash` and legacy ring.
+3. **Fair telegraph minimums.** Monster zone (nova, spin) and cone (strike) tells last at least
+   max(current, min(900, 350 + 2.5 × r)) ms with r the zone radius (+ m.radius for spins and cones): `fairTellMs` in
+   `recipe.ts`, applied in MonsterSkills.start; `monsterTellMs(skill, casterRadius)` mirrors it for the recipes. A
+   longer authored tell is kept. Lanes, aims, chain ranges and buff auras keep their 300-400 ms.
+4. **One player radius**: `PLAYER_R = 12` exported from SkillSystem, used by Combat (separation) and MonsterSkills
+   (every hit test against the player; it was 14 there).
+5. **Monster blasts keep danger accents** (monster LUT: accent → danger R3), as §4.3 says.
+
+Open:
+6. Deferred for simplicity: a Web Worker for bakes and an IndexedDB page cache. Revisit only if a measured bake
+   exceeds the §8.5 budgets.
+7. World lane (not wired yet): monster techniques / auto-attacks / telegraphs (`monsterTelegraph(+End)`, the tell
+   pieces, `deriveAttackVfx`), player statuses and hurt sparks (`playerHurt`), death pops (Combat.kill still runs
+   the alpha / fractional scaleY tween), enrage, the player's buff-ring Graphics in Player.sync (they now double the
+   aura loop), MapScene / Interactions legacy `fxRing` / `fxBurst`, local hit-stop on the monster integrator, the
+   TintArbiter and art/monsters.ts hide colours (§8.6 items 3, 4, 7). The legacy fx helpers they use stay in
+   SkillSystem until then.
+8. Settings UI: "Reduce shake & flashes" exists on the runtime (`setReduceFlash`, persisted in localStorage,
+   defaulting to `prefers-reduced-motion`); the toggle in the settings panel is the UI lane's.
+9. Device gate (§11.3) still pending: SwiftShader numbers in §8.8 are a regression check only.

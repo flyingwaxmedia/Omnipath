@@ -384,8 +384,11 @@
     max-height: calc(100% - 70px);
   }
 
+  /* Beside the docked card the chips scroll sideways: fade the cut edge so the row reads as "more this way". */
   .sheet.starchart .sc-stage.has-card .sc-chips {
     right: calc(min(380px, 46%) + 10px);
+    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 36px), transparent);
+    mask-image: linear-gradient(to right, #000 calc(100% - 36px), transparent);
   }
 
   @keyframes sc-up {
@@ -801,6 +804,7 @@
 }
 
 .sc-card .sc-form {
+  min-width: 44px;
   min-height: 44px;
   padding: 0 14px;
   border-radius: 22px;

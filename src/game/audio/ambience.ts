@@ -65,7 +65,11 @@ export interface BedEvent {
 
 export interface BedDef {
   id: BedId;
-  /** Bed output level (before the ambience bus). */
+  /**
+   * Bed output level (before the ambience bus). Set from an offline render of each bed with its one-shots (K-weighted,
+   * after the master high-pass, 3 s windows): open-air beds land within ±1 dB of each other (≈ −39 dBFS at default
+   * settings), caves / crypts ~3 dB under before their echo, so a warp's cross-fade never jumps in level.
+   */
   gain: number;
   layers: NoiseLayer[];
   events: BedEvent[];
@@ -83,7 +87,7 @@ const birds = (every: [number, number], gain = 1): BedEvent[] => [
 export const BEDS: Readonly<Record<BedId, BedDef>> = {
   meadow: {
     id: 'meadow',
-    gain: 0.55,
+    gain: 0.43,
     layers: [
       { color: 'pink', filter: 'bandpass', freq: 700, q: 0.6, gain: 0.5, swell: W(0.6, 4, 9), drift: W(0.3, 5, 10) },
       { color: 'white', filter: 'bandpass', freq: 3200, q: 1.2, gain: 0.06, swell: W(0.8, 3, 7) },
@@ -92,10 +96,10 @@ export const BEDS: Readonly<Record<BedId, BedDef>> = {
   },
   lake: {
     id: 'lake',
-    gain: 0.55,
+    gain: 0.41,
     layers: [
       { color: 'pink', filter: 'bandpass', freq: 600, q: 0.6, gain: 0.3, swell: W(0.5, 4, 9) },
-      { color: 'brown', filter: 'lowpass', freq: 520, q: 0.7, gain: 0.7, swell: W(0.7, 1.5, 3.5), drift: W(0.25, 2, 5) },
+      { color: 'pink', filter: 'bandpass', freq: 460, q: 0.8, gain: 0.66, swell: W(0.75, 1.5, 3.5), drift: W(0.25, 2, 5) },
     ],
     events: [
       { sound: 'amb_water_lap', every: [2, 5], gain: [0.5, 1], pan: 0.7, rate: [0.85, 1.15] },
@@ -105,10 +109,10 @@ export const BEDS: Readonly<Record<BedId, BedDef>> = {
   },
   hill: {
     id: 'hill',
-    gain: 0.55,
+    gain: 0.66,
     layers: [
-      { color: 'pink', filter: 'bandpass', freq: 900, q: 0.8, gain: 0.65, swell: W(0.7, 2, 6), drift: W(0.4, 3, 7) },
-      { color: 'brown', filter: 'lowpass', freq: 450, q: 0.7, gain: 0.3, swell: W(0.5, 3, 8) },
+      { color: 'pink', filter: 'bandpass', freq: 900, q: 0.8, gain: 0.34, swell: W(0.7, 2, 6), drift: W(0.4, 3, 7) },
+      { color: 'brown', filter: 'lowpass', freq: 450, q: 0.7, gain: 0.15, swell: W(0.5, 3, 8) },
     ],
     events: [
       { sound: 'amb_gust', every: [5, 12], gain: [0.6, 1], pan: 0.6, rate: [0.85, 1.15] },
@@ -128,10 +132,10 @@ export const BEDS: Readonly<Record<BedId, BedDef>> = {
   },
   forest: {
     id: 'forest',
-    gain: 0.55,
+    gain: 1.0,
     layers: [
-      { color: 'white', filter: 'bandpass', freq: 2400, q: 0.7, gain: 0.07, swell: W(0.8, 2, 6) },
-      { color: 'brown', filter: 'lowpass', freq: 420, q: 0.7, gain: 0.4, swell: W(0.5, 4, 9) },
+      { color: 'white', filter: 'bandpass', freq: 2400, q: 0.7, gain: 0.05, swell: W(0.8, 2, 6) },
+      { color: 'brown', filter: 'lowpass', freq: 420, q: 0.7, gain: 0.18, swell: W(0.5, 4, 9) },
     ],
     events: [
       { sound: 'amb_leaves', every: [4, 9], gain: [0.5, 1], pan: 0.8 },
@@ -144,8 +148,8 @@ export const BEDS: Readonly<Record<BedId, BedDef>> = {
     id: 'glade',
     gain: 0.5,
     layers: [
-      { color: 'pink', filter: 'bandpass', freq: 1200, q: 0.7, gain: 0.18, swell: W(0.6, 3, 8) },
-      { color: 'white', filter: 'bandpass', freq: 1800, q: 2, gain: 0.08, swell: W(0.5, 0.5, 1.5), drift: W(0.2, 0.4, 1.2) },
+      { color: 'pink', filter: 'bandpass', freq: 1200, q: 0.7, gain: 0.5, swell: W(0.6, 3, 8) },
+      { color: 'white', filter: 'bandpass', freq: 1800, q: 2, gain: 0.22, swell: W(0.5, 0.5, 1.5), drift: W(0.2, 0.4, 1.2) },
     ],
     events: [
       { sound: 'amb_chime', every: [6, 14], gain: [0.5, 1], pan: 0.7, rate: [0.94, 1.06] },
@@ -155,10 +159,10 @@ export const BEDS: Readonly<Record<BedId, BedDef>> = {
   },
   ember: {
     id: 'ember',
-    gain: 0.55,
+    gain: 0.63,
     layers: [
-      { color: 'brown', filter: 'lowpass', freq: 280, q: 0.8, gain: 0.8, swell: W(0.5, 2, 5) },
-      { color: 'pink', filter: 'bandpass', freq: 800, q: 0.7, gain: 0.25, swell: W(0.6, 3, 7), drift: W(0.3, 3, 7) },
+      { color: 'brown', filter: 'lowpass', freq: 280, q: 0.8, gain: 0.3, swell: W(0.5, 2, 5) },
+      { color: 'pink', filter: 'bandpass', freq: 800, q: 0.7, gain: 0.12, swell: W(0.6, 3, 7), drift: W(0.3, 3, 7) },
     ],
     events: [
       { sound: 'amb_crackle', every: [0.6, 2], gain: [0.4, 1], pan: 0.9, burst: [1, 3], gap: [0.08, 0.25] },
@@ -167,10 +171,10 @@ export const BEDS: Readonly<Record<BedId, BedDef>> = {
   },
   basalt: {
     id: 'basalt',
-    gain: 0.55,
+    gain: 0.78,
     layers: [
-      { color: 'brown', filter: 'lowpass', freq: 300, q: 0.8, gain: 0.55, swell: W(0.5, 3, 7) },
-      { color: 'pink', filter: 'bandpass', freq: 850, q: 0.8, gain: 0.45, swell: W(0.7, 2, 6), drift: W(0.35, 3, 7) },
+      { color: 'brown', filter: 'lowpass', freq: 300, q: 0.8, gain: 0.23, swell: W(0.5, 3, 7) },
+      { color: 'pink', filter: 'bandpass', freq: 850, q: 0.8, gain: 0.2, swell: W(0.7, 2, 6), drift: W(0.35, 3, 7) },
     ],
     events: [
       { sound: 'amb_crackle', every: [1.5, 4], gain: [0.4, 0.8], pan: 0.9, burst: [1, 2], gap: [0.1, 0.3] },
@@ -182,8 +186,8 @@ export const BEDS: Readonly<Record<BedId, BedDef>> = {
     id: 'plateau',
     gain: 0.55,
     layers: [
-      { color: 'pink', filter: 'bandpass', freq: 750, q: 0.7, gain: 0.75, swell: W(0.7, 1.5, 5), drift: W(0.5, 2, 6) },
-      { color: 'brown', filter: 'lowpass', freq: 400, q: 0.7, gain: 0.35, swell: W(0.5, 3, 7) },
+      { color: 'pink', filter: 'bandpass', freq: 750, q: 0.7, gain: 0.38, swell: W(0.7, 1.5, 5), drift: W(0.5, 2, 6) },
+      { color: 'brown', filter: 'lowpass', freq: 400, q: 0.7, gain: 0.17, swell: W(0.5, 3, 7) },
     ],
     events: [
       { sound: 'amb_thunder', every: [14, 30], gain: [0.5, 1], pan: 0.7, rate: [0.85, 1.1] },
@@ -192,10 +196,10 @@ export const BEDS: Readonly<Record<BedId, BedDef>> = {
   },
   storm: {
     id: 'storm',
-    gain: 0.55,
+    gain: 0.53,
     layers: [
-      { color: 'pink', filter: 'bandpass', freq: 900, q: 0.7, gain: 0.7, swell: W(0.7, 1.5, 4.5), drift: W(0.5, 2, 5) },
-      { color: 'white', filter: 'bandpass', freq: 3000, q: 0.4, gain: 0.05, swell: W(0.4, 3, 7) },
+      { color: 'pink', filter: 'bandpass', freq: 900, q: 0.7, gain: 0.53, swell: W(0.7, 1.5, 4.5), drift: W(0.5, 2, 5) },
+      { color: 'white', filter: 'bandpass', freq: 3000, q: 0.4, gain: 0.04, swell: W(0.4, 3, 7) },
     ],
     events: [
       { sound: 'amb_thunder', every: [8, 20], gain: [0.6, 1], pan: 0.7, rate: [0.85, 1.15] },
@@ -204,10 +208,10 @@ export const BEDS: Readonly<Record<BedId, BedDef>> = {
   },
   town: {
     id: 'town',
-    gain: 0.5,
+    gain: 0.43,
     layers: [
-      { color: 'pink', filter: 'bandpass', freq: 450, q: 1.3, gain: 0.22, swell: W(0.6, 1, 3), drift: W(0.35, 0.4, 1.2) },
-      { color: 'pink', filter: 'bandpass', freq: 650, q: 0.6, gain: 0.2, swell: W(0.5, 4, 9) },
+      { color: 'pink', filter: 'bandpass', freq: 450, q: 1.3, gain: 0.5, swell: W(0.6, 1, 3), drift: W(0.35, 0.4, 1.2) },
+      { color: 'pink', filter: 'bandpass', freq: 650, q: 0.6, gain: 0.44, swell: W(0.5, 4, 9) },
     ],
     events: [
       ...birds([3, 8]),
@@ -217,11 +221,11 @@ export const BEDS: Readonly<Record<BedId, BedDef>> = {
   },
   cave: {
     id: 'cave',
-    gain: 0.55,
+    gain: 0.75,
     echo: true,
     layers: [
-      { color: 'brown', filter: 'lowpass', freq: 320, q: 0.7, gain: 0.5, swell: W(0.3, 6, 12) },
-      { color: 'pink', filter: 'bandpass', freq: 1500, q: 3, gain: 0.04, swell: W(0.7, 3, 8), drift: W(0.2, 4, 9) },
+      { color: 'brown', filter: 'lowpass', freq: 320, q: 0.7, gain: 0.18, swell: W(0.3, 6, 12) },
+      { color: 'pink', filter: 'bandpass', freq: 1500, q: 3, gain: 0.03, swell: W(0.7, 3, 8), drift: W(0.2, 4, 9) },
     ],
     events: [
       { sound: 'amb_drip', every: [1.5, 4.5], gain: [0.4, 1], pan: 0.9, burst: [1, 2], gap: [0.2, 0.5], rate: [0.8, 1.3] },
@@ -230,11 +234,11 @@ export const BEDS: Readonly<Record<BedId, BedDef>> = {
   },
   crypt: {
     id: 'crypt',
-    gain: 0.55,
+    gain: 0.82,
     echo: true,
     layers: [
-      { color: 'brown', filter: 'lowpass', freq: 260, q: 0.7, gain: 0.55, swell: W(0.3, 6, 12) },
-      { color: 'pink', filter: 'bandpass', freq: 420, q: 4, gain: 0.12, swell: W(0.8, 4, 9), drift: W(0.2, 4, 9) },
+      { color: 'brown', filter: 'lowpass', freq: 260, q: 0.7, gain: 0.18, swell: W(0.3, 6, 12) },
+      { color: 'pink', filter: 'bandpass', freq: 420, q: 4, gain: 0.06, swell: W(0.8, 4, 9), drift: W(0.2, 4, 9) },
     ],
     events: [
       { sound: 'amb_moan', every: [12, 25], gain: [0.5, 1], pan: 0.8, rate: [0.85, 1.1] },
@@ -244,10 +248,10 @@ export const BEDS: Readonly<Record<BedId, BedDef>> = {
   },
   frost: {
     id: 'frost',
-    gain: 0.55,
+    gain: 0.8,
     layers: [
-      { color: 'pink', filter: 'bandpass', freq: 1300, q: 3, gain: 0.18, swell: W(0.8, 2, 5), drift: W(0.3, 2, 5) },
-      { color: 'pink', filter: 'lowpass', freq: 700, q: 0.7, gain: 0.4, swell: W(0.6, 3, 8) },
+      { color: 'pink', filter: 'bandpass', freq: 1300, q: 3, gain: 0.13, swell: W(0.8, 2, 5), drift: W(0.3, 2, 5) },
+      { color: 'pink', filter: 'lowpass', freq: 700, q: 0.7, gain: 0.28, swell: W(0.6, 3, 8) },
     ],
     events: [
       { sound: 'amb_ice_creak', every: [5, 12], gain: [0.5, 1], pan: 0.8, rate: [0.8, 1.2] },
@@ -257,7 +261,7 @@ export const BEDS: Readonly<Record<BedId, BedDef>> = {
   dusk: {
     id: 'dusk',
     gain: 0.5,
-    layers: [{ color: 'pink', filter: 'bandpass', freq: 600, q: 0.6, gain: 0.3, swell: W(0.6, 4, 9) }],
+    layers: [{ color: 'pink', filter: 'bandpass', freq: 600, q: 0.6, gain: 0.45, swell: W(0.6, 4, 9) }],
     events: [
       { sound: 'amb_cricket', every: [1.2, 3.5], gain: [0.5, 1], pan: 0.9, burst: [2, 5], gap: [0.25, 0.4], rate: [0.95, 1.05] },
       { sound: 'amb_owl', every: [15, 30], gain: [0.5, 0.9], pan: 0.8 },
@@ -422,7 +426,9 @@ interface Mod {
   w: Wander;
   /** 'gain' swells down from base; 'freq' drifts around it. */
   kind: 'gain' | 'freq';
+  /** Context time the scheduled ramp ends at, and the value it ends on. */
   next: number;
+  value: number;
 }
 
 interface EventState {
@@ -449,6 +455,8 @@ const LOOKAHEAD = 0.35;
 export class AmbiencePlayer {
   private wanted: MapInfo | null = null;
   private bed: Running | null = null;
+  /** Beds fading out (released once silent). */
+  private readonly fading = new Set<Running>();
   private readonly noise = new Map<NoiseColor, AudioBuffer>();
   private rng = mulberry32(hashSeed('omnipath-ambience'));
 
@@ -456,6 +464,7 @@ export class AmbiencePlayer {
 
   /** The bed playing now (or wanted while locked). */
   current(): BedId | null {
+    if (!this.host.enabled()) return null;
     return this.bed?.id ?? (this.wanted ? bedFor(this.wanted) : null);
   }
 
@@ -482,22 +491,28 @@ export class AmbiencePlayer {
     if (want) this.bed = this.start(ctx, BEDS[want]);
   }
 
-  /** Fades the current bed out over `fade` s and releases its nodes. */
+  /** Fades the current bed out over `fade` s and releases its nodes (the next bed fades in meanwhile). */
   stop(fade = FADE_OUT): void {
     const bed = this.bed;
     this.bed = null;
     const ctx = this.host.ctx();
     if (!bed || !ctx) return;
     const t = ctx.currentTime;
+    const end = t + Math.max(0.01, fade);
     try {
-      bed.out.gain.cancelScheduledValues(t);
-      bed.out.gain.setValueAtTime(bed.out.gain.value, t);
-      bed.out.gain.linearRampToValueAtTime(0, t + Math.max(0.01, fade));
-      for (const s of bed.sources) s.stop(t + Math.max(0.01, fade) + 0.05);
+      const g = bed.out.gain;
+      // Hold the value it has now (mid fade-in too), then ramp down: no jump either way.
+      const now = g.value;
+      g.cancelScheduledValues(t);
+      g.setValueAtTime(now, t);
+      g.linearRampToValueAtTime(0, end);
+      for (const s of bed.sources) s.stop(end + 0.05);
     } catch {
       // context closing
     }
+    this.fading.add(bed);
     const release = () => {
+      if (!this.fading.delete(bed)) return;
       for (const n of [...bed.sources, ...bed.nodes, bed.out]) {
         try {
           n.disconnect();
@@ -508,6 +523,13 @@ export class AmbiencePlayer {
     };
     if (fade <= 0) release();
     else setTimeout(release, (fade + 0.3) * 1000);
+  }
+
+  /** Nodes held by the playing bed and the beds still fading out (leak checks). */
+  nodeCount(): number {
+    let n = 0;
+    for (const b of [...(this.bed ? [this.bed] : []), ...this.fading]) n += b.sources.length + b.nodes.length + 1;
+    return n;
   }
 
   private noiseBuffer(ctx: AudioContext, color: NoiseColor): AudioBuffer {
@@ -541,15 +563,22 @@ export class AmbiencePlayer {
       const filter = ctx.createBiquadFilter();
       filter.type = layer.filter;
       filter.frequency.value = layer.freq;
-      filter.Q.value = layer.q;
+      // A band-pass Q is a plain Q; Web Audio reads a low- / high-pass Q as a resonance in dB.
+      filter.Q.value = layer.filter === 'bandpass' ? layer.q : 20 * Math.log10(Math.max(0.1, layer.q));
       const g = ctx.createGain();
       g.gain.value = layer.gain;
       src.connect(filter).connect(g).connect(bedOut);
       src.start(t, this.rng() * buf.duration);
       run.sources.push(src);
       run.nodes.push(filter, g);
-      if (layer.swell) run.mods.push({ param: g.gain, base: layer.gain, w: layer.swell, kind: 'gain', next: t });
-      if (layer.drift) run.mods.push({ param: filter.frequency, base: layer.freq, w: layer.drift, kind: 'freq', next: t });
+      if (layer.swell) {
+        g.gain.setValueAtTime(layer.gain, t);
+        run.mods.push({ param: g.gain, base: layer.gain, w: layer.swell, kind: 'gain', next: t, value: layer.gain });
+      }
+      if (layer.drift) {
+        filter.frequency.setValueAtTime(layer.freq, t);
+        run.mods.push({ param: filter.frequency, base: layer.freq, w: layer.drift, kind: 'freq', next: t, value: layer.freq });
+      }
     }
     for (const e of def.events) run.events.push({ e, next: t + 1 + this.between(e.every) * 0.6 });
     return run;
@@ -566,19 +595,21 @@ export class AmbiencePlayer {
     if (!ctx || !bed || ctx.state !== 'running') return;
     const now = ctx.currentTime;
     for (const m of bed.mods) {
-      if (now < m.next - 0.05) continue;
+      if (now < m.next - 0.3) continue;
+      // Chain the next segment onto the end of the scheduled one (never cancel a ramp in flight: that snaps the
+      // parameter back to the ramp's start and clicks). A late tick re-anchors at the value the ramp ended on.
       const seg = this.between([m.w.min, m.w.max]);
-      const target = m.kind === 'gain' ? m.base * (1 - m.w.depth * this.rng()) : m.base * (1 + m.w.depth * (this.rng() * 2 - 1));
+      const target = m.kind === 'gain' ? Math.max(0, m.base * (1 - m.w.depth * this.rng())) : Math.max(20, m.base * (1 + m.w.depth * (this.rng() * 2 - 1)));
       const from = Math.max(now, m.next);
       try {
-        m.param.cancelScheduledValues(from);
-        m.param.setValueAtTime(m.param.value, from);
-        if (m.kind === 'freq') m.param.exponentialRampToValueAtTime(Math.max(20, target), from + seg);
-        else m.param.linearRampToValueAtTime(Math.max(0, target), from + seg);
+        if (from > m.next) m.param.setValueAtTime(m.value, from);
+        if (m.kind === 'freq') m.param.exponentialRampToValueAtTime(target, from + seg);
+        else m.param.linearRampToValueAtTime(target, from + seg);
       } catch {
         // param automation race on a closing context
       }
       m.next = from + seg;
+      m.value = target;
     }
     for (const s of bed.events) {
       // After a long suspension, skip the backlog instead of firing it all at once.

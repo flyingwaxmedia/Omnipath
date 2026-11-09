@@ -300,12 +300,28 @@ Simple and automatic: **pick a class and it equips its own skills.**
 - **Unlocking a class** works from the skills you KNOW (§5 counting: Tier I permissive; Tier II/III hardened + parent
   Class Levels + requirements). The player sees one card: "New class: Pyroblade — Become a Pyroblade?".
 - **Becoming a class** (Class screen, any time, instant) refills the 5 class slots with
-  `classSkills(reg, state, cls, 5)` — a pure, deterministic pick from KNOWN skills: first enough skills to satisfy each
-  of the class's patterns (e.g. 1 finisher + 2 stealth), then the remaining slots with the best other matching skills
-  (higher tier first, then higher rank, then most recently learned). A skill already sitting in one of your slots moves
-  into the class slot (no duplicates). Fewer than 5 matches leave class slots empty.
-- **Learning a new matching skill** while in a class drops it into an empty class slot, or replaces the weakest
-  class skill if it is a higher tier ("Pyroblade equipped Flame Spin").
+  `classSkills(reg, state, cls, 5)` — a pure, deterministic pick from KNOWN bar-eligible skills, most relevant first
+  (owner: "auto equip RELATED skills"):
+  1. enough **pattern matches** to satisfy each of the class's patterns (e.g. 1 finisher + 2 stealth), in pattern order;
+  2. elemental classes (`distinctElements`): one matching skill per distinct element;
+  3. the best remaining pattern matches, then the best **related** skills — a skill is related
+     (`classSkillFit(...) === 'related'`) when it shares any tag with the class's patterns or its tree (`tree.tag` /
+     `tree.tag2`, read back by `classTreeTags`), or carries an element the class's patterns, requirements or bonus
+     (`tagPower`) name. A Pyroblade who knows only sword skills fills all 5 slots with blade skills; an Arcanist takes
+     arcane and area skills. One skill per authored base first (a variant and its base share slots only when nothing
+     else fits);
+  4. only when nothing related is known does a class slot stay empty.
+  "Best" = higher tier, then higher rank, then the class's own signature skills, then most recently learned, then id.
+  A class pick already sitting in one of **your** slots moves into the class slot and frees your slot (no duplicates,
+  nothing lost); your other picks stay where they are. Coming from "No class", the player's old picks in slots 1–5
+  move into your empty slots while there is room. Refreshes that are not a change of class (equipping or clearing one
+  of your slots, loading a save) never touch your slots.
+- **Learning a new related skill** while in a class drops it into an empty class slot, or replaces the weakest class
+  skill (the class's last pick) only when it is clearly better — a closer fit (pattern match over related) or, at the
+  same fit, a higher tier ("Pyroblade equipped Flame Spin"). Otherwise it drops into an empty slot of yours.
+- The headline after becoming a class says what happened in one line: "All class slots filled", "3 class skills
+  equipped", or, with nothing related known, "Learn fire skills to fill your class slots" (the class tree's main tag,
+  in plain words).
 - The active class (`state.worn`) gives its bonus, tree, outfit and Class Level XP exactly as §5. Leaving a class
   (or choosing "No class") turns the class slots back into free slots keeping their skills.
 - Player-facing words: "Class Level" (not CR), "patterns" are never shown as tags — only as plain goals

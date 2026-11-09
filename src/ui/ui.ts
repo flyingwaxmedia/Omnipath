@@ -21,7 +21,7 @@ import {
 } from './dialogs';
 import { Hud, type CastInfo, type LogKind, type TargetInfo } from './hud';
 import { Minimap } from './minimap';
-import type { PanelHost, PanelRender } from './panels/common';
+import { OPENED_FROM, type OpenedFrom, type PanelHost, type PanelRender, RESUMING } from './panels/common';
 import { PANELS as LANE_PANELS, PANELS_FULLSCREEN } from './panels/index';
 import { openNpcDialog } from './panels/npc';
 import { HUD_PANELS } from './picker';
@@ -37,6 +37,19 @@ const PANELS: Record<string, PanelRender> = { ...LANE_PANELS, ...STARCHART_PANEL
 
 /** Panels that cover the whole screen (uiOpen.fullscreen: the render lane may sleep the game loop). */
 const FULLSCREEN: ReadonlySet<string> = new Set([...STARCHART_FULLSCREEN, ...PANELS_FULLSCREEN]);
+
+/** Scroll containers whose position survives a re-render of the same panel (sheets; the NPC / object dialog). */
+const SCROLLERS = ['.sheet-body', '.dialog'];
+
+/** Layout top of `el` (offsets: its pop-in animation's scale ignored) from the visible top of the scroll box `box`. */
+function topInView(el: HTMLElement, box: HTMLElement): number {
+  const abs = (e: HTMLElement) => {
+    let y = 0;
+    for (let n: Element | null = e; n instanceof HTMLElement; n = n.offsetParent) y += n.offsetTop;
+    return y;
+  };
+  return abs(el) - abs(box) - box.clientTop - box.scrollTop;
+}
 
 export class UI implements PanelHost {
   readonly root: HTMLElement;
@@ -239,6 +252,10 @@ export class UI implements PanelHost {
 
   open(name: string, arg?: string): void {
     if (!PANELS[name]) return;
+    // Opened over another panel (a Star Chart card's Equip → the picker): remember it so the new one can go back.
+    if (this.panel && this.panel !== name && PANELS[this.panel] && this.modal.dataset.panel?.startsWith(`${this.panel}:`))
+      this.state[OPENED_FROM] = { panel: this.panel, ...(this.panelArg !== undefined ? { arg: this.panelArg } : {}) } satisfies OpenedFrom;
+    else if (this.panel !== name) delete this.state[OPENED_FROM];
     this.panel = name;
     this.panelArg = arg;
     this.modal.classList.remove('hidden');
@@ -251,6 +268,7 @@ export class UI implements PanelHost {
     const was = this.panel;
     this.panel = null;
     this.panelArg = undefined;
+    delete this.state[OPENED_FROM];
     if (this.showingDiscovery) return;
     if (was) gameBus.emit('uiClose', { panel: was });
     this.modal.classList.add('hidden');
@@ -270,14 +288,34 @@ export class UI implements PanelHost {
     if (!this.panel || this.showingDiscovery) return;
     const fn = PANELS[this.panel];
     if (!fn) return;
-    const scroll = this.modal.querySelector('.sheet-body')?.scrollTop ?? 0;
+    const scroll = SCROLLERS.map((sel) => this.modal.querySelector(sel)?.scrollTop ?? 0);
+    const rewardShown = this.rewardTopShown();
     const same = this.modal.dataset.panel === `${this.panel}:${this.panelArg ?? ''}`;
     fn(this, this.panelArg);
     this.modal.dataset.panel = `${this.panel}:${this.panelArg ?? ''}`;
     if (same) {
-      const body = this.modal.querySelector('.sheet-body');
-      if (body) body.scrollTop = scroll;
+      // Accept / Complete / equip re-render the panel: stay where the player was scrolled…
+      SCROLLERS.forEach((sel, i) => {
+        const el = this.modal.querySelector(sel);
+        if (el && scroll[i]) el.scrollTop = scroll[i];
+      });
+      // …but a fresh "Quest complete!" card in an NPC dialog comes into view (its top), and stays in view through the
+      // re-renders that follow (the NPC's next line can push it down) unless the player scrolled it away.
+      if (rewardShown !== false && this.rewardTopShown() === false) {
+        const win = this.modal.querySelector<HTMLElement>('.qwin')!;
+        const box = win.closest<HTMLElement>(SCROLLERS.join(', '))!;
+        box.scrollTop += topInView(win, box) - 8;
+      }
     }
+  }
+
+  /** Whether the reward card's top is in its scroller's view (null: no reward card). */
+  private rewardTopShown(): boolean | null {
+    const win = this.modal.querySelector<HTMLElement>('.qwin');
+    const box = win?.closest<HTMLElement>(SCROLLERS.join(', '));
+    if (!win || !box) return null;
+    const y = topInView(win, box);
+    return y >= -1 && y <= box.clientHeight - 24;
   }
 
   sheet(title: string, body: string, extraClass = ''): HTMLElement {
@@ -348,8 +386,16 @@ export class UI implements PanelHost {
         const d = this.pendingDialog;
         this.pendingDialog = null;
         d();
-      } else if (this.panel && PANELS[this.panel]) this.render();
-      else {
+      } else if (this.panel && PANELS[this.panel]) {
+        // Back to the panel under the card. A full-screen one hides the world again: re-emit its uiOpen so the game
+        // loop goes back to sleep (the card woke it) — flagged as a resume, so the panel keeps its selection.
+        if (FULLSCREEN.has(this.panel)) {
+          this.state[RESUMING] = true;
+          gameBus.emit('uiOpen', { panel: this.panel, ...(this.panelArg !== undefined ? { arg: this.panelArg } : {}), fullscreen: true });
+        }
+        this.render();
+        delete this.state[RESUMING];
+      } else {
         this.panel = null;
         this.modal.classList.add('hidden');
         this.modal.innerHTML = '';

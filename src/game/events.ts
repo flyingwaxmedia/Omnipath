@@ -48,7 +48,11 @@
 //                       SkillSystem; monster: MonsterSkills swing / pulse / volley) — the VFX never re-times swings
 //   monsterTelegraphEnd a telegraphed monster technique resolved (its hits ran) or was cancelled (death, stun)
 //   enrage              a warden became enraged below half HP (MonsterSkills.enrage)
-//   chainLaunch         a chain link leaves (player chains): lightning shows at once, knives fly flightMs to chainHop
+//   chainLaunch         a chain link leaves (player chains): lightning shows at once, knives fly flightMs to chainHop;
+//                       a monster chain that found nothing in reach (target null: the charge fizzles)
+// VFX World lane additions (docs/VFX.md §8.9):
+//   monsterSpawn        a monster respawned at its spawn (Combat.respawn): the spawn pop
+//   monsterTelegraph    + `live` (the exact live geometry MonsterSkills hit-tests) and `phases` (follow-up swings)
 // Fields marked "(VFX request)" are filled where the emitter knows them (castId on castStart, projectile id / index /
 // count, telegraph id / timing / tell / rank, untilMs, source, via / from, spreadTo, heal.from, spark x / y,
 // death.killer, playerHurt attacker / skill); they stay optional, so listeners must cope with them missing.
@@ -392,6 +396,20 @@ export interface MonsterTelegraphEvent extends SkillRef, Pt {
   /** Exact geometry as MonsterSkills draws and hit-tests it (VFX request). */
   tell?: TellShape;
   rank?: MonsterRank;
+  /**
+   * The tell's exact LIVE geometry (VFX World lane addition): the very function MonsterSkills hit-tests when the
+   * tell lands. Read it every frame: the caster may be pushed mid wind-up, an aim line follows the player.
+   */
+  live?: () => TellShape;
+  /** Every phase of the technique (live records): the wind-up first, then each follow-up swing / pulse. */
+  phases?: readonly TellPhase[];
+}
+
+/** One phase of a telegraphed technique (MonsterSkills Pending: shiftTime moves it; state flips on resolve / cancel). */
+export interface TellPhase {
+  readonly start: number;
+  readonly at: number;
+  readonly state: 'pending' | 'resolved' | 'cancelled';
 }
 
 /** Exact telegraph geometry (angles in radians); structurally the VFX's TellGeometry (src/game/vfx/types.ts). */
@@ -441,6 +459,12 @@ export interface ChainLaunchEvent extends SkillRef {
   flightMs: number;
 }
 
+/** A monster (re)appeared at its spawn after its respawn timer (Combat.respawn): the VFX spawn pop. */
+export interface MonsterSpawnEvent extends Pt {
+  monster: Monster;
+  rank: MonsterRank;
+}
+
 /** Every game event and its payload. */
 export interface GameEvents {
   hit: HitEvent;
@@ -481,6 +505,8 @@ export interface GameEvents {
   enrage: EnrageEvent;
   // VFX runtime additions (docs/VFX.md §8.2): append-only.
   chainLaunch: ChainLaunchEvent;
+  // VFX World lane additions (docs/VFX.md §8.9): append-only.
+  monsterSpawn: MonsterSpawnEvent;
 }
 
 export type GameEventName = keyof GameEvents;

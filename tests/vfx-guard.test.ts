@@ -1,6 +1,7 @@
 // Joint guard (docs/VFX.md §11.1 vfx-guard, §12): the VFX core stays deterministic, Phaser-free and original.
 // - no Math.random, Date.now, performance.now, ctx.rotate, DOM globals or Phaser import under src/game/vfx
-//   (the later Phaser runtime will live in src/game/vfx/runtime/ and is exempt)
+//   (the Phaser runtime lives in src/game/vfx/runtime/ and is exempt; it still never uses Math.random or emitter
+//   {min, max} ops: every random choice comes from a per-cast mulberry32 stream)
 // - no image or font files under src/ or public/ (public/icon.svg is the one allowed vector icon)
 // - no pixelfx 'Patch Pixel' font or DoomFire code, and the painter and docs keep their technique credits
 import { describe, expect, it } from 'vitest';
@@ -31,6 +32,19 @@ describe('vfx guard', () => {
     ];
     const bad: string[] = [];
     for (const [p, src] of core) for (const [re, what] of banned) if (re.test(code(src))) bad.push(`${p}: ${what}`);
+    expect(bad).toEqual([]);
+  });
+
+  it('keeps the runtime off Phaser randomness: no Math.random, no emitter {min, max} ops (per-cast streams only)', () => {
+    const runtime = Object.entries(VFX_SOURCES).filter(([p]) => p.includes('/vfx/runtime/'));
+    expect(runtime.length).toBeGreaterThan(3);
+    const bad: string[] = [];
+    for (const [p, src] of runtime) {
+      const c = code(src);
+      if (/Math\.random\s*\(/.test(c)) bad.push(`${p}: Math.random`);
+      if (/\{\s*min\s*:[^}]*max\s*:/.test(c)) bad.push(`${p}: {min, max} op`);
+      if (/\.particles\s*\(/.test(c)) bad.push(`${p}: Phaser particle emitter (motes are runtime particles)`);
+    }
     expect(bad).toEqual([]);
   });
 

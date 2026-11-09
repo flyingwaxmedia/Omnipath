@@ -81,6 +81,20 @@ const EMPTY = (ms: number, ox: number, oy: number): FrameRef => ({ tex: '', name
 
 let pageSeq = 0;
 
+/**
+ * Best-fit shelf for a w × h rectangle: the lowest shelf tall enough with room left. A much taller shelf is used
+ * only once the page has little height left (keeps short frames from wasting tall rows early).
+ */
+function bestShelf(shelves: Shelf[], w: number, h: number, free: number): Shelf | undefined {
+  let best: Shelf | undefined;
+  for (const sh of shelves) {
+    if (sh.h < h || PAGE - sh.x < w) continue;
+    if (sh.h > h * 2 + 8 && free >= h * 2) continue;
+    if (!best || sh.h < best.h) best = sh;
+  }
+  return best;
+}
+
 export class Atlas {
   readonly entries = new Map<string, AtlasEntry>();
   private pages: Page[] = [];
@@ -300,7 +314,7 @@ export class Atlas {
       const w = r.w + GUTTER;
       const h = r.h + GUTTER;
       if (w > PAGE || h > PAGE) return false;
-      const s = shelves.find((sh) => sh.h >= h && sh.h <= h * 2 + 8 && PAGE - sh.x >= w);
+      const s = bestShelf(shelves, w, h, PAGE - top);
       if (s) s.x += w;
       else {
         if (top + h > PAGE) return false;
@@ -314,7 +328,7 @@ export class Atlas {
   private alloc(p: Page, rw: number, rh: number): { x: number; y: number } | null {
     const w = rw + GUTTER;
     const h = rh + GUTTER;
-    let s = p.shelves.find((sh) => sh.h >= h && sh.h <= h * 2 + 8 && PAGE - sh.x >= w);
+    let s = bestShelf(p.shelves, w, h, PAGE - p.top);
     if (!s) {
       if (p.top + h > PAGE) return null;
       s = { y: p.top, h, x: 0 };

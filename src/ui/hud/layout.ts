@@ -18,6 +18,66 @@ export function fitSnap(maxCss: number, artPx: number, dpr: number): number {
   return (k * artPx) / d;
 }
 
+/** Smallest viewport (HUD art px) the HUD layout fits: portrait (height ≥ width) and landscape. */
+export const HUD_FIT = { portW: 360, portH: 560, landW: 640, landH: 340 } as const;
+
+/** True when the HUD layout fits a viewport of `w` × `h` HUD art px. */
+export function hudFits(w: number, h: number): boolean {
+  return h >= w ? w >= HUD_FIT.portW && h >= HUD_FIT.portH : w >= HUD_FIT.landW && h >= HUD_FIT.landH;
+}
+
+export interface HudScale {
+  /** CSS px per HUD art px (`--ui-px`): n / dpr, so one HUD art pixel is exactly n device pixels (crisp). */
+  px: number;
+  /** Device px per HUD art px. */
+  n: number;
+  /** The viewport in HUD art px. */
+  w: number;
+  h: number;
+  /** False only for the last resort (nothing ≥ 1 CSS px fits; the smallest crisp scale ≥ 1 CSS px is used). */
+  fits: boolean;
+}
+
+/**
+ * The HUD's pixel size. The world draws `k` device px per art px; the HUD draws its art the same size (n = k, so
+ * `--ui-px` = k / dpr CSS px) when its layout fits the screen at that size, else the largest n < k that fits. n / dpr
+ * never drops below 1 CSS px: every HUD touch target is ≥ 44 art px, so it stays ≥ 44 CSS px. Re-evaluated on every
+ * resize / orientation / DPR change.
+ */
+export function hudScale(cssW: number, cssH: number, dpr: number, k: number): HudScale {
+  const d = dpr > 0 && Number.isFinite(dpr) ? dpr : 1;
+  const top = Math.max(1, Math.round(k) || 1);
+  const minN = Math.max(1, Math.ceil(d - 1e-6));
+  const at = (n: number): HudScale => {
+    const px = n / d;
+    const w = cssW / px;
+    const h = cssH / px;
+    return { px, n, w, h, fits: hudFits(w, h) };
+  };
+  for (let n = top; n >= minN; n--) {
+    const s = at(n);
+    if (s.fits) return s;
+  }
+  return at(minN);
+}
+
+/** The screen-size variants of the HUD (classes on #hud-root), measured in HUD art px. */
+export interface HudLayoutClasses {
+  /** Portrait phone layout: two rows of buttons and slots, folded Pursuits. */
+  port: boolean;
+  /** Very narrow portrait (360 / 375 art px). */
+  narrow: boolean;
+  /** Short landscape: one tight row of everything. */
+  short: boolean;
+  /** Very large screens. */
+  big: boolean;
+}
+
+export function hudLayoutClasses(w: number, h: number): HudLayoutClasses {
+  const portrait = h >= w;
+  return { port: portrait && w <= 599, narrow: portrait && w <= 379, short: h <= 499, big: w >= 1360 && h >= 820 };
+}
+
 /** How many slots go in each row of the skill bar: one row, or two even rows (portrait phones: 8 → 4 + 4). */
 export function barRows(n: number, twoRows: boolean): number[] {
   if (n <= 0) return [];

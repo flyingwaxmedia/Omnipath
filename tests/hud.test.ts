@@ -22,10 +22,14 @@ import {
   countText,
   expPercent,
   fitSnap,
+  hudFits,
+  hudLayoutClasses,
+  hudScale,
   placeCentred,
   rowsThatFit,
   splitCount,
 } from '../src/ui/hud/layout';
+import { pixelScale } from '../src/game/render/pixelscale';
 
 const art: HudArt = {
   skill: (id) => `data:skill/${id}`,
@@ -253,5 +257,71 @@ describe('the own-slot picker', () => {
     expect(html).toContain('Alpha');
     expect(html).toContain(HUD_WORDS.empty);
     expect(slotChooserHtml([], () => '')).toContain('pk-none');
+  });
+});
+
+describe('HUD pixel size (the HUD draws its art pixels the size of the world\'s)', () => {
+  /** The HUD scale for a screen, with the world's k from the render lane's pixelScale. */
+  const at = (w: number, h: number, dpr: number) => hudScale(w, h, dpr, pixelScale(w, h, dpr).k);
+
+  it('matches the world: 1 HUD art px = k device px on phones, iPads and desktops', () => {
+    for (const [w, h, dpr] of [
+      [390, 844, 3],
+      [844, 390, 3],
+      [1180, 820, 2],
+      [820, 1180, 2],
+      [1440, 900, 1],
+      [1920, 1080, 1],
+      [744, 1133, 2],
+    ] as const) {
+      const k = pixelScale(w, h, dpr).k;
+      const s = at(w, h, dpr);
+      expect(s.n, `${w}x${h}@${dpr}`).toBe(k);
+      expect(s.px).toBeCloseTo(k / dpr, 9);
+      expect(s.fits).toBe(true);
+    }
+    expect(at(1180, 820, 2).px).toBe(1.5); // the owner's iPad
+    expect(at(1440, 900, 1).px).toBe(2);
+    expect(at(390, 844, 3).px).toBe(1);
+  });
+
+  it('is always a whole number of device px and at least 1 CSS px (44-art-px buttons stay ≥ 44 CSS px)', () => {
+    for (const [w, h] of [
+      [360, 740],
+      [412, 915],
+      [280, 653],
+      [1024, 600],
+      [2560, 1440],
+    ] as const)
+      for (const dpr of [1, 1.25, 1.5, 2, 2.625, 3]) {
+        const s = at(w, h, dpr);
+        expect(Number.isInteger(s.n), `${w}x${h}@${dpr}`).toBe(true);
+        expect(s.px * dpr).toBeCloseTo(s.n, 9);
+        expect(s.px).toBeGreaterThanOrEqual(1 - 1e-9);
+      }
+  });
+
+  it('steps down to the largest whole-device-pixel scale whose layout fits', () => {
+    // k = 3 at DPR 2 would leave a 300 × 400 art-px screen (too small): 1 CSS px (2 device px) fits.
+    const s = hudScale(450, 600, 2, 3);
+    expect(s.n).toBe(2);
+    expect(s.px).toBe(1);
+    expect(hudFits(s.w, s.h)).toBe(true);
+    // Nothing ≥ 1 CSS px fits (a folded phone): the smallest crisp scale ≥ 1 CSS px, flagged.
+    const f = hudScale(280, 653, 3, 2);
+    expect(f.px).toBe(1);
+    expect(f.fits).toBe(false);
+    // DPR 2.625 (Android): k = 2 would be < 1 CSS px — 3 device px (8/7 CSS px) instead.
+    expect(hudScale(412, 915, 2.625, 2).n).toBe(3);
+  });
+
+  it('measures the screen-size variants in art px, like the old CSS-px media queries', () => {
+    expect(hudLayoutClasses(390, 844)).toEqual({ port: true, narrow: false, short: false, big: false });
+    expect(hudLayoutClasses(360, 740)).toEqual({ port: true, narrow: true, short: false, big: false });
+    expect(hudLayoutClasses(844, 390)).toEqual({ port: false, narrow: false, short: true, big: false });
+    // The iPad at 1.5 CSS px per art px: 787 × 547 art px landscape (the base sizes), 547 × 787 portrait.
+    expect(hudLayoutClasses(1180 / 1.5, 820 / 1.5)).toEqual({ port: false, narrow: false, short: false, big: false });
+    expect(hudLayoutClasses(820 / 1.5, 1180 / 1.5).port).toBe(true);
+    expect(hudLayoutClasses(1440, 900).big).toBe(true);
   });
 });

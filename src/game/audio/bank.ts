@@ -27,10 +27,10 @@ export interface SoundDef {
   layers: readonly Layer[];
   group: GroupId;
   /**
-   * Mix level (linear). Buffers are loudness-normalised when built (`buildSound`), so this IS the sound's level
-   * relative to the others; default: the group's level (GROUP_GAIN).
+   * dB above / below the group's mix level (GROUP_DB). Buffers are loudness-normalised when built (`buildSound`),
+   * so the group level + trim IS how loud the sound is heard relative to the others (tests/audio-bank.test.ts).
    */
-  gain?: number;
+  trim?: number;
   /** ± playback-rate jitter per play (fraction, default 0.04). Fanfares use 0 (they stay in tune). */
   pitchVar?: number;
   /** ± gain jitter per play (fraction, default 0.1). */
@@ -61,7 +61,7 @@ export const GROUPS = {
   death: { max: 3, gap: 60, priority: 5 },
   nova: { max: 2, gap: 80, priority: 6 },
   hurt: { max: 2, gap: 90, priority: 6 },
-  warp: { max: 1, gap: 400, priority: 6 },
+  warp: { max: 2, gap: 300, priority: 6 },
   crit: { max: 2, gap: 60, priority: 7 },
   combo: { max: 2, gap: 120, priority: 7 },
   telegraph: { max: 3, gap: 140, priority: 7 },
@@ -73,37 +73,50 @@ export const GROUPS = {
 export type GroupId = keyof typeof GROUPS;
 
 /**
- * Default mix level per group (on loudness-normalised buffers): a hit is the reference; swings sit under hits,
- * footsteps and ticks well under everything, fanfares and warnings on top.
+ * Mix level per group, in dB relative to a hit (on loudness-normalised buffers, so these ARE the perceived levels):
+ * footsteps, ticks and UI taps well under everything, swings under hits, fanfares on top. At default settings a hit
+ * is heard at ≈ −21 dBFS (K-weighted, loudest 100 ms, before the master compressor); `amb` plays on the ambience
+ * bus (−7 dB further down at default settings). The loudness table in tests/audio-bank.test.ts guards all of it.
  */
-export const GROUP_GAIN: Readonly<Record<GroupId, number>> = {
-  step: 0.1,
-  tick: 0.11,
-  amb: 0.08,
-  status: 0.2,
-  proj: 0.16,
-  monster: 0.22,
-  swing: 0.24,
-  impact: 0.2,
-  zap: 0.24,
-  coin: 0.22,
-  hit: 0.4,
-  gather: 0.3,
-  cast: 0.3,
-  ui: 0.17,
-  death: 0.32,
-  nova: 0.42,
-  hurt: 0.4,
-  warp: 0.28,
-  crit: 0.3,
-  combo: 0.4,
-  telegraph: 0.3,
-  quest: 0.32,
-  boss: 0.45,
-  fanfare: 0.4,
+export const GROUP_DB: Readonly<Record<GroupId, number>> = {
+  step: -13,
+  tick: -12.5,
+  amb: -12,
+  ui: -7,
+  impact: -7.5,
+  proj: -7,
+  status: -5,
+  monster: -4.5,
+  swing: -4,
+  coin: -3,
+  zap: -3,
+  warp: -1.5,
+  crit: -1.5,
+  gather: -1,
+  cast: -1,
+  telegraph: -1,
+  quest: -0.5,
+  hit: 0,
+  hurt: 0,
+  death: 0,
+  nova: 2,
+  combo: 2.5,
+  boss: 3,
+  fanfare: 4,
 };
 
-export const gainOf = (def: SoundDef): number => def.gain ?? GROUP_GAIN[def.group];
+/** A hit's linear gain on a normalised buffer (the mix reference, 0 dB in GROUP_DB). */
+export const HIT_GAIN = 0.39;
+
+const dbToGain = (db: number): number => 10 ** (db / 20);
+
+/** Linear mix gain per group (from GROUP_DB). */
+export const GROUP_GAIN: Readonly<Record<GroupId, number>> = Object.fromEntries(
+  Object.entries(GROUP_DB).map(([g, db]) => [g, HIT_GAIN * dbToGain(db)]),
+) as Record<GroupId, number>;
+
+/** A sound's linear mix gain: its group's level plus its trim. */
+export const gainOf = (def: SoundDef): number => GROUP_GAIN[def.group] * dbToGain(def.trim ?? 0);
 
 /** Readable ZzFX parameters (mapped 1:1 onto the ZzFX array; see src/game/audio/zzfx.ts). */
 interface Z {
@@ -229,7 +242,7 @@ function castDef(shape: CastShape, el: ElementKey): SoundDef {
   const tonal = t.noise < 0.6;
   switch (shape) {
     case 'strike': // the element's sheen on a weapon swing
-      return { group: 'cast', gain: 0.18, layers: [L(tz(t, { f: t.f * 1.1, a: 0.005, s: 0.02, r: 0.09, slide: 1, v: 0.55 }))] };
+      return { group: 'cast', trim: -5, layers: [L(tz(t, { f: t.f * 1.1, a: 0.005, s: 0.02, r: 0.09, slide: 1, v: 0.55 }))] };
     case 'spin': // a whirl: gated in a rotating rhythm
       return {
         group: 'cast',
@@ -275,12 +288,12 @@ function castDef(shape: CastShape, el: ElementKey): SoundDef {
 /** The wind-up hum of a skill with a cast time (castStart). */
 function chargeDef(el: ElementKey): SoundDef {
   const t = TIMBRE[el];
-  return { group: 'cast', gain: 0.2, layers: [L(tz(t, { f: t.f * 0.6, a: 0.12, s: 0.08, r: 0.08, slide: 2, v: 0.55 })), L({ f: t.root, sh: 1, a: 0.1, s: 0.08, r: 0.08, slide: 1, v: 0.15 })] };
+  return { group: 'cast', trim: -3, layers: [L(tz(t, { f: t.f * 0.6, a: 0.12, s: 0.08, r: 0.08, slide: 2, v: 0.55 })), L({ f: t.root, sh: 1, a: 0.1, s: 0.08, r: 0.08, slide: 1, v: 0.15 })] };
 }
 
 /** Element hits (the most played sounds in the game: short, punchy, never harsh). */
 const HITS: Readonly<Record<ElementKey, Layer[]>> = {
-  physical: [L({ f: 290, sh: 1, a: 0.002, r: 0.07, slide: -2.5, v: 0.8, rnd: 0.08 }), L({ f: 1500, noise: 3, a: 0.001, r: 0.04, filt: -2400, v: 0.5, rnd: 0.1 })],
+  physical: [L({ f: 290, sh: 1, a: 0.002, r: 0.07, slide: -2.5, v: 0.8, rnd: 0.08 }), L({ f: 1500, noise: 3, a: 0.001, r: 0.055, filt: -2400, v: 0.5, rnd: 0.1 })],
   fire: [L({ f: 900, noise: 3, a: 0.004, s: 0.02, r: 0.12, slide: -3, filt: -2200, v: 0.6, rnd: 0.08 }), crackle(0.01, 0.28), thump(220, 0, 0.4)],
   water: [L({ f: 700, noise: 4, a: 0.003, r: 0.1, filt: -1800, v: 0.55, rnd: 0.08 }), L({ f: 380, a: 0.002, r: 0.07, slide: 18, v: 0.35, rnd: 0.06 }, 0.005), thump(230, 0, 0.3)],
   earth: [L({ f: 260, sh: 1, a: 0.002, r: 0.1, slide: -1.5, v: 0.85, rnd: 0.06 }), L({ f: 800, noise: 3, a: 0.002, s: 0.02, r: 0.08, crush: 0.03, filt: -1600, v: 0.4, rnd: 0.08 })],
@@ -299,39 +312,39 @@ const HITS: Readonly<Record<ElementKey, Layer[]>> = {
 const S: Record<string, SoundDef> = {
   // ---------------------------------------------------------------- footsteps (synced to the walk frames)
   step_grass: { group: 'step', variations: 4, pitchVar: 0.08, layers: [L({ f: 1600, noise: 3, a: 0.004, s: 0.008, r: 0.045, filt: 650, v: 0.55, rnd: 0.15 }), L({ f: 260, sh: 1, a: 0.002, r: 0.03, slide: -4, v: 0.3 })] },
-  step_dirt: { group: 'step', variations: 4, pitchVar: 0.08, layers: [L({ f: 220, sh: 1, a: 0.002, r: 0.05, slide: -3, v: 0.6, rnd: 0.1 }), L({ f: 900, noise: 3, a: 0.002, r: 0.035, filt: -1500, v: 0.4, rnd: 0.15 })] },
-  step_stone: { group: 'step', variations: 4, pitchVar: 0.07, layers: [L({ f: 720, sh: 1, a: 0.001, r: 0.025, slide: -6, v: 0.45, rnd: 0.1 }), L({ f: 2600, noise: 2, a: 0.001, r: 0.02, filt: 900, v: 0.28, rnd: 0.1 })] },
+  step_dirt: { group: 'step', variations: 4, pitchVar: 0.08, layers: [L({ f: 310, sh: 1, a: 0.003, r: 0.06, slide: -1.6, v: 0.6, rnd: 0.1 }), L({ f: 1000, noise: 3, a: 0.002, r: 0.05, filt: -1700, v: 0.55, rnd: 0.15 }, 0.003)] },
+  step_stone: { group: 'step', variations: 4, pitchVar: 0.07, layers: [L({ f: 720, sh: 1, a: 0.003, r: 0.05, slide: -3.5, v: 0.45, rnd: 0.1 }), L({ f: 2600, noise: 2, a: 0.002, r: 0.045, filt: 900, v: 0.32, rnd: 0.1 }, 0.007)] },
   step_wood: { group: 'step', variations: 4, pitchVar: 0.06, layers: [L({ f: 340, a: 0.002, r: 0.07, slide: -1, v: 0.55, rnd: 0.08 }), L({ f: 620, sh: 1, a: 0.001, r: 0.04, v: 0.22, rnd: 0.08 }), crack(1500, 0, 0.12, 0.02)] },
   step_sand: { group: 'step', variations: 4, pitchVar: 0.08, layers: [L({ f: 1300, noise: 4, a: 0.01, r: 0.07, rep: 0.006, trem: 0.4, filt: -2200, v: 0.5, rnd: 0.15 })] },
   step_snow: { group: 'step', variations: 4, pitchVar: 0.08, layers: [L({ f: 1100, noise: 4, a: 0.008, s: 0.02, r: 0.07, rep: 0.009, trem: 0.55, filt: -2600, v: 0.5, rnd: 0.15 }), thump(260, 0, 0.18, 0.03)] },
   step_water: { group: 'step', variations: 4, pitchVar: 0.08, layers: [L({ f: 650, noise: 4, a: 0.004, r: 0.09, filt: -1400, v: 0.45, rnd: 0.12 }), L({ f: 500, a: 0.002, r: 0.05, slide: 25, v: 0.2, rnd: 0.1 }, 0.01)] },
-  step_cave: { group: 'step', variations: 4, pitchVar: 0.07, layers: [L({ f: 540, sh: 1, a: 0.001, r: 0.03, slide: -5, v: 0.45, rnd: 0.1 }), L({ f: 1800, noise: 2, a: 0.001, r: 0.025, filt: 600, v: 0.24, rnd: 0.1 })] },
+  step_cave: { group: 'step', variations: 4, pitchVar: 0.07, layers: [L({ f: 540, sh: 1, a: 0.001, r: 0.045, slide: -3.5, v: 0.45, rnd: 0.1 }), L({ f: 1800, noise: 2, a: 0.001, r: 0.035, filt: 600, v: 0.28, rnd: 0.1 })] },
 
   // ---------------------------------------------------------------- weapon swings
-  swing_sword_light: { group: 'swing', gain: 0.22, variations: 3, pitchVar: 0.06, layers: [L({ f: 700, noise: 2.2, a: 0.02, s: 0.015, r: 0.08, slide: 2, filt: 300, v: 0.7, rnd: 0.1 })] },
-  swing_sword_heavy: { group: 'swing', gain: 0.28, variations: 3, pitchVar: 0.05, layers: [L({ f: 430, noise: 2.6, a: 0.035, s: 0.03, r: 0.14, slide: -1.5, filt: 180, v: 0.8, rnd: 0.08 }), L({ f: 230, sh: 1, a: 0.03, r: 0.12, slide: -1, v: 0.22 })] },
-  swing_dagger_light: { group: 'swing', gain: 0.2, variations: 3, pitchVar: 0.07, layers: [L({ f: 1100, noise: 1.8, a: 0.008, s: 0.005, r: 0.05, slide: 4, filt: 500, v: 0.6, rnd: 0.1 })] },
-  swing_dagger_heavy: { group: 'swing', gain: 0.26, variations: 3, pitchVar: 0.06, layers: [L({ f: 1000, noise: 2, a: 0.008, r: 0.05, slide: 4, filt: 500, v: 0.6, rnd: 0.1 }), L({ f: 1250, noise: 2, a: 0.008, r: 0.06, slide: 4, filt: 500, v: 0.55, rnd: 0.1 }, 0.065)] },
-  swing_staff_light: { group: 'swing', gain: 0.22, variations: 3, pitchVar: 0.06, layers: [L({ f: 470, noise: 2, a: 0.025, s: 0.02, r: 0.1, slide: -0.8, filt: 150, v: 0.7, rnd: 0.08 })] },
-  swing_staff_heavy: { group: 'swing', gain: 0.28, variations: 3, pitchVar: 0.05, layers: [L({ f: 390, noise: 2.4, a: 0.04, s: 0.04, r: 0.16, slide: -0.8, filt: 150, v: 0.8, rnd: 0.08 }), L({ f: 260, sh: 1, a: 0.04, r: 0.14, v: 0.2 })] },
-  swing_spin: { group: 'swing', gain: 0.2, variations: 2, layers: [L({ f: 600, noise: 2.4, a: 0.03, s: 0.08, r: 0.1, rep: 0.045, trem: 0.55, slide: 1, filt: 250, v: 0.7, rnd: 0.08 })] },
+  swing_sword_light: { group: 'swing', trim: -1, variations: 3, pitchVar: 0.06, layers: [L({ f: 700, noise: 2.2, a: 0.02, s: 0.015, r: 0.08, slide: 2, filt: 300, v: 0.7, rnd: 0.1 })] },
+  swing_sword_heavy: { group: 'swing', trim: 1.5, variations: 3, pitchVar: 0.05, layers: [L({ f: 430, noise: 2.6, a: 0.035, s: 0.03, r: 0.14, slide: -1.5, filt: 180, v: 0.8, rnd: 0.08 }), L({ f: 230, sh: 1, a: 0.03, r: 0.12, slide: -1, v: 0.22 })] },
+  swing_dagger_light: { group: 'swing', trim: -1.5, variations: 3, pitchVar: 0.07, layers: [L({ f: 1100, noise: 1.8, a: 0.008, s: 0.005, r: 0.05, slide: 4, filt: 500, v: 0.6, rnd: 0.1 })] },
+  swing_dagger_heavy: { group: 'swing', trim: 0.5, variations: 3, pitchVar: 0.06, layers: [L({ f: 1000, noise: 2, a: 0.008, r: 0.05, slide: 4, filt: 500, v: 0.6, rnd: 0.1 }), L({ f: 1250, noise: 2, a: 0.008, r: 0.06, slide: 4, filt: 500, v: 0.55, rnd: 0.1 }, 0.065)] },
+  swing_staff_light: { group: 'swing', trim: -1, variations: 3, pitchVar: 0.06, layers: [L({ f: 470, noise: 2, a: 0.025, s: 0.02, r: 0.1, slide: -0.8, filt: 150, v: 0.7, rnd: 0.08 })] },
+  swing_staff_heavy: { group: 'swing', trim: 1.5, variations: 3, pitchVar: 0.05, layers: [L({ f: 390, noise: 2.4, a: 0.04, s: 0.04, r: 0.16, slide: -0.8, filt: 150, v: 0.8, rnd: 0.08 }), L({ f: 260, sh: 1, a: 0.04, r: 0.14, v: 0.2 })] },
+  swing_spin: { group: 'swing', trim: -1.5, variations: 2, layers: [L({ f: 600, noise: 2.4, a: 0.03, s: 0.08, r: 0.1, rep: 0.045, trem: 0.55, slide: 1, filt: 250, v: 0.7, rnd: 0.08 })] },
   mon_swing: { group: 'monster', variations: 3, layers: [L({ f: 420, noise: 2.6, a: 0.03, s: 0.02, r: 0.12, slide: -1.2, filt: 150, v: 0.6, rnd: 0.1 })] },
 
   // ---------------------------------------------------------------- hits (+ the crit layer and a resisted tunk)
   crit: { group: 'crit', variations: 2, layers: [L({ f: Hz.A6, sh: 1, a: 0.001, r: 0.12, jump: 440, jumpT: 0.03, v: 0.33 }), L({ f: Hz.E7, a: 0.001, r: 0.1, v: 0.16 }), thump(300, 0, 0.5, 0.07), crack(2200, 0, 0.28)] },
-  hit_resist: { group: 'hit', gain: 0.28, layers: [L({ f: 900, sh: 1, a: 0.001, r: 0.05, slide: -2, v: 0.35 }), thump(260, 0, 0.35, 0.04)] },
+  hit_resist: { group: 'hit', trim: -4, layers: [L({ f: 900, sh: 1, a: 0.001, r: 0.05, slide: -2, v: 0.35 }), thump(260, 0, 0.35, 0.04)] },
 
   // ---------------------------------------------------------------- projectiles, chains, novas
   proj_whoosh: { group: 'proj', variations: 3, layers: [L({ f: 950, noise: 2.5, a: 0.012, s: 0.02, r: 0.11, slide: -2, filt: 400, v: 0.6, rnd: 0.1 })] },
   proj_wall: { group: 'impact', variations: 2, layers: [thump(260, 0, 0.6), L({ f: 1200, noise: 3, r: 0.05, crush: 0.02, filt: -2000, v: 0.4, rnd: 0.1 })] },
-  proj_fizzle: { group: 'impact', gain: 0.12, layers: [L({ f: 1400, noise: 3, a: 0.005, r: 0.09, slide: -4, filt: 700, v: 0.35, rnd: 0.1 })] },
+  proj_fizzle: { group: 'impact', trim: -2.5, layers: [L({ f: 1400, noise: 3, a: 0.005, r: 0.09, slide: -4, filt: 700, v: 0.35, rnd: 0.1 })] },
   proj_catch: { group: 'impact', layers: [L({ f: Hz.A6, sh: 1, a: 0.001, r: 0.07, jump: 300, jumpT: 0.02, v: 0.35 }), thump(400, 0, 0.3, 0.04)] },
   mon_shot: { group: 'monster', variations: 2, layers: [L({ f: 600, noise: 2.2, a: 0.015, s: 0.02, r: 0.12, slide: -1.5, filt: 250, v: 0.6, rnd: 0.1 })] },
   zap_chain: { group: 'zap', variations: 3, layers: [L({ f: 1150, sh: 2, a: 0.001, s: 0.03, r: 0.07, rep: 0.018, jump: 350, jumpT: 0.009, noise: 0.5, filt: -1800, v: 0.45, rnd: 0.08 }), crack(2400, 0, 0.18, 0.03)] },
   knife_ricochet: { group: 'zap', variations: 3, layers: [L({ f: 2600, sh: 1, a: 0.001, r: 0.07, jump: -700, jumpT: 0.012, v: 0.33, rnd: 0.05 }), crack(1800, 0, 0.18, 0.02)] },
-  nova_s: { group: 'nova', gain: 0.36, variations: 2, layers: [L({ f: 300, noise: 3, a: 0.005, s: 0.03, r: 0.2, slide: -0.5, filt: -1100, v: 0.8, rnd: 0.06 }), crack(1600, 0, 0.3, 0.07)] },
+  nova_s: { group: 'nova', trim: -1.5, variations: 2, layers: [L({ f: 300, noise: 3, a: 0.005, s: 0.03, r: 0.2, slide: -0.5, filt: -1100, v: 0.8, rnd: 0.06 }), crack(1600, 0, 0.3, 0.07)] },
   nova_m: { group: 'nova', variations: 2, layers: [L({ f: 280, noise: 3, a: 0.006, s: 0.05, r: 0.32, slide: -0.3, filt: -1050, v: 0.85, rnd: 0.06 }), crack(1500, 0, 0.32, 0.09), thump(240, 0, 0.5, 0.1)] },
-  nova_l: { group: 'nova', gain: 0.48, variations: 2, layers: [L({ f: 270, noise: 3, a: 0.008, s: 0.07, r: 0.5, slide: -0.15, filt: -1000, delay: 0.07, v: 0.9, rnd: 0.06 }), crack(1400, 0, 0.35, 0.12), thump(220, 0, 0.55, 0.14), poof(0.08, 0.3, 0.3)] },
+  nova_l: { group: 'nova', trim: 1.5, variations: 2, layers: [L({ f: 270, noise: 3, a: 0.008, s: 0.07, r: 0.5, slide: -0.15, filt: -1000, delay: 0.07, v: 0.9, rnd: 0.06 }), crack(1400, 0, 0.35, 0.12), thump(220, 0, 0.55, 0.14), poof(0.08, 0.3, 0.3)] },
 
   // ---------------------------------------------------------------- statuses applied and their ticks
   status_burn: { group: 'status', layers: [L({ f: 500, noise: 3, a: 0.03, s: 0.04, r: 0.12, slide: 3, filt: -2000, v: 0.6, rnd: 0.08 }), crackle(0.04, 0.25)] },
@@ -345,7 +358,7 @@ const S: Record<string, SoundDef> = {
   status_knockback: { group: 'status', layers: [thump(220, 0, 0.5, 0.08), L({ f: 800, noise: 3, a: 0.005, r: 0.1, slide: -3, filt: 300, v: 0.4, rnd: 0.08 })] },
   status_poison: { group: 'status', layers: [L({ f: 330, a: 0.003, r: 0.05, slide: 10, v: 0.35 }), L({ f: 420, r: 0.05, slide: 10, v: 0.3 }, 0.07)] },
   status_pull: { group: 'status', layers: [L({ f: 500, noise: 2.5, a: 0.12, r: 0.03, slide: 4, filt: 250, v: 0.6, rnd: 0.08 })] },
-  status_blocked: { group: 'status', gain: 0.24, priority: 4, layers: [L({ f: Hz.B6, sh: 1, r: 0.12, v: 0.3 }), thump(300, 0, 0.3, 0.04)] },
+  status_blocked: { group: 'status', trim: 1.5, priority: 4, layers: [L({ f: Hz.B6, sh: 1, r: 0.12, v: 0.3 }), thump(300, 0, 0.3, 0.04)] },
   tick_burn: { group: 'tick', variations: 3, layers: [L({ f: 1700, noise: 2.5, s: 0.02, r: 0.05, rep: 0.01, trem: 0.6, filt: 600, v: 0.4, rnd: 0.1 })] },
   tick_poison: { group: 'tick', variations: 3, layers: [L({ f: 300, r: 0.05, slide: 9, v: 0.35, rnd: 0.1 })] },
   tick_bleed: { group: 'tick', variations: 3, layers: [L({ f: 850, r: 0.05, slide: -10, v: 0.35, rnd: 0.1 })] },
@@ -357,14 +370,14 @@ const S: Record<string, SoundDef> = {
   combo_conduct: { group: 'combo', layers: [L({ f: 900, sh: 2, s: 0.12, r: 0.12, rep: 0.02, jump: 300, jumpT: 0.01, slide: 6, noise: 0.5, filt: -2000, v: 0.4 }), L({ f: 600, noise: 4, r: 0.12, filt: -1600, v: 0.4 }), crack(2600, 0.1, 0.2, 0.05)] },
   combo_fan: { group: 'combo', layers: [L({ f: 400, noise: 3, a: 0.04, s: 0.1, r: 0.25, slide: 4, filt: -2200, v: 0.7 }), crackle(0.05, 0.3, 0.12), thump(230, 0, 0.4)] },
   combo: { group: 'combo', layers: [...note(Hz.E6, 0, 0.12, 0.3), ...note(Hz.A6, 0.05, 0.16, 0.28), thump(260, 0, 0.45)] },
-  heal: { group: 'status', gain: 0.2, priority: 3, layers: [L({ f: Hz.A5, sh: 1, a: 0.02, r: 0.2, slide: 2, v: 0.3 }), L({ f: Hz.E6, a: 0.02, r: 0.18, slide: 2, v: 0.2 }, 0.05)] },
+  heal: { group: 'status', trim: 1, priority: 3, layers: [L({ f: Hz.A5, sh: 1, a: 0.02, r: 0.2, slide: 2, v: 0.3 }), L({ f: Hz.E6, a: 0.02, r: 0.18, slide: 2, v: 0.2 }, 0.05)] },
 
   // ---------------------------------------------------------------- the player getting hurt
   hurt: { group: 'hurt', variations: 3, layers: [L({ f: 330, sh: 1, a: 0.002, r: 0.09, slide: -2.5, v: 0.7, rnd: 0.06 }), L({ f: 1000, noise: 3, r: 0.05, filt: -1800, v: 0.35, rnd: 0.1 })] },
   hurt_heavy: { group: 'hurt', variations: 2, priority: 7, layers: [L({ f: 280, sh: 1, a: 0.002, s: 0.02, r: 0.16, slide: -1, v: 0.85, rnd: 0.05 }), L({ f: 700, noise: 3, s: 0.02, r: 0.12, crush: 0.02, filt: -1500, v: 0.45, rnd: 0.1 }), L({ f: 900, sh: 1, r: 0.12, slide: -3, v: 0.2 }, 0.02)] },
-  hurt_dot: { group: 'tick', gain: 0.16, variations: 2, layers: [L({ f: 520, sh: 1, r: 0.05, slide: -4, v: 0.35, rnd: 0.05 })] },
-  hurt_low: { group: 'hurt', gain: 0.2, priority: 5, layers: [L({ f: 280, sh: 1, a: 0.01, r: 0.08, slide: -0.6, v: 0.5 }), L({ f: 260, sh: 1, a: 0.01, r: 0.1, slide: -0.6, v: 0.4 }, 0.18)] },
-  player_death: { group: 'fanfare', gain: 0.38, pitchVar: 0, variations: 1, layers: [thump(250, 0, 0.6, 0.12), ...note(Hz.C5, 0.05, 0.3, 0.35, 0.1), ...note(Hz.G4, 0.3, 0.4, 0.32, 0.1), ...note(Hz.E4, 0.6, 0.6, 0.32, 0.2)] },
+  hurt_dot: { group: 'tick', trim: 2, variations: 2, layers: [L({ f: 520, sh: 1, r: 0.05, slide: -4, v: 0.35, rnd: 0.05 })] },
+  hurt_low: { group: 'hurt', trim: -6, priority: 5, layers: [L({ f: 280, sh: 1, a: 0.01, r: 0.08, slide: -0.6, v: 0.5 }), L({ f: 260, sh: 1, a: 0.01, r: 0.1, slide: -0.6, v: 0.4 }, 0.18)] },
+  player_death: { group: 'fanfare', trim: -1.5, pitchVar: 0, variations: 1, layers: [thump(250, 0, 0.6, 0.12), ...note(Hz.C5, 0.05, 0.3, 0.35, 0.1), ...note(Hz.G4, 0.3, 0.4, 0.32, 0.1), ...note(Hz.E4, 0.6, 0.6, 0.32, 0.2)] },
 
   // ---------------------------------------------------------------- monsters: deaths by family (size = playback rate), wardens, tells
   death_beast: { group: 'death', variations: 2, layers: [L({ f: 520, sh: 2, a: 0.005, s: 0.03, r: 0.15, slide: -4, filt: -1300, v: 0.4, rnd: 0.06 }), thump(210, 0.08, 0.5, 0.1), poof(0.08, 0.25)] },
@@ -380,11 +393,11 @@ const S: Record<string, SoundDef> = {
   boss_enrage: { group: 'boss', variations: 1, priority: 9, layers: [L({ f: 340, sh: 2, a: 0.05, s: 0.3, r: 0.35, slide: 0.3, mod: 36, noise: 0.4, filt: 170, v: 0.45 }), L({ f: 300, noise: 2.5, a: 0.2, s: 0.2, r: 0.3, slide: 3, filt: -2000, v: 0.45 }), crackle(0.2, 0.25, 0.2)] },
   tell: { group: 'telegraph', layers: [L({ f: Hz.A5, sh: 1, a: 0.005, s: 0.04, r: 0.06, v: 0.35 }), L({ f: Hz.D6, sh: 1, a: 0.005, s: 0.04, r: 0.08, v: 0.35 }, 0.09)] },
   tell_big: { group: 'telegraph', priority: 8, layers: [L({ f: Hz.D5, sh: 1, a: 0.01, s: 0.08, r: 0.1, rep: 0.1, trem: 0.4, v: 0.4 }), L({ f: Hz.G5, sh: 1, s: 0.1, r: 0.14, v: 0.4 }, 0.14), L({ f: 300, sh: 2, a: 0.03, s: 0.15, r: 0.1, mod: 25, filt: 170, v: 0.18 })] },
-  tell_echo: { group: 'telegraph', gain: 0.18, priority: 6, layers: [L({ f: Hz.G6, a: 0.05, s: 0.1, r: 0.3, rep: 0.08, trem: 0.4, v: 0.15 }), L({ f: 2349, a: 0.05, r: 0.3, rep: 0.07, trem: 0.4, v: 0.1 }, 0.05)] },
-  tell_cancel: { group: 'impact', gain: 0.14, layers: [L({ f: 900, sh: 1, r: 0.1, slide: -4, v: 0.25 })] },
+  tell_echo: { group: 'telegraph', trim: -3.5, priority: 6, layers: [L({ f: Hz.G6, a: 0.05, s: 0.1, r: 0.3, rep: 0.08, trem: 0.4, v: 0.15 }), L({ f: 2349, a: 0.05, r: 0.3, rep: 0.07, trem: 0.4, v: 0.1 }, 0.05)] },
+  tell_cancel: { group: 'impact', trim: -2, layers: [L({ f: 900, sh: 1, r: 0.1, slide: -4, v: 0.25 })] },
   mon_dash: { group: 'monster', variations: 2, layers: [L({ f: 500, noise: 2.6, a: 0.01, s: 0.04, r: 0.15, slide: -3, filt: 250, v: 0.6, rnd: 0.08 })] },
   mon_buff: { group: 'monster', layers: [L({ f: 300, sh: 2, a: 0.04, s: 0.1, r: 0.15, mod: 20, filt: 170, v: 0.3 }), L({ f: 600, a: 0.05, r: 0.2, slide: 3, v: 0.15 })] },
-  kill_elite: { group: 'coin', gain: 0.2, layers: [L({ f: Hz.E6, sh: 1, r: 0.15, v: 0.25 }), L({ f: Hz.A6, sh: 1, r: 0.2, v: 0.2 }, 0.06)] },
+  kill_elite: { group: 'coin', trim: -1, layers: [L({ f: Hz.E6, sh: 1, r: 0.15, v: 0.25 }), L({ f: Hz.A6, sh: 1, r: 0.2, v: 0.2 }, 0.06)] },
 
   // ---------------------------------------------------------------- big moments
   level_up: {
@@ -443,9 +456,9 @@ const S: Record<string, SoundDef> = {
     ],
   },
   discover_spark: { group: 'fanfare', pitchVar: 0, variations: 1, layers: [L({ f: 600, sh: 1, a: 0.01, s: 0.1, r: 0.06, slide: 12, v: 0.3 }), L({ f: 1800, noise: 2, r: 0.05, filt: 1000, v: 0.25 }, 0.16), ...note(Hz.E6, 0.17, 0.5, 0.36, 0.05), ...note(Hz.B6, 0.24, 0.45, 0.2, 0.05), ...sparkle(0.25, 0.12)] },
-  discover_minor: { group: 'fanfare', gain: 0.32, pitchVar: 0, variations: 1, priority: 9, layers: [...note(Hz.E5, 0, 0.14, 0.36), ...note(Hz.A5, 0.09, 0.4, 0.34, 0.06), ...sparkle(0.16, 0.08)] },
-  spark_crack: { group: 'crit', gain: 0.32, layers: [crack(2400, 0, 0.35, 0.05), L({ f: Hz.A6, sh: 1, r: 0.25, jump: 440, jumpT: 0.05, v: 0.25 }), L({ f: Hz.E7, sh: 1, r: 0.2, v: 0.16 }, 0.06)] },
-  map_new: { group: 'quest', gain: 0.24, pitchVar: 0, variations: 1, layers: [...note(Hz.D5, 0, 0.3, 0.3, 0.05), ...note(Hz.Fs5, 0.16, 0.3, 0.3, 0.05), ...note(Hz.A5, 0.32, 0.6, 0.3, 0.1)] },
+  discover_minor: { group: 'fanfare', trim: -3, pitchVar: 0, variations: 1, priority: 9, layers: [...note(Hz.E5, 0, 0.14, 0.36), ...note(Hz.A5, 0.09, 0.4, 0.34, 0.06), ...sparkle(0.16, 0.08)] },
+  spark_crack: { group: 'crit', trim: 1.5, layers: [crack(2400, 0, 0.35, 0.05), L({ f: Hz.A6, sh: 1, r: 0.25, jump: 440, jumpT: 0.05, v: 0.25 }), L({ f: Hz.E7, sh: 1, r: 0.2, v: 0.16 }, 0.06)] },
+  map_new: { group: 'quest', trim: -2, pitchVar: 0, variations: 1, layers: [...note(Hz.D5, 0, 0.3, 0.3, 0.05), ...note(Hz.Fs5, 0.16, 0.3, 0.3, 0.05), ...note(Hz.A5, 0.32, 0.6, 0.3, 0.1)] },
 
   // ---------------------------------------------------------------- quests
   quest_accept: { group: 'quest', pitchVar: 0, variations: 1, layers: [...note(Hz.A4, 0, 0.1, 0.4), ...note(Hz.D5, 0.08, 0.3, 0.4, 0.05)] },
@@ -457,11 +470,11 @@ const S: Record<string, SoundDef> = {
     priority: 9,
     layers: [...note(Hz.C5, 0, 0.12), brass(Hz.C5, 0), ...note(Hz.E5, 0.08, 0.12), ...note(Hz.G5, 0.16, 0.12), brass(Hz.G5, 0.16), ...note(Hz.C6, 0.26, 0.55, 0.4, 0.1), ...note(Hz.G6, 0.26, 0.5, 0.18, 0.1), L({ f: Hz.B5, sh: 5, curve: 1, s: 0.03, r: 0.15, jump: 330, jumpT: 0.05, filt: -1700, v: 0.16 }, 0.4)],
   },
-  quest_tick: { group: 'quest', gain: 0.14, layers: [L({ f: Hz.E6, sh: 1, r: 0.05, v: 0.3 })] },
+  quest_tick: { group: 'quest', trim: -9.5, layers: [L({ f: Hz.E6, sh: 1, r: 0.05, v: 0.3 })] },
   quest_abandon: { group: 'quest', pitchVar: 0, variations: 1, layers: [...note(Hz.D5, 0, 0.1, 0.35), ...note(Hz.A4, 0.09, 0.2, 0.35)] },
 
   // ---------------------------------------------------------------- gathering, coins, world objects
-  gather_start: { group: 'gather', gain: 0.16, layers: [L({ f: 1200, sh: 1, r: 0.03, v: 0.3 })] },
+  gather_start: { group: 'gather', trim: -9, layers: [L({ f: 1200, sh: 1, r: 0.03, v: 0.3 })] },
   gather_ore: { group: 'gather', variations: 2, layers: [L({ f: 1900, sh: 1, a: 0.001, r: 0.09, jump: -600, jumpT: 0.012, v: 0.4, rnd: 0.04 }), crack(2600, 0, 0.25, 0.03), L({ f: 700, noise: 3, s: 0.03, r: 0.08, rep: 0.02, trem: 0.5, crush: 0.02, filt: -1800, v: 0.3 }, 0.05), plink()] },
   gather_fishing: { group: 'gather', variations: 2, layers: [L({ f: 650, noise: 4, a: 0.003, s: 0.03, r: 0.18, filt: -1600, v: 0.5, rnd: 0.08 }), L({ f: 350, r: 0.07, slide: 20, v: 0.3 }, 0.02), L({ f: 1200, r: 0.04, slide: 25, v: 0.15 }, 0.15), plink(0.2)] },
   gather_herb: { group: 'gather', variations: 2, layers: [L({ f: 2000, noise: 2.5, a: 0.02, s: 0.05, r: 0.12, rep: 0.03, trem: 0.5, filt: 700, v: 0.4, rnd: 0.1 }), L({ f: 1300, sh: 1, r: 0.03, v: 0.25 }, 0.1), plink(0.14)] },
@@ -482,36 +495,36 @@ const S: Record<string, SoundDef> = {
   ui_close: { group: 'ui', pitchVar: 0.02, layers: [L({ f: 990, sh: 1, a: 0.002, r: 0.045, v: 0.3 }), L({ f: 660, sh: 1, a: 0.002, r: 0.06, v: 0.3 }, 0.03)] },
   ui_confirm: { group: 'ui', pitchVar: 0, layers: [L({ f: Hz.G5, sh: 1, a: 0.002, r: 0.06, v: 0.3 }), L({ f: Hz.D6, sh: 1, a: 0.002, r: 0.1, v: 0.3 }, 0.05)] },
   ui_nope: { group: 'ui', pitchVar: 0, layers: [L({ f: 262, sh: 5, curve: 1, a: 0.002, s: 0.03, r: 0.04, filt: -1100, v: 0.3 }), L({ f: 233, sh: 5, curve: 1, a: 0.002, s: 0.03, r: 0.06, filt: -1100, v: 0.3 }, 0.08)] },
-  ui_tap: { group: 'ui', gain: 0.14, layers: [L({ f: 1500, sh: 1, a: 0.001, r: 0.02, v: 0.25 })] },
+  ui_tap: { group: 'ui', trim: -3, layers: [L({ f: 1500, sh: 1, a: 0.001, r: 0.03, v: 0.25 })] },
   ui_talk: { group: 'ui', variations: 2, layers: [L({ f: 620, sh: 5, curve: 1, s: 0.015, r: 0.03, filt: -1400, v: 0.2, rnd: 0.06 }), L({ f: 820, sh: 5, curve: 1, s: 0.015, r: 0.04, filt: -1400, v: 0.2, rnd: 0.06 }, 0.05)] },
   slot_set: { group: 'ui', pitchVar: 0.02, layers: [L({ f: 900, sh: 1, a: 0.001, r: 0.03, v: 0.3 }), L({ f: 1350, sh: 1, a: 0.001, r: 0.05, v: 0.25 }, 0.025)] },
-  class_wear: { group: 'cast', gain: 0.28, pitchVar: 0, variations: 1, layers: [L({ f: 500, noise: 1.6, a: 0.06, r: 0.18, slide: 4, filt: -2200, v: 0.35 }), ...note(Hz.D5, 0.08, 0.2, 0.3), ...note(Hz.A5, 0.16, 0.3, 0.3)] },
+  class_wear: { group: 'cast', trim: -1, pitchVar: 0, variations: 1, layers: [L({ f: 500, noise: 1.6, a: 0.06, r: 0.18, slide: 4, filt: -2200, v: 0.35 }), ...note(Hz.D5, 0.08, 0.2, 0.3), ...note(Hz.A5, 0.16, 0.3, 0.3)] },
   warp_out: { group: 'warp', pitchVar: 0.02, layers: [L({ f: 300, noise: 1.6, a: 0.12, s: 0.06, r: 0.2, slide: 6, filt: -2400, v: 0.5 }), L({ f: Hz.C6, a: 0.1, r: 0.3, slide: 4, rep: 0.06, trem: 0.4, v: 0.15 })] },
   warp_in: { group: 'warp', pitchVar: 0.02, layers: [L({ f: 900, noise: 1.2, a: 0.02, r: 0.35, slide: -3, filt: -2400, v: 0.35 }), L({ f: Hz.G6, a: 0.01, r: 0.3, slide: -2, v: 0.12 })] },
 
   // ---------------------------------------------------------------- ambience one-shots (scheduled by src/game/audio/ambience.ts)
-  amb_bird_a: { group: 'amb', bus: 'ambience', gain: 0.1, variations: 3, pitchVar: 0.08, layers: [L({ f: 2700, a: 0.01, s: 0.18, r: 0.05, slide: 28, rep: 0.085, trem: 0.5, v: 0.3, rnd: 0.08 })] },
-  amb_bird_b: { group: 'amb', bus: 'ambience', gain: 0.09, variations: 3, pitchVar: 0.08, layers: [L({ f: 3300, a: 0.005, s: 0.1, r: 0.06, slide: -25, rep: 0.05, trem: 0.5, v: 0.25, rnd: 0.08 })] },
-  amb_bird_c: { group: 'amb', bus: 'ambience', gain: 0.09, variations: 2, pitchVar: 0.05, layers: [L({ f: 3950, a: 0.02, s: 0.1, r: 0.05, v: 0.25 }), L({ f: 3300, a: 0.02, s: 0.14, r: 0.06, v: 0.22 }, 0.2)] },
-  amb_hawk: { group: 'amb', bus: 'ambience', gain: 0.06, variations: 2, layers: [L({ f: 2300, a: 0.03, s: 0.1, r: 0.4, slide: -3, v: 0.2, rnd: 0.05 })] },
-  amb_cricket: { group: 'amb', bus: 'ambience', gain: 0.05, variations: 3, pitchVar: 0.03, layers: [L({ f: 4200, a: 0.01, s: 0.14, r: 0.03, rep: 0.02, trem: 0.5, v: 0.12, rnd: 0.03 })] },
-  amb_owl: { group: 'amb', bus: 'ambience', gain: 0.09, variations: 2, pitchVar: 0.04, layers: [L({ f: 380, a: 0.04, s: 0.12, r: 0.15, slide: -0.3, v: 0.3 }), L({ f: 340, a: 0.05, s: 0.2, r: 0.25, slide: -0.3, v: 0.3 }, 0.35)] },
-  amb_leaves: { group: 'amb', bus: 'ambience', gain: 0.07, variations: 3, layers: [L({ f: 2200, noise: 2, a: 0.3, s: 0.3, r: 0.6, rep: 0.05, trem: 0.3, filt: 600, v: 0.25, rnd: 0.1 })] },
-  amb_gust: { group: 'amb', bus: 'ambience', gain: 0.1, variations: 3, layers: [L({ f: 520, noise: 5, a: 0.5, s: 0.4, r: 0.9, slide: 0.4, filt: -900, v: 0.35, rnd: 0.1 })] },
-  amb_water_lap: { group: 'amb', bus: 'ambience', gain: 0.12, variations: 3, layers: [L({ f: 480, noise: 4, a: 0.3, s: 0.2, r: 0.6, filt: -800, v: 0.35, rnd: 0.1 })] },
-  amb_plop: { group: 'amb', bus: 'ambience', gain: 0.08, variations: 3, layers: [L({ f: 420, r: 0.08, slide: 22, v: 0.3, rnd: 0.1 }), L({ f: 800, noise: 4, r: 0.06, filt: -1500, v: 0.15 })] },
-  amb_drip: { group: 'amb', bus: 'ambience', gain: 0.1, variations: 4, pitchVar: 0.12, layers: [L({ f: 1100, a: 0.001, r: 0.07, slide: 35, v: 0.3, rnd: 0.1 })] },
-  amb_pebble: { group: 'amb', bus: 'ambience', gain: 0.06, variations: 2, layers: [L({ f: 1700, sh: 1, r: 0.02, v: 0.2 }), L({ f: 1500, sh: 1, r: 0.02, v: 0.15 }, 0.07), L({ f: 1900, sh: 1, r: 0.015, v: 0.1 }, 0.12)] },
-  amb_thunder: { group: 'amb', bus: 'ambience', gain: 0.18, variations: 3, layers: [L({ f: 230, noise: 5, a: 0.25, s: 0.5, r: 1.6, rep: 0.11, trem: 0.3, filt: -500, v: 0.6, rnd: 0.1 }), L({ f: 400, noise: 5, a: 0.05, s: 0.2, r: 0.9, filt: -800, v: 0.3 }, 0.1)] },
-  amb_crackle: { group: 'amb', bus: 'ambience', gain: 0.07, variations: 3, layers: [L({ f: 1800, noise: 2.5, s: 0.08, r: 0.05, rep: 0.017, trem: 0.6, filt: 800, v: 0.2, rnd: 0.1 })] },
-  amb_lava_bubble: { group: 'amb', bus: 'ambience', gain: 0.1, variations: 3, layers: [L({ f: 240, a: 0.02, r: 0.1, slide: 6, noise: 0.2, v: 0.4, rnd: 0.1 }), L({ f: 600, r: 0.03, slide: 15, v: 0.2 }, 0.1)] },
-  amb_creak: { group: 'amb', bus: 'ambience', gain: 0.07, variations: 2, layers: [L({ f: 330, sh: 1, a: 0.08, s: 0.25, r: 0.2, rep: 0.04, trem: 0.5, slide: 0.4, filt: -1200, v: 0.25, rnd: 0.06 })] },
-  amb_chime: { group: 'amb', bus: 'ambience', gain: 0.07, variations: 2, pitchVar: 0, layers: [L({ f: Hz.G6, a: 0.01, r: 0.9, v: 0.14 }), L({ f: Hz.C7, a: 0.01, r: 0.9, v: 0.1 }, 0.2), L({ f: Hz.E7, a: 0.01, r: 1, v: 0.08 }, 0.45)] },
-  amb_moan: { group: 'amb', bus: 'ambience', gain: 0.08, variations: 2, layers: [L({ f: 230, sh: 1, a: 0.7, s: 0.5, r: 1.3, slide: 0.12, rep: 0.25, trem: 0.3, filt: -900, v: 0.25 })] },
-  amb_chain: { group: 'amb', bus: 'ambience', gain: 0.05, variations: 2, layers: [L({ f: 2100, sh: 1, s: 0.12, r: 0.06, rep: 0.035, trem: 0.5, noise: 0.5, v: 0.15, rnd: 0.08 })] },
-  amb_hammer: { group: 'amb', bus: 'ambience', gain: 0.05, variations: 2, layers: [L({ f: 1500, sh: 1, r: 0.08, jump: -500, jumpT: 0.01, delay: 0.11, v: 0.25, rnd: 0.04 })] },
-  amb_murmur: { group: 'amb', bus: 'ambience', gain: 0.06, variations: 3, layers: [L({ f: 280, noise: 1.6, a: 0.3, s: 0.6, r: 0.5, rep: 0.17, trem: 0.4, filt: -700, v: 0.3, rnd: 0.1 })] },
-  amb_ice_creak: { group: 'amb', bus: 'ambience', gain: 0.06, variations: 2, layers: [L({ f: 900, sh: 1, a: 0.05, s: 0.1, r: 0.15, rep: 0.025, trem: 0.5, slide: -0.5, filt: -2000, v: 0.15 })] },
+  amb_bird_a: { group: 'amb', bus: 'ambience', trim: 2, variations: 3, pitchVar: 0.08, layers: [L({ f: 2700, a: 0.01, s: 0.18, r: 0.05, slide: 28, rep: 0.085, trem: 0.5, v: 0.3, rnd: 0.08 })] },
+  amb_bird_b: { group: 'amb', bus: 'ambience', trim: 1, variations: 3, pitchVar: 0.08, layers: [L({ f: 3300, a: 0.005, s: 0.1, r: 0.06, slide: -25, rep: 0.05, trem: 0.5, v: 0.25, rnd: 0.08 })] },
+  amb_bird_c: { group: 'amb', bus: 'ambience', trim: 1, variations: 2, pitchVar: 0.05, layers: [L({ f: 3950, a: 0.02, s: 0.1, r: 0.05, v: 0.25 }), L({ f: 3300, a: 0.02, s: 0.14, r: 0.06, v: 0.22 }, 0.2)] },
+  amb_hawk: { group: 'amb', bus: 'ambience', trim: -2.5, variations: 2, layers: [L({ f: 2300, a: 0.03, s: 0.1, r: 0.4, slide: -3, v: 0.2, rnd: 0.05 })] },
+  amb_cricket: { group: 'amb', bus: 'ambience', trim: -4, variations: 3, pitchVar: 0.03, layers: [L({ f: 4200, a: 0.01, s: 0.14, r: 0.03, rep: 0.02, trem: 0.5, v: 0.12, rnd: 0.03 })] },
+  amb_owl: { group: 'amb', bus: 'ambience', trim: 1, variations: 2, pitchVar: 0.04, layers: [L({ f: 380, a: 0.04, s: 0.12, r: 0.15, slide: -0.3, v: 0.3 }), L({ f: 340, a: 0.05, s: 0.2, r: 0.25, slide: -0.3, v: 0.3 }, 0.35)] },
+  amb_leaves: { group: 'amb', bus: 'ambience', trim: -1, variations: 3, layers: [L({ f: 2200, noise: 2, a: 0.3, s: 0.3, r: 0.6, rep: 0.05, trem: 0.3, filt: 600, v: 0.25, rnd: 0.1 })] },
+  amb_gust: { group: 'amb', bus: 'ambience', trim: 2, variations: 3, layers: [L({ f: 520, noise: 5, a: 0.5, s: 0.4, r: 0.9, slide: 0.4, filt: -900, v: 0.35, rnd: 0.1 })] },
+  amb_water_lap: { group: 'amb', bus: 'ambience', trim: 3.5, variations: 3, layers: [L({ f: 480, noise: 4, a: 0.3, s: 0.2, r: 0.6, filt: -800, v: 0.35, rnd: 0.1 })] },
+  amb_plop: { group: 'amb', bus: 'ambience', variations: 3, layers: [L({ f: 420, r: 0.08, slide: 22, v: 0.3, rnd: 0.1 }), L({ f: 800, noise: 4, r: 0.06, filt: -1500, v: 0.15 })] },
+  amb_drip: { group: 'amb', bus: 'ambience', trim: 2, variations: 4, pitchVar: 0.12, layers: [L({ f: 1100, a: 0.001, r: 0.07, slide: 35, v: 0.3, rnd: 0.1 })] },
+  amb_pebble: { group: 'amb', bus: 'ambience', trim: -2.5, variations: 2, layers: [L({ f: 1700, sh: 1, r: 0.02, v: 0.2 }), L({ f: 1500, sh: 1, r: 0.02, v: 0.15 }, 0.07), L({ f: 1900, sh: 1, r: 0.015, v: 0.1 }, 0.12)] },
+  amb_thunder: { group: 'amb', bus: 'ambience', trim: 7, variations: 3, layers: [L({ f: 230, noise: 5, a: 0.25, s: 0.5, r: 1.6, rep: 0.11, trem: 0.3, filt: -500, v: 0.6, rnd: 0.1 }), L({ f: 400, noise: 5, a: 0.05, s: 0.2, r: 0.9, filt: -800, v: 0.3 }, 0.1)] },
+  amb_crackle: { group: 'amb', bus: 'ambience', trim: -1, variations: 3, layers: [L({ f: 1800, noise: 2.5, s: 0.08, r: 0.05, rep: 0.017, trem: 0.6, filt: 800, v: 0.2, rnd: 0.1 })] },
+  amb_lava_bubble: { group: 'amb', bus: 'ambience', trim: 2, variations: 3, layers: [L({ f: 240, a: 0.02, r: 0.1, slide: 6, noise: 0.2, v: 0.4, rnd: 0.1 }), L({ f: 600, r: 0.03, slide: 15, v: 0.2 }, 0.1)] },
+  amb_creak: { group: 'amb', bus: 'ambience', trim: -1, variations: 2, layers: [L({ f: 330, sh: 1, a: 0.08, s: 0.25, r: 0.2, rep: 0.04, trem: 0.5, slide: 0.4, filt: -1200, v: 0.25, rnd: 0.06 })] },
+  amb_chime: { group: 'amb', bus: 'ambience', trim: -1, variations: 2, pitchVar: 0, layers: [L({ f: Hz.G6, a: 0.01, r: 0.9, v: 0.14 }), L({ f: Hz.C7, a: 0.01, r: 0.9, v: 0.1 }, 0.2), L({ f: Hz.E7, a: 0.01, r: 1, v: 0.08 }, 0.45)] },
+  amb_moan: { group: 'amb', bus: 'ambience', variations: 2, layers: [L({ f: 230, sh: 1, a: 0.7, s: 0.5, r: 1.3, slide: 0.12, rep: 0.25, trem: 0.3, filt: -900, v: 0.25 })] },
+  amb_chain: { group: 'amb', bus: 'ambience', trim: -4, variations: 2, layers: [L({ f: 2100, sh: 1, s: 0.12, r: 0.06, rep: 0.035, trem: 0.5, noise: 0.5, v: 0.15, rnd: 0.08 })] },
+  amb_hammer: { group: 'amb', bus: 'ambience', trim: -4, variations: 2, layers: [L({ f: 1500, sh: 1, r: 0.08, jump: -500, jumpT: 0.01, delay: 0.11, v: 0.25, rnd: 0.04 })] },
+  amb_murmur: { group: 'amb', bus: 'ambience', trim: -2.5, variations: 3, layers: [L({ f: 280, noise: 1.6, a: 0.3, s: 0.6, r: 0.5, rep: 0.17, trem: 0.4, filt: -700, v: 0.3, rnd: 0.1 })] },
+  amb_ice_creak: { group: 'amb', bus: 'ambience', trim: -2.5, variations: 2, layers: [L({ f: 900, sh: 1, a: 0.05, s: 0.1, r: 0.15, rep: 0.025, trem: 0.5, slide: -0.5, filt: -2000, v: 0.15 })] },
 };
 
 for (const el of ELEMENT_KEYS) {
@@ -614,29 +627,83 @@ function zzfxSamples(p: ZzfxParams, sampleRate: number): number {
   return Math.max(0, (attack + ((p[18] ?? 0) + (p[4] ?? 0) + (p[5] ?? 0.1) + (p[16] ?? 0)) * sampleRate) | 0);
 }
 
-/** Short-term loudness every buffer is normalised to (max RMS over 30 ms windows). */
-export const TARGET_LOUDNESS = 0.25;
-/** Normalised buffers never peak above this. */
-export const PEAK_CEILING = 0.95;
+/** Perceived loudness every buffer is normalised to (see `perceivedLoudness`). */
+export const TARGET_LOUDNESS = 0.2;
+/** Normalised buffers never peak above this (a sound limited by it lands under its level; the bank test flags it). */
+export const PEAK_CEILING = 0.98;
 
-/** Max RMS over 30 ms windows (10 ms hop): a simple short-term loudness for short sounds. */
-export function shortTermLoudness(x: Float32Array, sampleRate: number): number {
-  const win = Math.max(1, Math.round(sampleRate * 0.03));
+/** Max RMS over windows of `ms` (10 ms hop), zero-padded: a sound shorter than the window counts as quieter. */
+export function windowedLoudness(x: Float32Array, sampleRate: number, ms: number): number {
+  const win = Math.max(1, Math.round((sampleRate * ms) / 1000));
   const hop = Math.max(1, Math.round(sampleRate * 0.01));
   let best = 0;
   for (let start = 0; start < Math.max(1, x.length - win + 1); start += hop) {
     let sum = 0;
     const end = Math.min(x.length, start + win);
     for (let i = start; i < end; i++) sum += x[i] * x[i];
-    best = Math.max(best, Math.sqrt(sum / win));
+    best = Math.max(best, sum / win);
   }
-  return best;
+  return Math.sqrt(best);
+}
+
+/** Max RMS over 30 ms windows: the raw short-term level (kept for diagnostics). */
+export function shortTermLoudness(x: Float32Array, sampleRate: number): number {
+  return windowedLoudness(x, sampleRate, 30);
+}
+
+/** One RBJ biquad pass (Web Audio BiquadFilterNode maths; Q linear). */
+function biquad(x: Float32Array, type: 'highpass' | 'highshelf', f0: number, q: number, sampleRate: number, gainDb = 0): Float32Array {
+  const w = (2 * Math.PI * Math.min(f0, sampleRate * 0.45)) / sampleRate;
+  const c = Math.cos(w);
+  const alpha = Math.sin(w) / (2 * q);
+  let b0: number, b1: number, b2: number, a0: number, a1: number, a2: number;
+  if (type === 'highpass') {
+    b0 = (1 + c) / 2;
+    b1 = -(1 + c);
+    b2 = (1 + c) / 2;
+    a0 = 1 + alpha;
+    a1 = -2 * c;
+    a2 = 1 - alpha;
+  } else {
+    const A = 10 ** (gainDb / 40);
+    const sq = 2 * Math.sqrt(A) * alpha;
+    b0 = A * (A + 1 + (A - 1) * c + sq);
+    b1 = -2 * A * (A - 1 + (A + 1) * c);
+    b2 = A * (A + 1 + (A - 1) * c - sq);
+    a0 = A + 1 - (A - 1) * c + sq;
+    a1 = 2 * (A - 1 - (A + 1) * c);
+    a2 = A + 1 - (A - 1) * c - sq;
+  }
+  const y = new Float32Array(x.length);
+  let x1 = 0;
+  let x2 = 0;
+  let y1 = 0;
+  let y2 = 0;
+  for (let i = 0; i < x.length; i++) {
+    const v = (b0 * x[i] + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2) / a0;
+    x2 = x1;
+    x1 = x[i];
+    y2 = y1;
+    y1 = v;
+    y[i] = v;
+  }
+  return y;
 }
 
 /**
- * Mixes a sound's layers into one buffer and normalises it to TARGET_LOUDNESS (never peaking above PEAK_CEILING),
- * so `gain` alone sets the mix. `variation` seeds the ZzFX randomness rolls (each cached variation is a slightly
- * different take; the same name + variation always builds the same samples).
+ * How loud a sound is heard (the normalisation measure): the engine's master high-pass (110 Hz), the BS.1770
+ * K-weighting shelf (+4 dB above ~1.7 kHz, where the ear is most sensitive), then the loudest 100 ms. 100 ms is about
+ * the ear's integration time, so a 20 ms tap counts quieter than a 200 ms swell of the same peak, as it sounds.
+ */
+export function perceivedLoudness(x: Float32Array, sampleRate: number): number {
+  const weighted = biquad(biquad(x, 'highpass', 110, Math.SQRT1_2, sampleRate), 'highshelf', 1681, Math.SQRT1_2, sampleRate, 4);
+  return windowedLoudness(weighted, sampleRate, 100);
+}
+
+/**
+ * Mixes a sound's layers into one buffer and normalises its perceived loudness to TARGET_LOUDNESS (never peaking
+ * above PEAK_CEILING), so the group level + trim alone set the mix. `variation` seeds the ZzFX randomness rolls
+ * (each cached variation is a slightly different take; the same name + variation always builds the same samples).
  */
 export function buildSound(name: string, def: SoundDef, sampleRate: number, variation = 0): Float32Array {
   const rng = mulberry32(hashSeed('omnipath-sfx', name, variation));
@@ -650,7 +717,7 @@ export function buildSound(name: string, def: SoundDef, sampleRate: number, vari
     const a = Math.abs(out[i]);
     if (a > peak) peak = a;
   }
-  const loud = shortTermLoudness(out, sampleRate);
+  const loud = perceivedLoudness(out, sampleRate);
   if (peak > 0 && loud > 0) {
     const k = Math.min(TARGET_LOUDNESS / loud, PEAK_CEILING / peak);
     for (let i = 0; i < len; i++) out[i] *= k;

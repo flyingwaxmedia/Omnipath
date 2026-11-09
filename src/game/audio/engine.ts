@@ -14,12 +14,30 @@ import { AmbiencePlayer, type MapInfo, type ReverbPreset, makeImpulse, reverbFor
 
 /** Sample rate the SFX buffers are built at (energy stays under 6 kHz; saves memory vs 44.1 / 48 kHz). */
 export const BUILD_RATE = 32000;
+/**
+ * Output makeup (≈ +5.6 dB) on the master gain. Bank buffers are loudness-normalised (src/game/audio/bank.ts), so at
+ * default settings a hit is heard at ≈ −22.5 dBFS (K-weighted, loudest 100 ms) and a fanfare at ≈ −19 before the
+ * compressor (the loudness table: tests/audio-bank.test.ts); a busy AUTO fight peaks ≈ −1.5 dBFS before it and sits
+ * near −16 dBFS RMS at the speakers (the stress test in tests/audio-engine.test.ts, and the browser QA).
+ * Note: Web Audio's DynamicsCompressor adds its own automatic makeup gain
+ * ((|threshold| − |threshold| / ratio) × 0.6 dB ≈ +5.4 dB with the settings below), applied after the knee.
+ */
+export const MAKEUP = 1.9;
+/** Master compressor: rides the pile-ups (several hits + a fanfare), barely touches a single sound. */
+export const COMPRESSOR = { threshold: -12, knee: 10, ratio: 4, attack: 0.003, release: 0.25 } as const;
+/**
+ * The last stage: a soft clipper, linear below SOFT_CLIP (−3 dBFS) and bending smoothly toward ≈ −0.6 dBFS, so a
+ * pile-up the compressor is too slow for never hard-clips at the speaker.
+ */
+export const SOFT_CLIP = 0.7;
+/** Web Audio's lowpass / highpass Q is a resonance in dB: −3.01 dB = Butterworth (no bump at the cutoff). */
+const BUTTERWORTH_Q_DB = -3.0103;
 /** Max voices sounding at once (SFX + ambience one-shots). */
 export const MAX_VOICES = 24;
 /** No input and no sound for this long suspends the context (battery). */
 export const IDLE_MS = 90_000;
-/** Cached samples before the oldest buffers are dropped (~10 MB of float32). */
-export const CACHE_SAMPLES = 2_500_000;
+/** Cached samples before the least recently used buffers are dropped (~6 MB of float32; a session uses ~1 M). */
+export const CACHE_SAMPLES = 1_500_000;
 
 export interface PlayOptions {
   /** Extra linear gain (spatial attenuation, multi-hit restraint). */
@@ -35,6 +53,9 @@ export interface PlayOptions {
   /** Overrides the sound's priority. */
   priority?: number;
 }
+
+/** The only events that create / resume the AudioContext (iOS Safari's user-gesture rule). */
+export const UNLOCK_EVENTS: readonly string[] = ['touchend', 'click', 'keydown'];
 
 export type PlayRefusal = 'unknown' | 'locked' | 'muted' | 'suspended' | 'quiet' | 'gap' | 'group' | 'global';
 export type PlayResult = { ok: true; voice: number } | { ok: false; reason: PlayRefusal };
@@ -58,10 +79,35 @@ interface Graph {
   reverbSend: GainNode;
   convolver: ConvolverNode;
   reverbOut: GainNode;
+  comp: DynamicsCompressorNode;
+  /** The last node before the speakers (the soft clipper). */
+  out: AudioNode;
   meter: AnalyserNode | null;
 }
 
 const nowMs = (): number => (typeof performance !== 'undefined' ? performance.now() : Date.now());
+
+/**
+ * Gain that makes a StereoPannerNode match an unpanned voice. A mono source without a panner plays at full level on
+ * both speakers, but the panner's equal-power law puts a centred source at 0.707 per side (−3 dB): without this,
+ * a hit just off-centre would be 3 dB quieter than one dead centre. Scaling by 1 / (the louder side's gain) keeps
+ * the near speaker at the unpanned level, so no voice ever peaks above its unpanned self.
+ */
+export function panCompensation(pan: number): number {
+  const x = ((Math.max(-1, Math.min(1, pan)) + 1) / 2) * (Math.PI / 2);
+  return 1 / Math.max(Math.cos(x), Math.sin(x));
+}
+
+/** The soft clipper's transfer curve: identity below `knee`, then a tanh bend that tops out under full scale. */
+export function softClipCurve(knee: number, n = 2048): Float32Array<ArrayBuffer> {
+  const curve = new Float32Array(new ArrayBuffer(n * 4));
+  for (let i = 0; i < n; i++) {
+    const x = (i / (n - 1)) * 2 - 1;
+    const a = Math.abs(x);
+    curve[i] = Math.sign(x) * (a <= knee ? a : knee + (1 - knee) * Math.tanh((a - knee) / (1 - knee)));
+  }
+  return curve;
+}
 
 export class AudioEngine {
   ctx: AudioContext | null = null;
@@ -82,6 +128,8 @@ export class AudioEngine {
   private readonly impulses = new Map<string, AudioBuffer>();
   private readonly offs: (() => void)[] = [];
   readonly stats = { played: 0, dropped: 0, built: 0, errors: 0 };
+  /** The last sounds started (debug hooks / Playwright checks). */
+  private readonly recentNames: string[] = [];
 
   constructor(store = browserStore()) {
     this.settings = new SettingsStore(store);
@@ -103,15 +151,20 @@ export class AudioEngine {
     if (this.installed || typeof window === 'undefined') return;
     this.installed = true;
     const opts: AddEventListenerOptions = { capture: true, passive: true };
-    const listen = (target: EventTarget, type: string, fn: () => void) => {
+    const listen = (target: EventTarget, type: string, fn: (ev?: Event) => void) => {
       target.addEventListener(type, fn, opts);
       this.offs.push(() => target.removeEventListener(type, fn, opts));
     };
-    const gesture = () => this.gesture();
-    // iOS Safari only unlocks audio inside touchend / click / keydown handlers (not touchstart / pointerdown).
-    for (const type of ['touchend', 'click', 'keydown', 'pointerup']) listen(window, type, gesture);
+    // Only a real (trusted) gesture can start audio: a scripted element.click() would just create a context the
+    // browser keeps suspended (and Chrome warns about it).
+    const gesture = (ev?: Event) => {
+      if (ev?.isTrusted !== false) this.gesture();
+    };
+    // iOS Safari only unlocks audio inside touchend / click / keydown handlers (not touchstart / pointerdown /
+    // pointerup): the context is created and resumed synchronously inside these, nowhere else.
+    for (const type of UNLOCK_EVENTS) listen(window, type, gesture);
     const activity = () => this.activity();
-    for (const type of ['pointerdown', 'touchstart', 'wheel']) listen(window, type, activity);
+    for (const type of ['pointerdown', 'pointerup', 'touchstart', 'wheel']) listen(window, type, activity);
     if (typeof document !== 'undefined') {
       const vis = () => this.setReason('hidden', document.hidden);
       listen(document, 'visibilitychange', vis);
@@ -140,8 +193,9 @@ export class AudioEngine {
     this.activity();
     if (!this.ctx && !this.create()) return;
     const ctx = this.ctx!;
+    const first = !this.unlocked;
     if (this.reasons.size === 0 && ctx.state !== 'running') void ctx.resume().catch(() => undefined);
-    if (!this.unlocked) {
+    if (first) {
       // Old iOS also wants a buffer started inside the gesture.
       try {
         const b = ctx.createBuffer(1, 1, ctx.sampleRate);
@@ -209,28 +263,29 @@ export class AudioEngine {
     const hp = ctx.createBiquadFilter();
     hp.type = 'highpass';
     hp.frequency.value = 110;
-    hp.Q.value = 0.6;
+    hp.Q.value = BUTTERWORTH_Q_DB;
     // Takes the edge off the naive ZzFX waveforms (aliasing above ~8 kHz).
     const tone = ctx.createBiquadFilter();
     tone.type = 'lowpass';
     tone.frequency.value = 8000;
-    tone.Q.value = 0.5;
-    // A gentle limiter: catches stacked hits without pumping.
+    tone.Q.value = BUTTERWORTH_Q_DB;
     const comp = ctx.createDynamicsCompressor();
-    comp.threshold.value = -12;
-    comp.knee.value = 10;
-    comp.ratio.value = 3.5;
-    comp.attack.value = 0.004;
-    comp.release.value = 0.2;
+    comp.threshold.value = COMPRESSOR.threshold;
+    comp.knee.value = COMPRESSOR.knee;
+    comp.ratio.value = COMPRESSOR.ratio;
+    comp.attack.value = COMPRESSOR.attack;
+    comp.release.value = COMPRESSOR.release;
+    const clip = ctx.createWaveShaper();
+    clip.curve = softClipCurve(SOFT_CLIP);
     sfx.connect(tone).connect(master);
     ambience.connect(duck).connect(master);
     music.connect(master);
-    master.connect(hp).connect(comp).connect(ctx.destination);
+    master.connect(hp).connect(comp).connect(clip).connect(ctx.destination);
     const reverbSend = gain(0);
     const convolver = ctx.createConvolver();
     const reverbOut = gain(1);
     convolver.connect(reverbOut).connect(master);
-    return { master, sfx, ambience, duck, music, reverbSend, convolver, reverbOut, meter: null };
+    return { master, sfx, ambience, duck, music, reverbSend, convolver, reverbOut, comp, out: clip, meter: null };
   }
 
   private onState(): void {
@@ -255,10 +310,14 @@ export class AudioEngine {
     if (!ctx || ctx.state === 'closed') return;
     if (this.reasons.size === 0) {
       if (ctx.state !== 'running') {
-        // iOS 17+: a context coming back from the background sometimes needs a suspend → resume nudge.
-        const resume = () => void ctx.resume().catch(() => undefined);
-        if (ctx.state === 'suspended' && this.unlocked) setTimeout(resume, 60);
-        else resume();
+        // Resume right away (still inside the gesture when a tap / key caused this — iOS needs that), and once more
+        // a moment later: iOS 17+ sometimes leaves a context coming back from the background 'suspended' /
+        // 'interrupted' after the first resume.
+        const resume = () => {
+          if (this.ctx === ctx && this.reasons.size === 0 && ctx.state !== 'running' && ctx.state !== 'closed') void ctx.resume().catch(() => undefined);
+        };
+        resume();
+        if (this.unlocked) setTimeout(resume, 120);
       }
     } else if (ctx.state === 'running') {
       this.stopAll();
@@ -293,7 +352,7 @@ export class AudioEngine {
       if (instant) p.value = v;
       else p.setTargetAtTime(v, ctx.currentTime, 0.03);
     };
-    set(g.master.gain, b.master);
+    set(g.master.gain, b.master * MAKEUP);
     set(g.sfx.gain, b.sfx);
     set(g.ambience.gain, b.ambience);
     set(g.music.gain, b.music);
@@ -312,14 +371,17 @@ export class AudioEngine {
     if (!ctx || !g) return this.refuse('locked');
     if (this.reasons.has('muted')) return this.refuse('muted');
     if (this.reasons.has('idle') && bus === 'sfx') this.setReason('idle', false);
-    if (this.reasons.size > 0 || ctx.state === 'closed') return this.refuse('suspended');
+    if (this.reasons.size > 0) return this.refuse('suspended');
+    // Not running yet (autoplay policy before the first trusted gesture, a resume still pending): drop the sound
+    // rather than queue it — a suspended context would release every queued sound at once on unlock.
+    if (ctx.state !== 'running') return this.refuse(this.unlocked ? 'suspended' : 'locked');
     const level = gainOf(def) * (opts.gain ?? 1);
     if (!(level > 0.002)) return this.refuse('quiet');
     const rate = Math.max(0.25, Math.min(4, (opts.rate ?? 1) * (1 + (this.rng() * 2 - 1) * (def.pitchVar ?? 0.04))));
     const dur = soundDuration(def, BUILD_RATE) / rate;
     const delay = opts.when !== undefined ? Math.max(0, opts.when - ctx.currentTime) : Math.max(0, opts.delay ?? 0);
     const policy = GROUPS[def.group];
-    const adm = this.limiter.admit(def.group, policy, nowMs() + delay * 1000, dur * 1000, opts.priority ?? def.priority ?? policy.priority);
+    const adm = this.limiter.admit(def.group, policy, nowMs(), dur * 1000, opts.priority ?? def.priority ?? policy.priority, delay * 1000);
     if (!adm) return this.refuse(this.limiter.lastRefusal ?? 'group');
     for (const v of adm.evict) this.stopVoice(v.id, 0.02);
     try {
@@ -329,13 +391,15 @@ export class AudioEngine {
       src.buffer = buffer;
       src.playbackRate.value = rate;
       const gn = ctx.createGain();
-      gn.gain.value = level * (1 + (this.rng() * 2 - 1) * (def.volVar ?? 0.1));
       let pan: StereoPannerNode | null = null;
       const p = Math.max(-1, Math.min(1, opts.pan ?? 0));
+      let panGain = 1;
       if (Math.abs(p) > 0.01 && typeof ctx.createStereoPanner === 'function') {
         pan = ctx.createStereoPanner();
         pan.pan.value = p;
+        panGain = panCompensation(p);
       }
+      gn.gain.value = level * panGain * (1 + (this.rng() * 2 - 1) * (def.volVar ?? 0.1));
       src.connect(gn);
       (pan ? gn.connect(pan) : gn).connect(bus === 'ambience' ? g.ambience : g.sfx);
       const id = adm.id;
@@ -344,6 +408,8 @@ export class AudioEngine {
       src.start(ctx.currentTime + delay);
       if ((def.priority ?? policy.priority) >= 9) this.duck(ctx.currentTime + delay, dur);
       this.stats.played++;
+      this.recentNames.push(name);
+      if (this.recentNames.length > 80) this.recentNames.shift();
       return { ok: true, voice: id };
     } catch (error) {
       this.limiter.release(adm.id);
@@ -487,21 +553,40 @@ export class AudioEngine {
 
   // ---------------------------------------------------------------- debug / state
 
-  /** RMS of the master output over the last ~20 ms (creates a meter on first use; debug only). */
-  level(): number {
+  /** The names of the last (up to 80) sounds started, oldest first. */
+  recent(): string[] {
+    return [...this.recentNames];
+  }
+
+  /**
+   * The speaker feed right now (after the compressor and the soft clipper) over the last ~46 ms: RMS, peak and the
+   * compressor's gain reduction (dB, ≤ 0). Creates the meter on first use (debug hooks / Playwright only).
+   */
+  meter(): { rms: number; peak: number; reduction: number } {
     const g = this.g;
     const ctx = this.ctx;
-    if (!g || !ctx) return 0;
+    if (!g || !ctx) return { rms: 0, peak: 0, reduction: 0 };
     if (!g.meter) {
       g.meter = ctx.createAnalyser();
-      g.meter.fftSize = 1024;
-      g.master.connect(g.meter);
+      g.meter.fftSize = 2048;
+      g.out.connect(g.meter);
     }
     const data = new Float32Array(g.meter.fftSize);
-    g.meter.getFloatTimeDomainData(data);
+    // (Safari < 14.1 has no float time-domain read: the debug meter then reads silence)
+    if (typeof g.meter.getFloatTimeDomainData === 'function') g.meter.getFloatTimeDomainData(data);
     let sum = 0;
-    for (const v of data) sum += v * v;
-    return Math.sqrt(sum / data.length);
+    let peak = 0;
+    for (const v of data) {
+      sum += v * v;
+      peak = Math.max(peak, Math.abs(v));
+    }
+    const r = (g.comp as { reduction?: number | AudioParam }).reduction;
+    return { rms: Math.sqrt(sum / data.length), peak, reduction: typeof r === 'number' ? r : (r?.value ?? 0) };
+  }
+
+  /** RMS of the speaker feed over the last ~46 ms (see meter()). */
+  level(): number {
+    return this.meter().rms;
   }
 
   state(): {
@@ -514,6 +599,8 @@ export class AudioEngine {
     cachedSamples: number;
     reverb: string | null;
     bed: string | null;
+    /** Audio nodes the engine holds right now: one-shot voices + ambience beds (fading ones included). */
+    nodes: { voices: number; ambience: number };
     sampleRate: number;
     stats: { played: number; dropped: number; built: number; errors: number };
     settingsListeners: number;
@@ -528,6 +615,7 @@ export class AudioEngine {
       cachedSamples: this.cachedSamples,
       reverb: this.reverb?.id ?? null,
       bed: this.ambience.current(),
+      nodes: { voices: [...this.live.values()].reduce((n, v) => n + (v.pan ? 3 : 2), 0), ambience: this.ambience.nodeCount() },
       sampleRate: this.ctx?.sampleRate ?? 0,
       stats: { ...this.stats },
       settingsListeners: this.settings.listenerCount(),

@@ -202,9 +202,9 @@ Who does what (the cross-lane questions, one owner each):
 ### 3.1 Panel names (ui.open) and their args
 | name | owner | arg |
 |---|---|---|
-| `skills` | starchart | none (last tab, default Chart); a tab id `chart` / `skills` (the List — keeps `data-tab="skills"`, the playtest clicks it) / `passives` / `essences`; `star:<skillId>` (centre on it); and the v2 args other lanes already pass: a skill id (→ that skill's card or detail) and `tree:<weapon>`. dialogs.ts presets `ui.state['skills.tab']` = `passives` / `essences` before opening it |
+| `skills` | starchart | none (last tab, default Chart); a tab id `chart` / `skills` (the List — keeps `data-tab="skills"`, the playtest clicks it) / `passives` / `essences`; `star:<skillId>` (centre on it); `card:<skillId>` (back from the picker: the same tab with that star's card open, the camera where it was); and the v2 args other lanes already pass: a skill id (→ that skill's card or detail) and `tree:<weapon>`. dialogs.ts presets `ui.state['skills.tab']` = `passives` / `essences` before opening it |
 | `skill` | starchart | skill id, or `el:<element>` → the simple card (`ctrl.skillCard`) |
-| `picker` | hud | `<slot>` (choose a skill for that own slot) or `skill:<id>` (choose the own slot for that skill) |
+| `picker` | hud | `<slot>` (choose a skill for that own slot) or `skill:<id>` (choose the own slot for that skill; after the pick it goes back where it was opened from — the Star Chart with that card (`skills` `card:<id>`), the `skill` card, or the NPC dialog — else to the world; ui.ts records the panel it was opened over in `ui.state['ui.from']`) |
 | `classes` | panels | optional class id to focus |
 | `codex` | panels | tab id; `quests` or `quests:<questId>` opens the quest log on that quest |
 | `trainer` | panels | NPC id → that NPC's quest list (lessons are never bought) |
@@ -368,7 +368,7 @@ starchart 4185, panels 4186):
 ```
 npx vite build --outDir "$SCRATCH/dist" --emptyOutDir
 npx vite preview --outDir "$SCRATCH/dist" --port 4184 --strictPort &
-node scripts/playtest.mjs http://localhost:4184/ --quick   # the playtest agent's suite (read-only for lanes)
+node scripts/playtest.mjs http://localhost:4184/ --quick --device phone   # also phone-landscape, ipad, ipad-portrait, desktop
 ```
 Ad-hoc Playwright (scratch script outside the repo): `const { chromium } = require('playwright'); const b = await
 chromium.launch();` — start a new game (`.title-screen .new`, fill `input.name`, `.wcard[data-w="sword"]`, `.go`), then
@@ -390,4 +390,10 @@ arg)` opens any panel; `window.omnipath.scene` is the GameController. No console
 | `.discovery .ok` | panels (dialogs.ts) | dismisses cards (a card with a Become button keeps `.ok` as its "Later") |
 | `.minigame .strike`, `.minigame .reel`, `.bob.bite` | panels (dialogs.ts) | forge / fishing minigames |
 | `.toast`, `.zone-banner b`, `#hud-root button` ≥ 44 px | hud | toast / zone checks, touch-target sizes |
-| `ui.open('trainer', 'hale')` + `[data-lesson="hale_rising_kick"]` | panels / game | **breaks when `questOnly` flips** (lessons are no longer bought): the game lane tells the playtest agent in its report; the trainer quest rows may keep `data-lesson` on the quest that teaches the lesson |
+| `<html>` inline `--ui-px` vs `window.omnipath.render.scale()` | hud | the HUD's pixel = the world's (`--ui-px` × dpr = k, whole device px) |
+| `window.omnipath.render.asleep()` | render | the loop sleeps under the Star Chart, wakes for a card over it, sleeps again after it |
+| `.sc-card[data-card="<id>"] .sc-act > :is(.sc-primary, .sc-done, .sc-step)`, `[data-act="equip"]` | starchart | a star card shows ONE action; Equip with every own slot full opens the picker |
+| `[data-become="<classId>"]` | panels (classes.ts) | Become a class → the class slots fill (`debug.bar()`) |
+| `.hotbar .slot.own.empty[data-slot]`, `.picker-sheet .pk-tile[data-skill]` / `[data-slot]` | hud | tap an empty own slot → picker → equip; the `skill:<id>` picker → back to the card |
+| `.cluster .rb.auto` (`.on`), `.cluster .atk.auto` | hud | AUTO on / off |
+| `debug.npc('hale')` + `.dialog [data-accept="hale_first_drill"]` / `[data-complete=…]` / `[data-equip-skill="rising_kick"]` | panels / game | lessons are quest rewards: accept in Hale's dialog, `debug.complete` + the basic attack to rank 3, Complete → Rising Kick learned and on the bar (Equip → picker → back to the dialog when the own slots are full). `[data-lesson]` stays on the quest that teaches a lesson |

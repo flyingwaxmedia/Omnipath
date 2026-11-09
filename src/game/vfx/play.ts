@@ -1,7 +1,8 @@
 // The play contract between the bus bridge (bridge.ts, Phaser-free) and the Phaser runtime (runtime/**).
 // The bridge turns game events into `play(pieces, ctx)` calls; the runtime places, times, pools and governs them.
 // Anchors are live views (actors, movers): the runtime reads x / y every frame, so overlays follow what they mark.
-import type { Pt, VfxOwner, VfxPiece } from './types';
+import type { TellLook } from './tellraster';
+import type { Pt, TellGeometry, VfxOwner, VfxPiece } from './types';
 
 /** A point the runtime reads every frame (an actor's feet, a mover's drawn position) or a fixed point. */
 export interface LivePt {
@@ -51,6 +52,12 @@ export interface PlayCtx {
   alive?: () => boolean;
   /** Event radius for geometryFromEvent pieces (true hit-test radius). */
   r?: number;
+  /**
+   * Monster reach scale for geometryFromEvent pieces (MonsterSkills spins and strikes reach + the caster's radius):
+   * ring radii × rScale, smears re-bucketed to reachBucket(nominal × rScale). With it, chunked rings use their own
+   * scaled radius instead of `r`.
+   */
+  rScale?: number;
   /** Skip trail pieces (volleys beyond VFX_BUDGET.perEvent.volleyTrailsFull: every 2nd shot only). */
   noTrail?: boolean;
   /** The actor afterimages snapshot (dash ghosts, reprise mirror). */
@@ -59,12 +66,46 @@ export interface PlayCtx {
   victim?: object;
   /** Victim hit-stop: the impact spark holds its hero frame this long (ms). */
   holdMs?: number;
+  /** Low priority (status units): drawn only while the sprite pools have room to spare, so a crowd of statuses
+   *  never starves the casts and impact sparks. */
+  low?: boolean;
 }
 
 export interface VfxGroup {
   /** Ends loops now (projectile caught, charge cancelled, buff refreshed); one-shots finish on their own. */
   end(): void;
   readonly done: boolean;
+}
+
+/** One phase of a monster telegraph (the live MonsterSkills record: shiftTime moves it). */
+export interface TellPhaseView {
+  readonly start: number;
+  readonly at: number;
+  readonly state: 'pending' | 'resolved' | 'cancelled';
+}
+
+/** A monster telegraph for the runtime's TelegraphFx (docs/VFX.md §6.5): exact live geometry, live phases. */
+export interface TellSpec {
+  /** Exact live geometry (world px), or null when there is nothing to draw (caster gone). */
+  geom(): TellGeometry | null;
+  /** The phase on show (wind-up, then each follow-up swing / pulse); null once every phase is over. */
+  phase(): TellPhaseView | null;
+  look: TellLook;
+}
+
+/**
+ * Hit feel on actors and the camera (docs/QUALITY-PLAN.md §7-8, docs/VFX.md §6.6): implemented by the juice rig
+ * (../vfx/juice.ts) on the real actors and the camera rig; the bridge only decides the amounts.
+ */
+export interface JuiceHooks {
+  /** Victim-local hit-stop, coalesced and inside the per-second budget: the hold actually granted (ms). */
+  hold(victim: object | 'player', ms: number): number;
+  /** The victim's impact frames: white -> `color` flash (1-2 frames), a 1-frame squash, a whole-px recoil along ang. */
+  impact(victim: object | 'player', color: number, ang: number, recoilPx: number): void;
+  /** Directional camera kick (whole art px along ang, springs back). */
+  kick(ang: number, px: number): void;
+  /** Screen flash, governed (alpha <= 0.35, >= 333 ms apart, <= 3 / s, none under reduce-flash). True if shown. */
+  flash(color: number, alpha: number): boolean;
 }
 
 /** What the bridge needs from the runtime. */
@@ -80,4 +121,6 @@ export interface VfxStage {
   tick(fn: () => boolean): void;
   /** The 'Reduce shake & flashes' setting (reduce-flash bakes, trauma x0.3, no screen flash). */
   readonly reduceFlash: boolean;
+  /** A monster telegraph at its exact live geometry (never governed, culled or dropped). */
+  telegraph(spec: TellSpec): VfxGroup;
 }

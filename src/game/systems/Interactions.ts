@@ -342,7 +342,7 @@ export class Interactions {
       case 'waystone': {
         if (addOnce(world.waystones, key)) {
           v.sprite.setTexture('obj_waystone_lit');
-          s.skills.fxRing(v.x, v.y - 10, 50, 0x7ff0ff, false);
+          s.vfx?.extra('waystone', v.x, v.y);
           ui.toast(`🔷 Waystone attuned: <b>${esc(s.def.name)}</b>`);
           ui.log('🔷 The waystone remembers you. Travel between attuned stones from here or any Waykeeper.', 'rare');
           if (!world.savePoint) world.savePoint = key;
@@ -362,7 +362,7 @@ export class Interactions {
       case 'wind_shrine':
         this.startChannel('🧘 Meditating...', 4000, true, () => {
           const n = book.incFlag('meditations');
-          s.skills.fxRing(s.player.x, s.player.y, 80, 0x9be8c8, true);
+          s.vfx?.extra('meditate', s.player.x, s.player.y);
           if (!book.learnElement('wind', 'Meditation at the Shrine of Winds')) ui.log(`🍃 Your mind clears. (${n} meditations)`, 'good');
           s.save();
         });
@@ -399,7 +399,7 @@ export class Interactions {
         const pl = s.session.player;
         pl.hp = st.maxHp;
         pl.sp = st.maxSp;
-        s.skills.fxRing(v.x, v.y - 6, 40, 0xffa040, false);
+        s.vfx?.extra('campfire', v.x, v.y);
         const ws = waystoneOf(s.def);
         if (ws) {
           const wsKey = objectKey(s.mapId, ws);
@@ -422,7 +422,7 @@ export class Interactions {
     }
     world.chests.push(key);
     v.sprite.setTexture('obj_chest_open');
-    s.skills.fxBurst(v.x, v.y - 12, 0xffd76a, 14);
+    s.vfx?.extra('chest', v.x, v.y);
     const loot = v.def.loot ?? {};
     const got: string[] = [];
     if (loot.coins) {
@@ -465,10 +465,10 @@ export class Interactions {
       world.nodes[nodeKey(s.mapId, d.id)] = Date.now() + NODE_RESPAWN_MS;
       s.refreshNodes();
       const total = s.session.addItem(info.item, 1);
+      // The sparkle at the node is the VFX runtime's (gather).
       gameBus.emit('gather', { node: d.kind, item: info.item, total, x: v.x, y: v.y, map: s.mapId });
       const n = book.incFlag(info.flag);
       const item = s.reg.item(info.item);
-      s.skills.fxBurst(v.x, v.y - 8, 0xf0d070, 8);
       ui.log(`${item?.icon ?? '✓'} +1 <b>${esc(item?.name ?? info.item)}</b> (${total} in bag)`, 'loot');
       if (d.kind === 'ore') {
         if (n === 6) ui.log('Your arms feel heavier — your swing has learned something from the stone.', 'rare');

@@ -16,7 +16,7 @@ import { CONSTELLATIONS, type ConstellationId, type StarChartData } from '../sta
 import { layoutStarChart } from '../starchart/layout';
 import { type SkyView, TINT, sharedSky } from '../starchart/sky';
 import { $, $$, hex } from '../util';
-import { type PanelHost, tabsHtml } from './common';
+import { type PanelHost, RESUMING, tabsHtml } from './common';
 import { essencesTab, listTab, passivesTab, sheet } from './skills';
 
 const TAB = 'skills.tab';
@@ -58,6 +58,11 @@ function openWith(host: PanelHost, arg?: string): void {
   delete host.state[DETAILS];
   focus = null;
   if (!arg) return;
+  // 'card:<id>': back from the picker (Equip with every slot full) — the same tab, that star's card, the camera as it was.
+  if (arg.startsWith('card:')) {
+    host.state[SEL] = arg.slice(5);
+    return;
+  }
   if (arg === 'chart' || arg === 'skills' || arg === 'list' || arg === 'passives' || arg === 'essences') {
     host.state[TAB] = arg === 'list' ? 'skills' : arg;
     return;
@@ -115,7 +120,8 @@ function selectedCard(host: PanelHost, data: StarChartData): CardModel | null {
 
 export function renderStarChart(host: PanelHost, arg?: string): void {
   const existing = host.modal.querySelector<HTMLElement>('.sheet.starchart');
-  const fresh = opened;
+  // Coming back from a discovery card re-emits uiOpen (the loop sleeps again): a resume, not an open.
+  const fresh = opened && !host.state[RESUMING];
   opened = false;
   if (fresh) openWith(host, arg);
   const tabs = tabsFor(host, (host.state[TAB] as string | undefined) ?? 'chart');

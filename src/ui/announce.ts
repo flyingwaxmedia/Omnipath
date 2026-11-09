@@ -7,7 +7,11 @@
 //
 // One card per moment: a quest turn-in teaches its skill with the book's 'learned' event first and then
 // 'questCompleted' — the skill goes on the quest's reward card instead of a second card.
+import { CLASS_SLOTS, classTreeTags } from '../core/classes';
+import type { Registry } from '../core/registry';
+import type { ClassDef } from '../core/types';
 import { gameBus } from '../game/events';
+import { tagWords } from '../game/steps';
 import type { GameController } from './controller';
 import type { DiscoveryCard } from './dialogs';
 import type { LogKind } from './hud';
@@ -74,6 +78,27 @@ export function movedObjective<T extends { have: number; done: boolean }>(prev: 
   return moved ?? now.find((o) => !o.done);
 }
 
+/** The kind of skill a class wants, in plain words: its tree's main tag ("fire", "piercing"), "elemental" for classes
+ *  built on many elements. */
+export function classSkillWord(reg: Registry, cls: ClassDef): string {
+  if (cls.distinctElements) return 'elemental';
+  const tag = classTreeTags(reg, cls)[0] ?? cls.clauses[0]?.tags[0];
+  return tag ? tagWords([tag]) : '';
+}
+
+/**
+ * The line under "You are now a Pyroblade" (docs/UX-SIMPLE.md: one short line): "All class slots filled" when the
+ * class filled every class slot (no digit: the pixel font's 5 reads like an S), "3 class skills equipped" when it
+ * filled some, or — when it knows nothing it relates to — the one next step ("Learn fire skills to fill your class
+ * slots"). Never "Class skills equipped" over empty slots.
+ */
+export function classSlotsLine(reg: Registry, cls: ClassDef, filled: number, slots = CLASS_SLOTS): string {
+  if (filled > 0 && filled >= slots) return 'All class slots filled';
+  if (filled > 0) return `${filled} class skill${filled === 1 ? '' : 's'} equipped`;
+  const word = classSkillWord(reg, cls);
+  return `Learn ${word ? `${word} ` : 'more '}skills to fill your class slots`;
+}
+
 /** Subscribes every announcement; returns the unsubscribe function. */
 export function wireAnnouncements(ui: AnnounceHost, ctrl: GameController): () => void {
   const ev = ctrl.book.events;
@@ -88,6 +113,15 @@ export function wireAnnouncements(ui: AnnounceHost, ctrl: GameController): () =>
     }
   };
   const onBar = (id: string) => ctrl.barSlots().some((s) => s.skillId === id);
+  /** Class slots the worn class has filled right now, of how many (none filled when the view is not ready). */
+  const classFill = (): { filled: number; slots: number } => {
+    try {
+      const slots = ctrl.barSlots().filter((s) => s.kind === 'class');
+      return { filled: slots.filter((s) => s.skillId).length, slots: slots.length };
+    } catch {
+      return { filled: 0, slots: CLASS_SLOTS };
+    }
+  };
   /** "Equip" for a fresh skill that did not find a free slot (the picker opens when every own slot is full). */
   const equipCta = (id: string): DiscoveryCard['cta'] => {
     try {
@@ -221,7 +255,9 @@ export function wireAnnouncements(ui: AnnounceHost, ctrl: GameController): () =>
         kicker: 'NEW CLASS',
         accent: color,
         title: worn ? `You are now ${article(cls.name)}` : cls.name,
-        body: worn ? `${esc(oneLine(cls.desc))}<br><small>Its skills are in your class slots.</small>` : `${esc(oneLine(cls.desc))}`,
+        body: worn
+          ? `${esc(oneLine(cls.desc))}<br><small>${classFill().filled > 0 ? 'Its skills are in your class slots.' : `${esc(classSlotsLine(reg, cls, 0))}.`}</small>`
+          : `${esc(oneLine(cls.desc))}`,
         extra: icons ? `<div class="cskills">${icons}</div>` : undefined,
         ...(worn
           ? { okLabel: 'Great!' }
@@ -246,7 +282,9 @@ export function wireAnnouncements(ui: AnnounceHost, ctrl: GameController): () =>
         return;
       }
       const cls = reg.classDef(classId);
-      if (cls) ui.headline(`You are now ${article(cls.name)}`, 'Class skills equipped', ctrl.wornClass()?.color);
+      if (!cls) return;
+      const { filled, slots } = classFill();
+      ui.headline(`You are now ${article(cls.name)}`, classSlotsLine(reg, cls, filled, slots), ctrl.wornClass()?.color);
     }),
   );
   add(

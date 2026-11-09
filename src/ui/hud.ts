@@ -18,7 +18,23 @@ import { discoveredRoute } from '../game/world/runtime';
 import type { BarSlotView, GameController, PursuitView, ZoneView } from './controller';
 import { ensureUiArt } from './hud/art';
 import { HUD_WORDS, SPARK_RUNE, barTabsHtml, digits, pursuitHtml, slotHtml, statsHtml, zonePlateHtml, zoneStripHtml, type HudArt } from './hud/html';
-import { HOLD_MS, HOLD_SLOP, barLeft, barRows, barWidth, cooldownText, countText, expPercent, fitSnap, placeCentred, rowsThatFit } from './hud/layout';
+import {
+  HOLD_MS,
+  HOLD_SLOP,
+  type HudLayoutClasses,
+  type HudScale,
+  barLeft,
+  barRows,
+  barWidth,
+  cooldownText,
+  countText,
+  expPercent,
+  fitSnap,
+  hudLayoutClasses,
+  hudScale,
+  placeCentred,
+  rowsThatFit,
+} from './hud/layout';
 import { $, $$, esc, hex } from './util';
 
 export { SPARK_RUNE } from './hud/html';
@@ -139,6 +155,13 @@ export class Hud {
   private hinted = new Set<string>();
   private headTimer = 0;
   private toastTimers = new WeakMap<Element, number[]>();
+  /** The HUD's pixel size (CSS px per HUD art px = `--ui-px`) and the art-px viewport. */
+  private scale: HudScale = { px: 1, n: 1, w: 0, h: 0, fits: true };
+  /** The screen-size variants (classes on #hud-root). */
+  private lay: HudLayoutClasses = { port: false, narrow: false, short: false, big: false };
+  private layKey = '';
+  /** Measures the HUD's length variables (calc(N * var(--px)) expressions) in CSS px. */
+  private probe!: HTMLElement;
 
   constructor(
     readonly root: HTMLElement,
@@ -195,7 +218,8 @@ export class Hud {
       <div class="spark-banner"><b></b><small></small></div>
       <div class="headline" aria-live="polite"><div class="hl-card"><span class="hl-art"></span><span class="hl-txt"><b></b><small></small></span></div></div>
       <div class="channel hidden"><div class="ch-label"></div><div class="cbar"><i></i></div></div>
-      <div class="castbar hidden" aria-hidden="true"><div class="cb-label"><img class="cb-ico" alt=""><span class="cb-name"></span></div><div class="cbar"><i></i></div></div>`;
+      <div class="castbar hidden" aria-hidden="true"><div class="cb-label"><img class="cb-ico" alt=""><span class="cb-name"></span></div><div class="cbar"><i></i></div></div>
+      <i class="hud-probe" aria-hidden="true" style="position:absolute;left:0;top:0;height:0;visibility:hidden;pointer-events:none"></i>`;
     const q = <T extends HTMLElement = HTMLElement>(sel: string) => $<T>(this.el, sel);
     this.me = q('.hud-me');
     this.centre = q('.hud-centre');
@@ -219,6 +243,7 @@ export class Hud {
     this.navEl = q('.navpill');
     this.sparkEl = q('.spark-banner');
     this.headEl = q('.headline');
+    this.probe = q('.hud-probe');
     for (const [k, sel] of [
       ['face', '.m-face img'],
       ['lvb', '.m-lv'],
@@ -242,6 +267,11 @@ export class Hud {
       for (const e of [this.me, this.right, this.zoneEl, this.cluster, this.hotbar, this.mmDock]) ro.observe(e);
     }
     window.addEventListener('resize', () => this.queueLayout());
+    // The render lane re-fits the world's pixel scale (--art-px on <html>) on resize / orientation / DPR changes: the
+    // HUD follows it (its own --ui-px write lands here too and settles after one pass).
+    if (typeof MutationObserver !== 'undefined')
+      new MutationObserver(() => this.queueLayout()).observe(document.documentElement, { attributes: true, attributeFilter: ['style'] });
+    this.applyScale(window.innerWidth, window.innerHeight);
   }
 
   /** The button row element (kept for callers that dock next to it). */
@@ -433,7 +463,34 @@ export class Hud {
   }
 
   private portraitPhone(): boolean {
-    return window.matchMedia('(orientation: portrait) and (max-width: 599px)').matches;
+    return this.lay.port;
+  }
+
+  /**
+   * The HUD's pixel size for this screen (./hud/layout.ts hudScale: the world's k device px per art px when the layout
+   * fits) and its screen-size classes, measured in HUD art px. Writes `--ui-px` on <html> and the classes on #hud-root.
+   */
+  private applyScale(W: number, H: number): void {
+    const dpr = window.devicePixelRatio || 1;
+    const art = parseFloat(document.documentElement.style.getPropertyValue('--art-px'));
+    const k = art > 0 ? Math.round(art * dpr) : Math.ceil(dpr);
+    const s = hudScale(W, H, dpr, k);
+    const lay = hudLayoutClasses(s.w, s.h);
+    const key = `${s.px}|${lay.port}|${lay.narrow}|${lay.short}|${lay.big}`;
+    this.scale = s;
+    this.lay = lay;
+    if (key === this.layKey) return;
+    this.layKey = key;
+    document.documentElement.style.setProperty('--ui-px', `${s.px}px`);
+    for (const c of ['port', 'narrow', 'short', 'big'] as const) this.root.classList.toggle(`hud-${c}`, lay[c]);
+    this.sizeFace();
+  }
+
+  /** A HUD length variable in CSS px (`fb` art px when it is missing). */
+  private len(name: string, fb: number): number {
+    this.probe.style.width = `var(${name})`;
+    const w = this.probe.getBoundingClientRect().width;
+    return w > 0 ? w : fb * this.scale.px;
   }
 
   /** Places the zone plate, skill bar, log and Pursuits for this screen (no overlaps; see ./hud/layout.ts). */
@@ -441,75 +498,104 @@ export class Hud {
     if (!this.el.isConnected) return;
     const W = window.innerWidth;
     const H = window.innerHeight;
-    const cs = getComputedStyle(this.el);
-    const num = (name: string, fb: number) => parseFloat(cs.getPropertyValue(name)) || fb;
-    const m = num('--m', 8);
+    this.applyScale(W, H);
+    // Every HUD length is in HUD art px: u CSS px each (the constants below are art px too).
+    const u = this.scale.px;
     const dpr = window.devicePixelRatio || 1;
-    // Icons: crisp whole-pixel sizes inside the slot frames.
-    const slot = num('--slot', 52);
-    const ico = fitSnap(slot - 12, 32, dpr);
-    this.setVar('--ico', `${ico}px`);
-    this.setVar('--glyph', `${fitSnap(Math.min(30, slot - 22), 24, dpr)}px`);
+    const snap = (v: number) => Math.round(v * dpr) / dpr;
+    const m = this.len('--m', 8);
+    // Icons: one icon pixel = one HUD art pixel (32 art px) when the slot frame leaves room, else the largest crisp size.
+    const slot = this.len('--slot', 52);
+    const crisp = (room: number, art: number) => (room >= art * u - 0.01 ? art * u : fitSnap(room, art, dpr));
+    this.setVar('--ico', `${crisp(slot - 12 * u, 32)}px`);
+    this.setVar('--glyph', `${crisp(Math.min(30 * u, slot - 22 * u), 24)}px`);
     // Skill bar: rows, width, and its left edge (centred, clear of the attack cluster).
     const n = this.slots.length || 1;
     const rows = barRows(n, this.portraitPhone());
     const per = rows[0] ?? n;
-    const gap = num('--sgap', 4);
+    const gap = this.len('--sgap', 4);
     const bw = barWidth(per, slot, gap);
     this.setVar('--per-row', String(per));
     this.setVar('--bar-w', `${bw}px`);
     const cl = this.cluster.getBoundingClientRect();
-    const left = barLeft(bw, W, cl.width ? cl.left : W, 10, m);
-    this.setVar('--bar-left', `${Math.round(left)}px`);
+    const left = barLeft(bw, W, cl.width ? cl.left : W, 10 * u, m);
+    this.setVar('--bar-left', `${snap(left)}px`);
     // Full height (slots + the class / yours tabs): the stacked log and the cast bar sit above it.
     const barH = this.hotbar.offsetHeight || rows.length * slot + (rows.length - 1) * gap;
     this.setVar('--bar-h', `${barH}px`);
     // Log: left of the bar when there is room, else stacked above it.
     const room = left - 2 * m;
-    this.logEl.classList.toggle('stacked', room < 170);
-    this.setVar('--log-w', `${Math.round(room < 170 ? Math.min(320, W * 0.62) : Math.min(340, room))}px`);
+    const stacked = room < 170 * u;
+    this.logEl.classList.toggle('stacked', stacked);
+    this.setVar('--log-w', `${snap(stacked ? Math.min(320 * u, W * 0.62) : Math.min(340 * u, room))}px`);
     // Stat strip: when the buttons stack into rows beside it (portrait phones), its text stops short of them (only the
     // fading right padding may slide under the buttons).
     const menu = this.menuEl.getBoundingClientRect();
     const st = this.v.stats.getBoundingClientRect();
-    const statsRoom = menu.width > 0 && menu.bottom > st.top && menu.left > st.left ? `${Math.max(80, Math.floor(menu.left + 8 - st.left))}px` : '9999px';
+    const statsRoom = menu.width > 0 && menu.bottom > st.top && menu.left > st.left ? `${snap(Math.max(80 * u, menu.left + 8 * u - st.left))}px` : '9999px';
     this.setVar('--stats-room', statsRoom);
     // Zone plate (+ target / toasts under it): centred in the top row if it fits, else on a second row.
     const me = this.me.getBoundingClientRect();
     const plate = $(this.me, '.me-plate').getBoundingClientRect();
     const zw = this.zoneEl.offsetWidth;
     const zh = this.zoneEl.offsetHeight;
-    const topRowRight = Math.max(plate.right, me.left + 8);
-    let x = placeCentred(zw, W, topRowRight + 10, menu.left - 10);
+    const topRowRight = Math.max(plate.right, me.left + 8 * u);
+    let x = placeCentred(zw, W, topRowRight + 8 * u, menu.left - 8 * u);
     let top = Math.max(m, menu.top);
-    let lo = topRowRight + 10;
-    let hi = menu.left - 10;
+    let lo = topRowRight + 8 * u;
+    let hi = menu.left - 8 * u;
     if (x === null) {
-      top = Math.max(me.bottom, menu.bottom) + 6;
+      top = Math.max(me.bottom, menu.bottom) + 6 * u;
       const mm = this.mmDock.getBoundingClientRect();
       const pz = this.pzEl.getBoundingClientRect();
-      const blockers = [mm, pz].filter((r) => r.width > 0 && r.top < top + zh + 60 && r.bottom > top);
+      const blockers = [mm, pz].filter((r) => r.width > 0 && r.top < top + zh + 60 * u && r.bottom > top);
       lo = m;
-      hi = Math.min(W - m, ...blockers.map((r) => r.left - 8));
-      x = placeCentred(zw, W, lo, hi) ?? lo;
+      hi = Math.min(W - m, ...blockers.map((r) => r.left - 8 * u));
+      x = placeCentred(zw, W, lo, hi);
+      // Still no room beside the minimap (narrow phones, long place names): step down past whatever sits in the
+      // plate's own row until it fits beside the rest.
+      for (let i = 0; i < 3 && x === null; i++) {
+        const row = [mm, pz].filter((r) => r.width > 0 && r.top < top + zh && r.bottom > top);
+        if (!row.length) break;
+        top = Math.min(...row.map((r) => r.bottom)) + 6 * u;
+        const next = [mm, pz].filter((r) => r.width > 0 && r.top < top + zh && r.bottom > top);
+        hi = Math.min(W - m, ...next.map((r) => r.left - 8 * u));
+        x = placeCentred(zw, W, lo, hi);
+      }
+      x ??= lo;
     }
     const cx = x + zw / 2;
-    this.centre.style.left = `${Math.round(cx)}px`;
-    this.centre.style.top = `${Math.round(top)}px`;
+    this.centre.style.left = `${snap(cx)}px`;
+    this.centre.style.top = `${snap(top)}px`;
     // Toasts / target under the plate: as wide as the space between whatever sits beside them allows.
     const below = top + zh;
-    const side = (r: DOMRect) => r.width > 0 && r.top < below + 120 && r.bottom > below;
+    const side = (r: DOMRect) => r.width > 0 && r.top < below + 200 * u && r.bottom > below;
     const leftBlocks = [me, this.el.querySelector('.quick')!.getBoundingClientRect()].filter(side);
     const rightBlocks = [this.mmDock.getBoundingClientRect(), this.pzEl.getBoundingClientRect(), menu].filter(side);
-    const lo2 = Math.max(m, ...leftBlocks.map((r) => r.right + 8));
-    const hi2 = Math.min(W - m, ...rightBlocks.map((r) => r.left - 8));
+    const lo2 = Math.max(m, ...leftBlocks.map((r) => r.right + 8 * u));
+    const hi2 = Math.min(W - m, ...rightBlocks.map((r) => r.left - 8 * u));
     // Toasts: centred under the plate when there is room, else slid sideways into the free span.
-    const want = Math.min(440, Math.max(zw, hi2 - lo2));
+    const want = Math.min(440 * u, Math.max(zw, hi2 - lo2));
     const tcx = 2 * Math.min(cx - lo2, hi2 - cx) >= want ? cx : Math.max(lo2 + want / 2, Math.min(hi2 - want / 2, cx));
     this.setVar('--centre-w', `${Math.floor(Math.max(zw, 2 * Math.min(tcx - lo2, hi2 - tcx)))}px`);
-    this.setVar('--toast-dx', `${Math.round(tcx - cx)}px`);
+    this.setVar('--toast-dx', `${snap(tcx - cx)}px`);
     // Pursuits: only the rows that fit above the attack cluster.
-    this.fitPursuits(cl.width ? cl.top - 10 : H - 120);
+    this.fitPursuits(cl.width ? cl.top - 10 * u : H - 120 * u);
+    this.fitToasts();
+  }
+
+  /** Toasts never reach the skill bar: on short screens the oldest steps aside first. */
+  private fitToasts(): void {
+    const kids = Array.from(this.toastEl.children) as HTMLElement[];
+    for (const k of kids) k.classList.remove('cut');
+    if (!kids.length) return;
+    const bar = this.hotbar.getBoundingClientRect();
+    if (!bar.height) return;
+    const limit = bar.top - 4 * this.scale.px;
+    for (const k of kids.slice(0, -1)) {
+      if (this.toastEl.getBoundingClientRect().bottom <= limit) break;
+      k.classList.add('cut');
+    }
   }
 
   private setVar(name: string, value: string): void {
@@ -616,18 +702,23 @@ export class Hud {
     if (!url) return;
     this.last.face = key;
     const img = this.v.face as HTMLImageElement;
-    img.onload = () => {
-      // Show the head: 2× the sprite, its head (≈ the top third) centred in the medallion window.
-      const w = img.naturalWidth || 40;
-      const h = img.naturalHeight || 48;
-      img.style.width = `${w * 2}px`;
-      img.style.height = `${h * 2}px`;
-      img.style.setProperty('--hy', `${Math.round(h * 0.3) * 2}px`);
-    };
+    img.onload = () => this.sizeFace();
     img.src = url;
     const worn = c.wornClass();
     $(this.me, '.me-medal').style.setProperty('--cc', worn?.color ?? 'transparent');
     $(this.me, '.me-medal').setAttribute('aria-label', worn ? `${worn.name}: open your class` : 'Open your class');
+  }
+
+  /** The portrait: 2 HUD art px per sprite px, its head (≈ the top third) centred in the medallion window. */
+  private sizeFace(): void {
+    const img = this.v.face as HTMLImageElement | undefined;
+    if (!img?.complete || !img.naturalWidth) return;
+    const u = this.scale.px;
+    const w = img.naturalWidth || 40;
+    const h = img.naturalHeight || 48;
+    img.style.width = `${w * 2 * u}px`;
+    img.style.height = `${h * 2 * u}px`;
+    img.style.setProperty('--hy', `${Math.round(h * 0.3) * 2 * u}px`);
   }
 
   /** Gold "new" dots and progressive disclosure (Fuse after the first element). */
@@ -939,6 +1030,7 @@ export class Hud {
     this.toastEl.appendChild(t);
     while (this.toastEl.children.length > 3) this.toastEl.firstElementChild?.remove();
     this.armToast(t);
+    this.fitToasts();
   }
 
   private armToast(t: HTMLElement): void {

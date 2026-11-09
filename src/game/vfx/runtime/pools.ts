@@ -27,8 +27,9 @@ export class ImagePool {
     return CAPS[this.tier];
   }
 
-  get(tex: string, frame: string): Phaser.GameObjects.Image | null {
-    if (this.live >= this.cap) {
+  /** `soft` (0..1): refuse beyond that share of the cap (low-priority pieces). */
+  get(tex: string, frame: string, soft = 1): Phaser.GameObjects.Image | null {
+    if (this.live >= this.cap * soft) {
       this.refused++;
       return null;
     }

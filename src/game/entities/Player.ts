@@ -1,10 +1,11 @@
 // The player's body in the world (actors lane): an animated sprite that plays idle / walk / attack from its look
 // (the weapon look `player_<w>` or the worn class's outfit `player_<w>__<classId>`, art/classLooks.ts), its shadow,
-// name tag (bitmap pixel font), buff rings, wind-up bar, status icons and — at Tier III — aura motes.
+// name tag (bitmap pixel font), wind-up bar and status icons.
 // Game systems drive it through the members below (position, path, timers, statuses, attackAnim, setCast, sync…).
+// Buff auras, the Tier III class aura, status overlays (stun stars, frost, poison…) and the hurt flash's colours are
+// the VFX runtime's; the body takes the hit feel through hold / impactFlash / squash / recoil (vfx/juice.ts).
 import Phaser from 'phaser';
 import type { StatusKind, WeaponType } from '../../core/types';
-import { auraColor } from '../art/classLooks';
 import { DEPTH, ySort } from '../render/depths';
 import { type WorldLabel, worldLabel } from '../render/text';
 import { PLAYER_STATUS_ICONS, statusIconKey } from './actorArt';
@@ -28,21 +29,11 @@ const ATK_MS = 190;
 const ICON = 9;
 const ICON_GAP = 1;
 
-interface Mote {
-  x: number;
-  y: number;
-  vy: number;
-  born: number;
-  life: number;
-  size: number;
-}
-
 export class Player {
   readonly sprite: Phaser.GameObjects.Sprite;
   readonly shadow: Phaser.GameObjects.Image;
   /** Name tag under the feet (bitmap pixel font). */
   readonly nameText: WorldLabel;
-  readonly aura: Phaser.GameObjects.Graphics;
   /** Wind-up bar drawn above the head while a castMs skill charges. */
   readonly castBar: Phaser.GameObjects.Graphics;
   path: { x: number; y: number }[] = [];
@@ -74,17 +65,18 @@ export class Player {
   lookKey = '';
   private anims: { idle: string | null; walk: string | null; atk: string | null } = { idle: null, walk: null, atk: null };
   private lunge = 0;
-  private hurtUntil = 0;
   private atkUntil = 0;
+  /** Juice: tint-fill frames to show, a flash on screen, squash frames, recoil offsets, the hold. */
+  private flashQ: number[] = [];
+  private flashing = false;
+  private squashF = 0;
+  private recoilQ: { x: number; y: number }[] = [];
+  private holdUntil = 0;
+  private held: { x: number; y: number } | null = null;
   private castColor = 0x9fe0ff;
   private castProgress: number | null = null;
   private icons: Phaser.GameObjects.Image[] = [];
   private iconKey = '';
-  /** Tier III aura motes (rising pixels in the class's aura colour). */
-  private readonly motes: Phaser.GameObjects.Graphics;
-  private moteList: Mote[] = [];
-  private moteAt = 0;
-  private moteColor: number | null = null;
 
   constructor(
     readonly scene: Phaser.Scene,
@@ -95,9 +87,7 @@ export class Player {
   ) {
     this.weapon = weapon;
     this.shadow = scene.add.image(x, y, 'shadow').setDepth(DEPTH.SHADOW);
-    this.aura = scene.add.graphics().setDepth(DEPTH.AURA);
     this.sprite = scene.add.sprite(x, y, `player_${weapon}`).setOrigin(0.5, 0.95);
-    this.motes = scene.add.graphics();
     this.castBar = scene.add.graphics().setDepth(DEPTH.CAST_BAR);
     this.nameText = worldLabel(scene, x, y + 4, name, { color: '#ffffff', originY: 0 });
     this.applyLook();
@@ -121,11 +111,6 @@ export class Player {
     const base = ensurePlayerLook(this.scene, this.weapon, this.classId);
     this.lookKey = base;
     this.anims = playerAnims(this.scene, base);
-    this.moteColor = auraColor(this.classId);
-    if (this.moteColor === null) {
-      this.moteList = [];
-      this.motes.clear();
-    }
     const now = this.scene.time.now;
     const key = now < this.atkUntil ? this.anims.atk : this.moving ? this.anims.walk : this.anims.idle;
     if (key) this.sprite.play(key, false);
@@ -206,10 +191,8 @@ export class Player {
     this.stunUntil += ms;
     this.frozenUntil += ms;
     this.ccImmuneUntil += ms;
-    this.hurtUntil += ms;
     this.atkUntil += ms;
-    this.moteAt += ms;
-    for (const m of this.moteList) m.born += ms;
+    this.holdUntil += ms;
     for (const d of this.dots) {
       d.until += ms;
       d.next += ms;
@@ -217,43 +200,43 @@ export class Player {
     for (const k of Object.keys(this.marks) as StatusKind[]) this.marks[k]! += ms;
   }
 
-  sync(dt: number, auraColors: number[]): void {
+  /** Per frame. (`_auraColors`: the buff colours MapScene still passes; the VFX aura loops draw buffs now.) */
+  sync(dt: number, _auraColors?: number[]): void {
     const now = this.scene.time.now;
-    this.lunge = Math.max(0, this.lunge - dt * 6);
+    const held = now < this.holdUntil && this.held !== null;
+    if (!held) this.held = null;
+    if (!held) this.lunge = Math.max(0, this.lunge - dt * 6);
     const lx = Math.cos(this.aimAngle) * this.lunge * 3;
     const ly = Math.sin(this.aimAngle) * this.lunge * 3;
     const stunned = now < this.stunUntil;
     const shake = stunned && now >= this.frozenUntil ? Math.sin(now / 25) * 1.2 : 0;
     const s = this.sprite;
-    s.setPosition(this.x + lx + shake, this.y + ly);
+    const rc = this.recoilQ[0];
+    if (rc && !held) this.recoilQ.shift();
+    const bx = held ? this.held!.x : this.x;
+    const by = held ? this.held!.y : this.y;
+    s.setPosition(bx + lx + shake + (rc?.x ?? 0), by + ly + (rc?.y ?? 0));
     s.setFlipX(this.facing < 0);
     s.setDepth(ySort(this.y));
-    this.syncAnim(now, stunned);
-    if (now < this.hurtUntil) s.setTintFill(0xff4444);
-    else if (now < this.frozenUntil) s.setTint(0xaee9ff);
-    else if ((this.marks.poison ?? 0) > now) s.setTint(0xd0f0b8);
-    else s.clearTint();
+    if (this.squashF > 0) {
+      // 1-frame squash: 2 px wider, 2 px shorter.
+      this.squashF--;
+      s.setScale((s.width + 2) / Math.max(8, s.width), (s.height - 2) / Math.max(8, s.height));
+    } else if (s.scaleX !== 1 || s.scaleY !== 1) s.setScale(1, 1);
+    if (held) {
+      if (s.anims.isPlaying) s.anims.pause();
+    } else this.syncAnim(now, stunned);
+    // Impact flash frames (white -> colour), one per rendered frame; frost / poison read from the VFX overlays.
+    if (this.flashQ.length) {
+      s.setTintFill(this.flashQ.shift()!);
+      this.flashing = true;
+    } else if (this.flashing || s.isTinted) {
+      this.flashing = false;
+      s.clearTint();
+    }
     this.shadow.setPosition(this.x, this.y + 1);
     this.nameText.setPosition(Math.round(this.x), Math.round(this.y + 4));
-    this.aura.clear();
-    auraColors.forEach((col, i) => {
-      const t = now / 300 + i;
-      this.aura.lineStyle(2, col, 0.55 + Math.sin(t) * 0.25);
-      this.aura.strokeEllipse(this.x, this.y, 30 + i * 6, 12 + i * 3);
-    });
-    if (this.moteColor !== null) {
-      // Tier III: a faint ring at the feet in the aura colour, breathing slowly — on the ground layer, under the boots
-      const k = 0.5 + 0.5 * Math.sin(now / 520);
-      this.aura.lineStyle(1, this.moteColor, 0.25 + 0.25 * k).strokeEllipse(Math.round(this.x), Math.round(this.y), 26 + 2 * k, 10 + k);
-    }
-    if (stunned && now >= this.frozenUntil) {
-      for (let i = 0; i < 3; i++) {
-        const a = now / 160 + (i * Math.PI * 2) / 3;
-        this.aura.fillStyle(0xfff3a0, 1).fillRect(Math.round(this.x + Math.cos(a) * 12) - 1, Math.round(this.y - 50 + Math.sin(a) * 4) - 1, 3, 3);
-      }
-    }
     if (this.castProgress !== null) this.drawCast();
-    this.syncMotes(now);
     this.syncStatusIcons(now);
   }
 
@@ -275,36 +258,6 @@ export class Player {
     if (!want) return;
     if (s.anims.currentAnim?.key !== want || !s.anims.isPlaying) s.play(want, true);
     s.anims.timeScale = this.moving ? Math.max(0.5, this.speedMult(now)) : 1;
-  }
-
-  /** Tier III aura: a few pixels in the class's colour rising around the body (the feet ring is drawn in `aura`). */
-  private syncMotes(now: number): void {
-    const col = this.moteColor;
-    const g = this.motes;
-    if (col === null) return;
-    g.clear();
-    if (now >= this.moteAt && this.sprite.angle === 0) {
-      this.moteAt = now + 80 + ((now * 7) % 50);
-      const k = this.moteList.length;
-      const side = k % 2 ? 1 : -1;
-      this.moteList.push({
-        x: this.x + side * (5 + ((now / 7) % 9)),
-        y: this.y - 4 - ((now / 3) % 30),
-        vy: 14 + ((now / 11) % 10),
-        born: now,
-        life: 900 + ((now / 5) % 400),
-        size: (now / 13) % 3 < 2 ? 2 : 1,
-      });
-    }
-    this.moteList = this.moteList.filter((m) => now - m.born < m.life);
-    for (const m of this.moteList) {
-      const t = (now - m.born) / m.life;
-      const a = t < 0.2 ? t / 0.2 : 1 - (t - 0.2) / 0.8;
-      g.fillStyle(col, Math.max(0, a));
-      g.fillRect(Math.round(m.x), Math.round(m.y - (m.vy * (now - m.born)) / 1000), m.size, m.size);
-      if (m.size === 2 && a > 0.6) g.fillStyle(0xffffff, a * 0.7).fillRect(Math.round(m.x), Math.round(m.y - (m.vy * (now - m.born)) / 1000), 1, 1);
-    }
-    g.setDepth(ySort(this.y, 1));
   }
 
   /** Pixel icons over the head for the statuses on the player (never colour alone; no emoji in-world). */
@@ -330,7 +283,30 @@ export class Player {
     iconRow(this.x, kinds.length, ICON, ICON_GAP).forEach((x, i) => this.icons[i].setPosition(x, y));
   }
 
+  /** Hurt: a 2-frame red flash (the VFX juice rig replaces it with white -> red on technique and claw hits). */
   hurt(): void {
-    this.hurtUntil = this.scene.time.now + 90;
+    this.impactFlash([0xff4444, 0xff4444]);
+  }
+
+  // ---------------------------------------------------------------- juice (vfx/juice.ts JuiceActor)
+
+  /** Hit-stop on the player's body: the sprite and its frame hold (movement and timers keep running). */
+  hold(ms: number): void {
+    const now = this.scene.time.now;
+    if (now >= this.holdUntil || !this.held) this.held = { x: this.x, y: this.y };
+    this.holdUntil = Math.max(this.holdUntil, now + ms);
+  }
+
+  impactFlash(frames: readonly number[]): void {
+    this.flashQ = [...frames];
+  }
+
+  squash(): void {
+    this.squashF = 1;
+  }
+
+  recoil(ang: number, px: number): void {
+    const at = (k: number) => ({ x: Math.round(Math.cos(ang) * k), y: Math.round(Math.sin(ang) * k * 0.5) });
+    this.recoilQ = [at(px), at(Math.round(px / 2)), at(0)];
   }
 }

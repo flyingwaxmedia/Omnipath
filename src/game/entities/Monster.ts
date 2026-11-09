@@ -1,6 +1,9 @@
 // A monster's body in the world (actors lane): an animated sprite (MONSTER_ANIMS — walk frames while it moves, a slow
 // idle otherwise), shadow, elite / warden aura, HP bar and a name plate in the bitmap pixel font. Game systems drive
 // it through the members below (position, timers, statuses, stepToward, moveTo, flash, sync, reset…).
+// Hit feel (vfx/juice.ts JuiceActor): hold (victim-local hit-stop: the sprite and its frame freeze, gameplay does
+// not), impactFlash (tint-fill frames, one per rendered frame), a 1-frame squash and a whole-pixel recoil. The wind-up
+// glow, buff auras and status overlays (stun stars…) are the VFX runtime's.
 import Phaser from 'phaser';
 import type { BuffStat, ElementDef, MonsterDef, StatusKind } from '../../core/types';
 import { isBlockedPx } from '../../core/world/compile';
@@ -103,7 +106,13 @@ export class Monster {
   /** A chevron is shown over this monster (entities/actors.ts): the name plate makes room above the HP bar. */
   chevron = false;
   private bob = Math.random() * Math.PI * 2;
-  private flashUntil = 0;
+  /** Juice: tint-fill frames still to show, a flash on screen, squash frames, recoil offsets, the hold. */
+  private flashQ: number[] = [];
+  private flashing = false;
+  private squashF = 0;
+  private recoilQ: { x: number; y: number }[] = [];
+  private holdUntil = 0;
+  private held: { x: number; y: number } | null = null;
   private _label: WorldLabel | null = null;
   private lastX: number;
   private lastY: number;
@@ -246,12 +255,12 @@ export class Monster {
     else if (!isBlockedPx(map, this.x, ny)) this.y = ny;
   }
 
+  /** The resting tint (TintArbiter order: impact flash frames > frozen > stunned > slowed > elite / def tint). */
   restoreTint(): void {
-    const now = this.scene.time.now;
-    if (now < this.flashUntil) return;
+    if (this.flashQ.length || this.flashing) return;
     if (this.frozen) this.sprite.setTint(0xaee9ff);
     else if (this.stunned) this.sprite.setTint(0xdddddd);
-    else if (now < this.status.slowUntil) this.sprite.setTint(0x9fd8ff);
+    else if (this.scene.time.now < this.status.slowUntil) this.sprite.setTint(0x9fd8ff);
     else if (this.def.tint !== undefined) this.sprite.setTint(this.def.tint);
     else this.sprite.clearTint();
   }
@@ -266,17 +275,39 @@ export class Monster {
       this.moving = true;
       this.stillFor = 0;
     } else if ((this.stillFor += dt) > 0.12) this.moving = false;
-    this.bob += dt * (this.stunned ? 0 : this.enraged ? 9 : 6);
+    const held = now < this.holdUntil && this.held !== null;
+    if (!held) this.held = null;
+    if (!held) this.bob += dt * (this.stunned ? 0 : this.enraged ? 9 : 6);
     // The frames carry the motion now: only a faint breath on walkers, none on flyers.
-    const squash = this.hover || this.moving ? 1 : 1 + Math.sin(this.bob) * 0.02;
-    const swell = 1 + this.charge * 0.08;
+    const breath = this.hover || this.moving ? 1 : 1 + Math.sin(this.bob) * 0.02;
     const scale = this.baseScale;
-    this.sprite.setPosition(this.x, this.y);
+    // Recoil: whole pixels along the blow, held through the hit-stop, then home one step per frame.
+    const rc = this.recoilQ[0];
+    if (rc && !held) this.recoilQ.shift();
+    const bx = held ? this.held!.x : this.x;
+    const by = held ? this.held!.y : this.y;
+    this.sprite.setPosition(Math.round(bx) + (rc?.x ?? 0), Math.round(by) + (rc?.y ?? 0));
     this.sprite.setFlipX(this.facing < 0);
-    this.sprite.setScale(scale * (1 / squash) * swell, scale * squash * swell);
+    if (this.squashF > 0) {
+      // 1-frame squash: 2 px wider, 2 px shorter (whole pixels of the drawn sprite).
+      this.squashF--;
+      const w = Math.max(8, this.sprite.width);
+      const h = Math.max(8, this.sprite.height);
+      this.sprite.setScale((scale * (w + 2 / scale)) / w, (scale * (h - 2 / scale)) / h);
+    } else this.sprite.setScale(scale * (1 / breath), scale * breath);
     this.shadow.setPosition(this.x, this.y + 1);
     this.sprite.setDepth(ySort(this.y));
-    this.syncAnim();
+    // Impact flash frames (white -> colour), then the normal tint.
+    if (this.flashQ.length) {
+      this.sprite.setTintFill(this.flashQ.shift()!);
+      this.flashing = true;
+    } else if (this.flashing) {
+      this.flashing = false;
+      this.restoreTint();
+    }
+    if (held) {
+      if (this.sprite.anims.isPlaying) this.sprite.anims.pause();
+    } else this.syncAnim();
     if (this.aura) this.drawAura(now);
     const top = this.top;
     if (this._label?.visible) this._label.setPosition(Math.round(this.x), Math.round(top - 3 - (this.chevron ? CHEVRON_ROOM : 0)));
@@ -287,14 +318,6 @@ export class Monster {
       g.fillStyle(0x000000, 0.6).fillRect(this.x - w / 2 - 1, top - 1, w + 2, 5);
       g.fillStyle(this.warden ? (this.enraged ? 0xff2a2a : 0xff4d6d) : 0xe84d4d, 1).fillRect(this.x - w / 2, top, (w * Math.max(0, this.hp)) / this.maxHp, 3);
       if (this.warden) g.fillStyle(0xffffff, 0.5).fillRect(this.x - 0.5, top - 1, 1, 5);
-    }
-    // Stun stars circle above the head (not while frozen: the ice tint says it).
-    if (this.stunned && !this.frozen) {
-      const r = this.radius * 0.7 + 6;
-      for (let i = 0; i < 3; i++) {
-        const a = now / 180 + (i * Math.PI * 2) / 3;
-        g.fillStyle(0xfff3a0, 0.95).fillCircle(this.x + Math.cos(a) * r, top - 6 + Math.sin(a) * r * 0.3, 2.2);
-      }
     }
   }
 
@@ -326,14 +349,7 @@ export class Monster {
       a.fillStyle(col, base + Math.sin(t) * 0.05).fillEllipse(this.x, this.y, rx * 2, rx * 0.8);
       a.lineStyle(2, col, (this.warden ? 0.3 : 0.45) + Math.sin(t) * 0.15).strokeEllipse(this.x, this.y, rx * 2, rx * 0.8);
     }
-    for (const b of this.buffs) {
-      if (b.until <= now) continue;
-      const k = 0.5 + 0.5 * Math.sin(now / 160);
-      a.lineStyle(2, b.color, 0.5 + 0.4 * k).strokeEllipse(this.x, this.y - 2, rx * 2.1, rx * 0.9);
-    }
-    if (this.charge > 0) {
-      a.fillStyle(this.chargeColor, 0.2 + 0.35 * this.charge).fillEllipse(this.x, this.y, rx * 2 * (0.6 + 0.5 * this.charge), rx * 0.8 * (0.6 + 0.5 * this.charge));
-    }
+    // Buff auras and the technique wind-up glow are the VFX runtime's (buffApplied, monsterTelegraph).
   }
 
   setVisible(v: boolean): void {
@@ -349,14 +365,31 @@ export class Monster {
     if (this._label || (v && this.warden)) this.label.setVisible(v && this.warden);
   }
 
+  /** A plain 2-frame tint flash (damage-over-time ticks). */
   flash(color = 0xff6666): void {
-    this.sprite.setTintFill(color);
-    this.flashUntil = this.scene.time.now + 70;
-    this.scene.time.delayedCall(70, () => {
-      if (!this.sprite.active) return;
-      this.sprite.clearTint();
-      this.restoreTint();
-    });
+    this.impactFlash([color, color]);
+  }
+
+  // ---------------------------------------------------------------- juice (vfx/juice.ts JuiceActor)
+
+  /** Victim-local hit-stop: the sprite and its frame hold for `ms` (gameplay keeps running underneath). */
+  hold(ms: number): void {
+    const now = this.scene.time.now;
+    if (now >= this.holdUntil || !this.held) this.held = { x: this.x, y: this.y };
+    this.holdUntil = Math.max(this.holdUntil, now + ms);
+  }
+
+  impactFlash(frames: readonly number[]): void {
+    this.flashQ = [...frames];
+  }
+
+  squash(): void {
+    this.squashF = 1;
+  }
+
+  recoil(ang: number, px: number): void {
+    const at = (k: number) => ({ x: Math.round(Math.cos(ang) * k), y: Math.round(Math.sin(ang) * k * 0.5) });
+    this.recoilQ = [at(px), at(Math.round(px / 2)), at(0)];
   }
 
   /** Moves every scene-time timer forward by `ms` (the world was paused or hit-stopped). */
@@ -371,6 +404,7 @@ export class Monster {
     for (const k of Object.keys(st.marks) as StatusKind[]) st.marks[k]! += ms;
     for (const b of this.buffs) b.until += ms;
     for (const [k, v] of this.techReadyAt) this.techReadyAt.set(k, v + ms);
+    this.holdUntil += ms;
     this.nextAttack += ms;
     this.nextWander += ms;
     this.busyUntil += ms;

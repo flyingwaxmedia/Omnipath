@@ -32,6 +32,19 @@ export interface PanelHost {
 
 export type PanelRender = (host: PanelHost, arg?: string) => void;
 
+/**
+ * `host.state` keys the UI sets around a re-open (src/ui/ui.ts):
+ * - RESUMING is true while the UI re-opens the panel that was under a discovery card (its uiOpen re-emit puts the game
+ *   loop back to sleep under a full-screen panel): a resume, not a fresh open — keep the selection and the camera.
+ * - OPENED_FROM is the panel (and arg) that was open when the current one was opened over it (the picker returns there).
+ */
+export const RESUMING = 'ui.resuming';
+export const OPENED_FROM = 'ui.from';
+export interface OpenedFrom {
+  panel: string;
+  arg?: string;
+}
+
 /** Tab bar HTML; wire it with wireTabs. */
 export function tabsHtml(key: string, tabs: [string, string][], current: string): string {
   return `<div class="tabs" role="tablist" data-tabs="${key}">${tabs

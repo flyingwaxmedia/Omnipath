@@ -13,11 +13,13 @@ import type { CompiledMap, MapDef } from '../../core/world/types';
 import { PROP_VARIANTS } from '../art/world';
 import { TILE } from '../world/runtime';
 import { cellHash } from './autotile';
+import { CameraRig } from './camera';
 import { currentScale } from './config';
 import { DEPTH, Y_BIAS, ySort } from './depths';
 import { type DressingItem, placeDressing, planDressing } from './dressing';
 import { type BakedGround, bakeGround } from './ground';
 import { clampScroll, cssToArt } from './pixelscale';
+import { vfxSettings } from '../vfx/runtime/settings';
 
 /** CSS px the persistent HUD covers along each screen edge. */
 export interface Insets {
@@ -59,6 +61,8 @@ export interface Stage {
   addTrauma(amount: number): void;
   /** Current trauma (QA). */
   readonly trauma: number;
+  /** The camera rig (render/camera.ts): trauma, kicks, governed flashes, the warden intro pan and the lead. */
+  readonly rig: CameraRig;
   destroy(): void;
 }
 
@@ -73,22 +77,6 @@ const DARK_RIM = 0.8;
 const DARK_REACH = 4096;
 /** Camera smoothing time constant (s): v2's lerp 0.12 per 60 fps frame. */
 const FOLLOW_TAU = 0.13;
-/** Camera rig: max shake (art px) at trauma 1, trauma decay per second, noise frequency (Hz). */
-const SHAKE_PX = 6;
-const TRAUMA_DECAY = 2;
-const SHAKE_HZ = 25;
-
-/** Smooth 1-D value noise in [-1, 1] (deterministic: shake never reads Math.random). */
-function noise1(t: number, seed: number): number {
-  const i = Math.floor(t);
-  const f = t - i;
-  const h = (n: number) => {
-    const x = Math.sin((n + seed * 101.3) * 127.1) * 43758.5453;
-    return (x - Math.floor(x)) * 2 - 1;
-  };
-  const u = f * f * (3 - 2 * f);
-  return h(i) * (1 - u) + h(i + 1) * u;
-}
 
 /** Dressing plans are pure per map: plan each map once per run. */
 const dressingPlans = new Map<string, readonly DressingItem[]>();
@@ -182,10 +170,8 @@ class PixelStage implements Stage {
   /** The part of the camera actually on screen (art px): the canvas overflows the viewport by < artStep art px at
    *  its right / bottom edge, and that strip is cropped, so bounds and centring use this size. */
   private view = { w: 0, h: 0 };
-  /** Camera rig: trauma 0..1, its clock (s) and the integer offset it adds to the scroll this frame. */
-  private tau = 0;
-  private shakeT = 0;
-  private shake = { x: 0, y: 0 };
+  /** Camera rig (render/camera.ts): shake + kicks after the map clamp, the look (pan / lead) before it. */
+  readonly rig: CameraRig;
   private readonly onResize = () => this.fit();
 
   constructor(
@@ -200,6 +186,8 @@ class PixelStage implements Stage {
     cam.setZoom(1);
     cam.setRoundPixels(true);
     cam.removeBounds();
+    this.rig = new CameraRig(scene, () => vfxSettings.reduceFlash);
+    this.rig.install(cam);
     const cols = Math.ceil(cm.w / CHUNK);
     const rows = Math.ceil(cm.h / CHUNK);
     this.props = new Culler(cols, rows, TILE * 3);
@@ -217,11 +205,11 @@ class PixelStage implements Stage {
   }
 
   get trauma(): number {
-    return this.tau;
+    return this.rig.trauma;
   }
 
   addTrauma(amount: number): void {
-    if (amount > 0) this.tau = Math.min(1, this.tau + amount);
+    this.rig.addTrauma(amount);
   }
 
   follow(target: FollowTarget, x: number, y: number): void {
@@ -279,13 +267,8 @@ class PixelStage implements Stage {
       this.cx += dx * a;
       this.cy += dy * a;
     }
-    // Camera rig: trauma² shake in whole art pixels, decaying 2 / s.
-    if (this.tau > 0) {
-      this.shakeT += Math.max(0, dt);
-      const k = SHAKE_PX * this.tau * this.tau;
-      this.shake = { x: Math.round(k * noise1(this.shakeT * SHAKE_HZ, 1)), y: Math.round(k * noise1(this.shakeT * SHAKE_HZ, 2)) };
-      this.tau = Math.max(0, this.tau - TRAUMA_DECAY * Math.max(0, dt));
-    } else if (this.shake.x || this.shake.y) this.shake = { x: 0, y: 0 };
+    // Camera rig: trauma² shake and kicks in whole art pixels, the warden pan / lead.
+    this.rig.update(dt, t, { w: this.view.w || cam.width, h: this.view.h || cam.height });
     this.place();
     this.dark?.setPosition(Math.round(t.x), Math.round(t.y - 16));
   }
@@ -300,6 +283,7 @@ class PixelStage implements Stage {
     this.decor.clear();
     this.dark = null;
     this.target = null;
+    this.rig.destroy();
   }
 
   // ------------------------------------------------------------------ camera
@@ -316,8 +300,9 @@ class PixelStage implements Stage {
     const ax = t ? Math.round(t.x) + Math.round(this.cx - t.x) : Math.round(this.cx);
     const ay = t ? Math.round(t.y) + Math.round(this.cy - t.y) : Math.round(this.cy);
     const r = this.range;
-    const sx = clampScroll(ax, this.view.w || cam.width, r.minX, r.maxX) + this.shake.x;
-    const sy = clampScroll(ay, this.view.h || cam.height, r.minY, r.maxY) + this.shake.y;
+    const rig = this.rig;
+    const sx = clampScroll(ax + rig.look.x, this.view.w || cam.width, r.minX, r.maxX) + rig.jolt.x;
+    const sy = clampScroll(ay + rig.look.y, this.view.h || cam.height, r.minY, r.maxY) + rig.jolt.y;
     if (cam.scrollX !== sx || cam.scrollY !== sy) cam.setScroll(sx, sy);
     this.props.cull(sx, sy, cam.width, cam.height);
     this.decor.cull(sx, sy, cam.width, cam.height);

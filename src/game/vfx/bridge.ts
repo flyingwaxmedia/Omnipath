@@ -23,9 +23,11 @@ import { hashSeed } from '../../core/rng';
 import type { SkillDef, StatusKind } from '../../core/types';
 import type { Monster } from '../entities/Monster';
 import type { EventBus, GameEvents, Pt, Scope } from '../events';
-import type { GhostSource, LivePt, PlayCtx, VfxGroup, VfxStage } from './play';
+import { holdFor } from './juice';
+import type { GhostSource, JuiceHooks, LivePt, PlayCtx, VfxGroup, VfxStage } from './play';
 import { piece, recipePieces } from './pieces';
-import { comboPieces, deriveVfx, extraPieces, impactPieces, statusPieces } from './recipe';
+import { RAMPS } from './ramps';
+import { comboPieces, deriveVfx, extraPieces, impactPieces, statusPieces, statusPip } from './recipe';
 import { ANCHOR_DY, VFX_BUDGET, type BodySize, type FamilyId, type HitOutcome, type HitRelation, type VfxPiece, type VfxRecipe } from './types';
 
 /** The live player view the bridge needs (entities/Player satisfies it). */
@@ -40,7 +42,14 @@ export interface BridgeHost {
   sceneNow(): number;
   /** Cast id of the wind-up in progress (Combat.windup.castId), or null. */
   windupId(): number | null;
+  /** Hit feel on the struck monster and the camera (juice rig); absent in tests that only check plays. */
+  juice?: JuiceHooks | null;
 }
+
+/** Recoil (art px) of a struck monster by the cast's weight; the player's light hits barely move anything. */
+const RECOIL = { light: 1, normal: 1, heavy: 2, ultimate: 3 } as const;
+/** Camera kick (art px) on the first hit of the player's own cast: none for light / normal blows. */
+const KICK = { light: 0, normal: 0, heavy: 2, ultimate: 3 } as const;
 
 interface CastState {
   recipe: VfxRecipe;
@@ -61,7 +70,7 @@ const has = (p: VfxPiece, t: string): boolean => (p.tags ?? []).includes(t as ne
 /** Body bucket of a monster from its sprite height. */
 export function bodyOf(m: Monster): BodySize {
   const h = m.sprite.displayHeight;
-  return m.def.rank === 'warden' || h > 80 ? 'W' : m.def.rank === 'elite' || h > 50 ? 'L' : h > 34 ? 'M' : 'S';
+  return m.def.rank === 'warden' || h > 76 ? 'W' : h > 50 ? 'L' : h > 30 ? 'M' : 'S';
 }
 
 /** The point an impact anchored `target dy -10` should land on: ~45 % up the body (Combat's old hit point). */
@@ -162,6 +171,10 @@ export class VfxBridge {
       const r = this.recipe(s);
       if (!r) continue;
       out.push(...recipePieces(r));
+      // Multi-hit strikes sweep back on odd swings: warm the reversed smear too.
+      if (s.shape.kind === 'strike' && ((s.shape.hits ?? 1) > 1 || r.riders.merge?.accent === 'extra')) {
+        for (const p of r.phases.cast ?? []) if (p.component === 'slash' && p.params.form !== 'chop') out.push({ ...p, params: { ...p.params, sense: (-p.params.sense) as 1 | -1 } });
+      }
       const base: HitOutcome = { index: 0, sincePrevMs: 1000, crit: false, relation: 'neutral', killed: false, target: 'monster' };
       for (const o of [{}, { crit: true }, { relation: 'strong' as const }, { relation: 'weak' as const }, { relation: 'immune' as const }, { index: 1, sincePrevMs: 40 }]) {
         out.push(...impactPieces(r, { ...base, ...o }));
@@ -506,7 +519,16 @@ export class VfxBridge {
     if (!e.resisted) c.lastHitAt = now;
     const pieces = impactPieces(r, out);
     const first = e.hitIndex === 0;
-    const hold = first && !e.reprise ? Math.min(VFX_BUDGET.hitStop.localMaxMs, r.juice.hitstopMs + (e.crit ? 17 : 0)) : 0;
+    // Victim-local hit-stop (coalesced, budgeted by the juice rig), scaled by how much of the health the blow took;
+    // the impact spark holds its hero frame exactly as long as the body does.
+    const want = !e.reprise && !e.resisted ? holdFor(r.juice.hitstopMs, e.crit, e.damage, m.maxHp ?? m.def?.hp ?? 1, first) : 0;
+    const juice = this.host.juice;
+    const hold = juice ? juice.hold(m, want) : want;
+    if (juice && !e.resisted) {
+      const el = (r.imbue ?? r.family) as keyof typeof RAMPS;
+      juice.impact(m, parseInt((RAMPS[el] ?? RAMPS.steel).R[4].slice(1), 16), e.ang, e.reprise ? 0 : RECOIL[r.weight]);
+      if (first && !e.reprise && KICK[r.weight]) juice.kick(e.ang, KICK[r.weight]);
+    }
     const target = hitPoint(m);
     const seed = this.seed(r, e.castId, `x${e.hitIndex}`);
     this.stage.play(pieces, { owner: 'player', target, body: m, caster: this.playerPt(), ang: e.ang, seed, victim: m, holdMs: hold, shift: !!e.reprise });
@@ -545,9 +567,21 @@ export class VfxBridge {
       })(),
       seed: hashSeed('status', e.kind, Math.round(this.stage.now())),
       alive: () => m.alive && (until === undefined || this.host.sceneNow() < until),
+      low: true,
     };
     if (ONE_SHOT.has(e.kind)) {
       this.stage.play(pieces, ctx);
+      return;
+    }
+    // Beyond 8 affected targets, newcomers show the 7x7 pip only (docs/VFX.md §6.4).
+    for (const [t, map] of this.statuses) {
+      for (const [k, g] of map) if (g.done) map.delete(k);
+      if (!map.size || !t.alive) this.statuses.delete(t);
+    }
+    if (!this.statuses.has(m) && this.statuses.size >= 8) {
+      const life = until === undefined ? undefined : Math.max(1, Math.round(until - this.host.sceneNow()));
+      const pip = statusPip(e.kind, src, 'player');
+      this.stage.play([life ? ({ ...pip, lifeMs: life } as VfxPiece) : pip], ctx);
       return;
     }
     let per = this.statuses.get(m);

@@ -559,7 +559,8 @@ export class Minimap {
       this.canvas.width = N;
       this.canvas.height = N;
     }
-    const d = N / css;
+    // Markers are sized in HUD art px: canvas px per CSS px × the HUD's CSS px per art px (--ui-px, set by the HUD).
+    const d = (N / css) * (parseFloat(document.documentElement.style.getPropertyValue('--ui-px')) || 1);
     const g = this.ctx;
 
     // framing: small maps are centred and zoomed to fit the circle

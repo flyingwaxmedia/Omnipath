@@ -22,7 +22,7 @@ import { type Buff, type Stats, expToNext } from '../session';
 import { gameBus } from '../events';
 import { DEPTH } from '../render/depths';
 import { TILE } from '../world/runtime';
-import { CFX, type Cast, type CombatHost, PLAYER_R, SkillSystem, castRef, clearShot, fxStyle, hex } from './SkillSystem';
+import { type Cast, type CombatHost, PLAYER_R, SkillSystem, castRef, clearShot, hex } from './SkillSystem';
 
 const GLOOMCAPS_FOR_SHADOW = 5;
 /** Dealt or took damage within this window = in combat (buff use XP). */
@@ -41,8 +41,6 @@ const ARC_RADIUS = 120;
 /** Pack animals: hitting one pulls same-species neighbours within ASSIST_RADIUS. */
 const PACK_FAMILIES: ReadonlySet<Family> = new Set<Family>(['beast', 'swarm', 'fiend']);
 const ASSIST_RADIUS = 110;
-/** Status motes spawn at most this often per monster / for the player. */
-const STATUS_FX_MS = 260;
 /** Gaps (ms) beyond a normal frame that count as the world being frozen. */
 const FREEZE_GAP = 120;
 
@@ -106,7 +104,6 @@ export class Combat implements CombatHost {
   private regenT = 0;
   private toastGate = 0;
   private clockAt = -1;
-  private playerFxAt = 0;
   private pushDest: { x: number; y: number } | null = null;
   private readonly sparkable = new Map<string, boolean>();
   /** Resting (the rest button): HP and SP come back four times faster until the player moves, casts or is hit. */
@@ -173,7 +170,6 @@ export class Combat implements CombatHost {
     this.lastDealt += ms;
     this.lastInput += ms;
     this.repathAt += ms;
-    this.playerFxAt += ms;
     if (this.windup) {
       this.windup.start += ms;
       this.windup.until += ms;
@@ -703,7 +699,7 @@ export class Combat implements CombatHost {
       if (!this.target && m.alive) this.setTarget(m);
       return roll;
     }
-    m.flash(roll.crit ? 0xffff80 : 0xffffff);
+    // The impact frames (white -> element flash, squash, recoil, victim hit-stop) are the VFX juice rig's (hit).
     const tc = roll.crit ? '#ffe14a' : roll.multiplier > 1 ? '#ff9a3a' : roll.multiplier < 1 ? '#a8b0c0' : '#ffffff';
     s.floatText(m.x + Phaser.Math.Between(-8, 8), top, `${roll.amount}${roll.crit ? '!' : ''}`, tc, roll.crit ? 18 : 14);
     m.hp -= roll.amount;
@@ -886,17 +882,6 @@ export class Combat implements CombatHost {
       m.respawnAt = now + m.def.respawn;
       s.session.eliteDeaths.set(m.slot, Date.now() + m.def.respawn);
     } else m.respawnAt = now + m.def.respawn;
-    s.skills.fxBurst(m.x, m.y - 10, m.element?.color ?? 0xffffff, m.warden ? 30 : 12);
-    s.tweens.add({
-      targets: m.sprite,
-      alpha: 0,
-      scaleY: 0.2,
-      duration: 220,
-      onComplete: () => {
-        m.setVisible(false);
-        m.sprite.setAlpha(1);
-      },
-    });
     m.bar.clear();
     m.aura?.clear();
     if (this.target === m) this.setTarget(null);
@@ -916,7 +901,8 @@ export class Combat implements CombatHost {
       book.incFlag(`warden_${m.def.id}`);
       s.session.world.wardens[m.def.id] = Date.now();
       s.ui.toast(`⚔️ <b>${esc(m.def.name)}</b> has fallen!`);
-      s.cameras.main.flash(300, 255, 240, 160);
+      // A governed warm flash (camera rig: alpha <= 0.35, none under "Reduce shake & flashes").
+      s.stage.rig.flash(0xfff0a0, 0.3);
       s.refreshPortals();
     }
     for (const d of m.def.drops ?? []) {
@@ -934,6 +920,10 @@ export class Combat implements CombatHost {
     m.witnessed.clear();
     gameBus.emit('kill', { monster: m, def: m.def, x: m.x, y: m.y, exp: m.def.exp, coins, elite: m.elite, warden: m.warden });
     gameBus.emit('death', { target: m, rank: m.def.rank, x: m.x, y: m.y, ...(killer ? { killer: castRef(killer) } : {}) });
+    // Death pop (VFX): two white frames on the real sprite, then it is hidden and the pop plays where it stood.
+    s.time.delayedCall(34, () => {
+      if (!m.alive) m.setVisible(false);
+    });
     s.requestSave();
   }
 
@@ -989,7 +979,7 @@ export class Combat implements CombatHost {
       ...(opts.skill ? { skillId: opts.skill.id, skill: opts.skill } : {}),
     });
     s.floatText(this.player.x, this.player.y - 44, `-${dmg}`, '#ff5a5a', dmg >= st.maxHp * 0.15 ? 17 : 14);
-    if (dmg >= st.maxHp * 0.15) s.cameras.main.shake(130, 0.005);
+    // Heavy blows shake the camera (trauma 0.35) and kick it along the blow: the VFX juice rig (playerHurt).
     s.interactions.onDamaged();
     if (pl.hp <= 0) {
       this.die(from);
@@ -1027,7 +1017,6 @@ export class Combat implements CombatHost {
       mark(frozen ? 'freeze' : 'stun', ms);
       this.cancelWindup(true);
       s.floatText(p.x, p.y - 72, frozen ? 'Frozen!' : 'Stunned!', frozen ? '#bfefff' : '#fff3a0', 13);
-      if (frozen) s.skills.fxShatter(p.x, p.y - 20, 10);
       return true;
     };
     const push = (force: number, sign: number) => {
@@ -1088,7 +1077,7 @@ export class Combat implements CombatHost {
     });
   }
 
-  /** Player DoT ticks, status motes and knockback travel. */
+  /** Player DoT ticks and knockback travel (the status overlays are the VFX runtime's: statusApplied). */
   private updatePlayerStatus(dt: number, now: number): void {
     const s = this.scene;
     const p = this.player;
@@ -1102,10 +1091,6 @@ export class Combat implements CombatHost {
         }
       }
       p.dots = p.dots.filter((d) => d.until > now);
-    }
-    if (now >= this.playerFxAt) {
-      this.playerFxAt = now + STATUS_FX_MS;
-      this.statusMotes(p.x, p.y - 26, p.marks, now);
     }
     if (p.pushVx || p.pushVy) {
       const nx = p.x + p.pushVx * dt;
@@ -1143,18 +1128,6 @@ export class Combat implements CombatHost {
     const cm = this.cm;
     if (isBlockedPx(cm, x, y)) return false;
     return !(cm.coll[Math.floor(y / TILE) * cm.w + Math.floor(x / TILE)] & COLL.PORTAL);
-  }
-
-  /** Status motes over a body: flames, bubbles, drops, frost glints, sparks. */
-  private statusMotes(x: number, y: number, marks: Partial<Record<StatusKind, number>>, now: number): void {
-    const sk = this.scene.skills;
-    const on = (k: StatusKind) => (marks[k] ?? 0) > now;
-    if (on('burn')) sk.mote(x + Phaser.Math.Between(-8, 8), y, 0xff6a2b, fxStyle('fire'), 0.7);
-    if (on('poison')) sk.particle(x + Phaser.Math.Between(-8, 8), y, 0x8be04a, 0, -28, 520, 0.45, { tex: CFX.bubble, add: false });
-    if (on('bleed')) sk.particle(x + Phaser.Math.Between(-6, 6), y + 6, 0xd04a6a, 0, 30, 420, 0.7, { tex: CFX.drop, add: false, easeY: 'Quad.in' });
-    if (on('soak')) sk.particle(x + Phaser.Math.Between(-8, 8), y - 4, 0x3fa9ff, 0, 34, 380, 0.6, { tex: CFX.drop, add: false, easeY: 'Quad.in' });
-    if (on('freeze')) sk.particle(x + Phaser.Math.Between(-10, 10), y + Phaser.Math.Between(-6, 6), 0xdff6ff, 0, 0, 260, 0.8, { tex: CFX.spark, endScale: 1.2 });
-    if (on('shock')) sk.mote(x, y, 0xffe14a, fxStyle('lightning'), 0.7);
   }
 
   private die(from: string): void {
@@ -1254,7 +1227,8 @@ export class Combat implements CombatHost {
       else if (now >= m.nextAttack) {
         m.nextAttack = now + m.attackDelay();
         m.facing = p.x > m.x ? 1 : -1;
-        s.tweens.add({ targets: m.sprite, y: m.y - 6, yoyo: true, duration: 90 });
+        // A whole-pixel lunge toward the player (the claw / lash / slam itself is the VFX's: playerHurt).
+        m.recoil(Math.atan2(p.y - m.y, p.x - m.x), 3);
         this.hurtPlayer(m.atk(now), m.def.name, { source: { x: m.x, y: m.y }, rank: m.def.rank, attacker: m });
       }
     } else {
@@ -1338,8 +1312,9 @@ export class Combat implements CombatHost {
   private respawn(m: Monster): void {
     m.reset();
     m.setVisible(true);
-    m.sprite.setAlpha(0);
-    this.scene.tweens.add({ targets: m.sprite, alpha: 1, duration: 400 });
+    m.sprite.setAlpha(1);
+    // The spawn pop (white frames, dust, ring) is the VFX runtime's.
+    gameBus.emit('monsterSpawn', { monster: m, rank: m.def.rank, x: m.x, y: m.y });
     if (m.elite) this.scene.session.eliteDeaths.delete(m.slot);
   }
 
@@ -1376,7 +1351,7 @@ export class Combat implements CombatHost {
     this.setTarget(null);
     this.holdAuto(8000);
     this.resting = true;
-    s.skills.fxRing(this.player.x, this.player.y, 36, 0x9fffb8, false);
+    s.vfx?.extra('rest', this.player.x, this.player.y);
     s.floatText(this.player.x, this.player.y - 56, 'Resting', '#9fffb8', 12);
     return { ok: true, message: 'You sit and rest. Move to get up.' };
   }

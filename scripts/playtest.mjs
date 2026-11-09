@@ -1,16 +1,24 @@
 #!/usr/bin/env node
-// Omnipath Playwright smoke test (docs/CLIENT-v2.md §8).
+// Omnipath Playwright smoke test (docs/CLIENT-v2.md §8, v3: docs/INTEGRATION-v3.md §8).
 //
 //   npm run build && npx vite preview --port 4173 --strictPort &
-//   node scripts/playtest.mjs http://localhost:4173/ [--shots <dir>] [--quick] [--portals | --only-portals]
+//   node scripts/playtest.mjs http://localhost:4173/ [--device phone|phone-landscape|ipad|ipad-portrait|desktop]
+//                             [--shots <dir>] [--quick] [--portals | --only-portals]
 //                             [--landscape] [--maps vale.hearthvale,vale.mirror_lake]
+//
+// --device picks the screen and its real devicePixelRatio (default phone = 390x844 @3; phone-landscape 844x390 @3,
+// ipad 1180x820 @2, ipad-portrait 820x1180 @2, desktop 1440x900 @1). Run it once per device.
 //
 // --portals additionally walks EVERY portal pair by real taps (HUD-aware, phone portrait or --landscape), checking
 // arrivals and return portals (~25 min); --only-portals skips the main run; --maps limits the portal walk.
 //
-// Starts a new game, opens every panel (and tab), walks Hearthvale -> Greenmeadow through a real portal, fights,
+// Starts a new game, checks the HUD's pixel size (HUD art px = the world's), opens every panel (and tab), then the v3
+// flows: the loop sleeps under the Star Chart (and again after a card over it), a star card shows ONE action, Become a
+// class fills the class slots, an empty own slot opens the picker and equips, Equip on a star card with every slot full
+// picks a slot and comes back to that card, AUTO on / off; walks Hearthvale -> Greenmeadow through a real portal, fights,
 // reveals a hidden portal by casting, opens a Prism Gate, warps through every map via window.omnipath.debug, checks
-// that warping does not grow listener counts, and takes portrait-phone / landscape-phone / iPad screenshots.
+// that warping does not grow listener counts, takes Hale's First Drill quest (accept in the dialog, complete, turn in)
+// for Rising Kick, and takes portrait-phone / landscape-phone / iPad screenshots.
 // Exits non-zero on any console error, page error or failed check.
 import { createRequire } from 'node:module';
 import { mkdirSync } from 'node:fs';
@@ -24,6 +32,20 @@ const shotsAt = args.indexOf('--shots');
 const shots = shotsAt >= 0 ? args[shotsAt + 1] : null;
 const quick = args.includes('--quick');
 if (shots) mkdirSync(shots, { recursive: true });
+const DEVICES = {
+  phone: { width: 390, height: 844, dpr: 3, touch: true },
+  'phone-landscape': { width: 844, height: 390, dpr: 3, touch: true },
+  ipad: { width: 1180, height: 820, dpr: 2, touch: true },
+  'ipad-portrait': { width: 820, height: 1180, dpr: 2, touch: true },
+  desktop: { width: 1440, height: 900, dpr: 1, touch: false },
+};
+const devAt = args.indexOf('--device');
+const deviceName = devAt >= 0 ? args[devAt + 1] : 'phone';
+const device = DEVICES[deviceName];
+if (!device) {
+  console.log(`unknown --device ${deviceName} (${Object.keys(DEVICES).join(', ')})`);
+  process.exit(2);
+}
 
 const ALL_MAPS = [
   'vale.hearthvale', 'vale.greenmeadow', 'vale.mirror_lake', 'vale.lake_islet', 'vale.windcrest_hill', 'vale.falls_hollow',
@@ -42,7 +64,12 @@ const fail = (msg) => {
 const ok = (msg) => console.log(`  ✓ ${msg}`);
 
 const browser = await chromium.launch();
-const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 1, hasTouch: true, isMobile: true });
+const ctx = await browser.newContext({
+  viewport: { width: device.width, height: device.height },
+  deviceScaleFactor: device.dpr,
+  hasTouch: device.touch,
+  isMobile: device.touch,
+});
 await ctx.addInitScript(() => {
   try {
     localStorage.clear();
@@ -91,7 +118,7 @@ const warp = async (mapId, portal) => {
 
 const SKIP_MAIN = Symbol('only portals');
 try {
-  console.log(`Omnipath playtest @ ${base}`);
+  console.log(`Omnipath playtest @ ${base} on ${deviceName} (${device.width}x${device.height} @${device.dpr})`);
   if (args.includes('--only-portals')) throw SKIP_MAIN;
   await page.goto(base);
   await page.waitForSelector('.title-screen .new', { timeout: 20000 });
@@ -109,7 +136,22 @@ try {
   if (st0.map === 'vale.hearthvale') ok('new game starts in Hearthvale');
   else fail(`new game started in ${st0.map}`);
 
+  // ------------------------------------------------------------ HUD pixel size: the HUD's art pixels are the world's
+  const px = await page.evaluate(() => {
+    const r = window.omnipath.render.scale();
+    const ui = parseFloat(document.documentElement.style.getPropertyValue('--ui-px'));
+    return { k: r.k, dpr: r.dpr, ui, n: ui * r.dpr };
+  });
+  if (Math.abs(px.n - Math.round(px.n)) > 1e-6) fail(`HUD pixel is ${px.n.toFixed(3)} device px (not whole: blurry)`);
+  else if (Math.round(px.n) !== px.k && px.k / px.dpr >= 1) fail(`HUD pixel ${px.n} device px but the world's is ${px.k}`);
+  else ok(`HUD pixel = ${Math.round(px.n)} device px (world k = ${px.k}, --ui-px ${+px.ui.toFixed(3)}px)`);
+
   // ------------------------------------------------------------ every panel and tab
+  // Fuse hides until the first element (docs/UX-SIMPLE.md rule 7): grant one first.
+  await dbg('element', 'fire');
+  await page.waitForTimeout(150);
+  await closeModal();
+  await waitFor(() => page.evaluate(() => !!document.querySelector('.menu button[data-panel="altar"]:not(.hidden)')), 3000, 'Fuse button after the first element');
   for (const panel of ['skills', 'altar', 'classes', 'codex', 'bag', 'map']) {
     await page.click(`.menu button[data-panel="${panel}"]`);
     await page.waitForTimeout(150);
@@ -145,6 +187,133 @@ try {
   await page.evaluate(() => window.omnipath.ui.open('map', 'travel'));
   await closeModal();
   ok('every panel opened');
+
+  // ------------------------------------------------------------ v3 flows (docs/INTEGRATION-v3.md §8.1)
+  const asleep = () => page.evaluate(() => window.omnipath.render.asleep());
+  const panelNow = async () => (await info()).panel;
+  // 1) The loop sleeps under the full-screen Star Chart, wakes for a card over it, and sleeps again after the card.
+  await page.click('.menu button[data-panel="skills"]');
+  if (await waitFor(asleep, 2000, 'game loop sleeps under the Star Chart')) {
+    await page.evaluate(() => window.omnipath.ui.discovery({ icon: '🧪', kicker: 'TEST CARD', title: 'A card over the chart', body: 'Close me.' }));
+    await page.waitForTimeout(150);
+    const awake = !(await asleep());
+    await page.click('.discovery .ok');
+    await page.waitForTimeout(150);
+    if (!awake) fail('the loop stayed asleep under a discovery card');
+    else if ((await panelNow()) !== 'skills') fail('closing a card over the Star Chart did not return to it');
+    else if (await waitFor(asleep, 2000, 'loop sleeps again after a card over the Star Chart')) ok('loop sleeps under the Star Chart, wakes for a card, sleeps again after it');
+  }
+  await closeModal();
+  // 2) A star card shows ONE action (Equip / Equipped ✓ / Class skill ✓ / Transform / one next step).
+  await dbg('learn', 'venom_edge');
+  await closeModal();
+  await page.evaluate(() => window.omnipath.ui.open('skills', 'star:venom_edge'));
+  await page.waitForTimeout(250);
+  const acts = await page.$$eval('.sc-card[data-card="venom_edge"] .sc-act > :is(.sc-primary, .sc-done, .sc-step)', (els) => els.map((e) => e.textContent.trim().split('\n')[0]));
+  if (acts.length === 1) ok(`Star Chart star card shows one action (${acts[0]})`);
+  else fail(`star card actions: ${JSON.stringify(acts)}`);
+  await shot('03b-star-card');
+  await closeModal();
+  // 3) Become a class (Class screen) → its class slots fill themselves.
+  await dbg('learn', 'whirlwind');
+  await closeModal();
+  await page.evaluate(() => {
+    const b = window.omnipath.session.book;
+    if (!b.state.classes.blademaster) b.state.classes.blademaster = { rank: 1, xp: 0, spent: {} };
+    window.omnipath.ui.open('classes');
+  });
+  await page.waitForTimeout(200);
+  const becomeBtn = await page.$('[data-become="blademaster"]');
+  if (!becomeBtn) fail('no Become button for Blademaster on the Class screen');
+  else {
+    await page.click('[data-become="blademaster"]');
+    await page.waitForTimeout(400);
+    await closeModal();
+    const bar = await dbg('bar');
+    const worn = await page.evaluate(() => window.omnipath.session.book.state.worn);
+    const filled = bar.filter((v) => v.kind === 'class' && v.skillId);
+    if (worn === 'blademaster' && filled.length >= 1 && bar.some((v) => v.kind === 'own'))
+      ok(`Become Blademaster: ${filled.length} class slot(s) filled (${filled.map((v) => v.skillId).join(', ')})`);
+    else fail(`Become: worn ${worn}, class slots ${JSON.stringify(bar.map((v) => `${v.kind}:${v.skillId ?? '-'}`))}`);
+  }
+  // 4) Tap an empty slot of yours → the picker → equip.
+  await dbg('learn', 'shadowstep');
+  await closeModal();
+  await page.waitForTimeout(300);
+  const emptyAt = await page.evaluate(() => document.querySelector('.hotbar .slot.own.empty')?.getAttribute('data-slot') ?? null);
+  if (emptyAt === null) fail('no empty slot of yours on the bar');
+  else {
+    const slot = Number(emptyAt);
+    await page.click(`.hotbar .slot.own.empty[data-slot="${slot}"]`);
+    await page.waitForTimeout(200);
+    const tile = (await panelNow()) === 'picker' ? await page.$('.picker-sheet .pk-tile[data-skill]:not(.inclass):not(.cur)') : null;
+    if (!tile) fail(`tapping an empty slot of yours did not open the picker (panel ${await panelNow()})`);
+    else {
+      const id = await tile.getAttribute('data-skill');
+      await page.click(`.picker-sheet .pk-tile[data-skill="${id}"]`);
+      await page.waitForTimeout(200);
+      const now = (await dbg('bar')).find((v) => v.index === slot);
+      if (now?.skillId === id && !(await info()).open) ok(`empty slot ${slot + 1} → picker → equipped ${id}`);
+      else fail(`picker equip: slot ${slot + 1} holds ${now?.skillId}, wanted ${id}`);
+    }
+  }
+  await closeModal();
+  // 5) Equip on a star card with every slot of yours full → pick a slot → back on the Star Chart with that card.
+  const pool = ['backstab', 'smoke_veil', 'fan_of_knives', 'ricochet_knives', 'quickstep', 'shadowstep', 'venom_edge'];
+  for (const id of pool) await dbg('learn', id);
+  await closeModal();
+  // A skill to equip (its card says Equip), and every slot of yours filled with the others.
+  const equipKind = async (id) => (await dbg('card', id))?.action?.kind;
+  let target = null;
+  for (const id of pool) if ((await equipKind(id)) === 'equip') { target = id; break; }
+  const others = pool.filter((id) => id !== target);
+  for (const v of (await dbg('bar')).filter((x) => x.kind === 'own' && !x.skillId)) {
+    for (const id of others) {
+      if ((await dbg('bar')).some((x) => x.skillId === id)) continue;
+      await dbg('equip', id, v.index);
+      break;
+    }
+  }
+  if (target && (await equipKind(target)) !== 'equip') target = null;
+  await page.evaluate((id) => window.omnipath.ui.open('skills', `star:${id}`), target ?? 'backstab');
+  await page.waitForTimeout(250);
+  const equipBtn = target ? await page.$(`.sc-card[data-card="${target}"] [data-act="equip"]`) : null;
+  if (!equipBtn) fail(`no star card with Equip while every slot of yours is full (${target})`);
+  else {
+    await page.click(`.sc-card[data-card="${target}"] [data-act="equip"]`);
+    await page.waitForTimeout(200);
+    const pick = (await panelNow()) === 'picker' ? await page.$('.picker-sheet .pk-tile[data-slot]') : null;
+    if (!pick) fail(`Equip with every slot full did not open the slot picker (panel ${await panelNow()})`);
+    else {
+      const slot = Number(await pick.getAttribute('data-slot'));
+      await page.click(`.picker-sheet .pk-tile[data-slot="${slot}"]`);
+      await page.waitForTimeout(300);
+      const back = await page.evaluate(() => ({ panel: window.omnipath.ui.current, card: document.querySelector('.sc-card')?.getAttribute('data-card') ?? null }));
+      const held = (await dbg('bar')).find((v) => v.index === slot)?.skillId;
+      if (held !== target) fail(`picked slot ${slot + 1} holds ${held}, wanted ${target}`);
+      else if (back.panel === 'skills' && back.card === target) ok(`star card Equip (${target}) → slot picker → back on the Star Chart with that card`);
+      else fail(`after the slot picker: panel ${back.panel}, card ${back.card}`);
+    }
+  }
+  await shot('03c-picker-back');
+  await closeModal();
+  // 6) AUTO: one switch for everything (the basic attack included).
+  const autoState = () =>
+    page.evaluate(() => ({
+      on: window.omnipath.session.player.autoOn,
+      btn: document.querySelector('.cluster .rb.auto')?.classList.contains('on') ?? null,
+      atk: document.querySelector('.cluster .atk')?.classList.contains('auto') ?? null,
+    }));
+  const a0 = await autoState();
+  await page.click('.cluster .rb.auto');
+  await page.waitForTimeout(200);
+  const a1 = await autoState();
+  await page.click('.cluster .rb.auto');
+  await page.waitForTimeout(200);
+  const a2 = await autoState();
+  if (a1.on === !a0.on && a1.btn === a1.on && a1.atk === a1.on && a2.on === a0.on && a2.btn === a0.on) ok('AUTO switches on and off (button, attack ring)');
+  else fail(`AUTO: ${JSON.stringify([a0, a1, a2])}`);
+  await closeModal();
 
   // ------------------------------------------------------------ interactions in Hearthvale (Brann gift, waystone)
   await page.evaluate(() => {
@@ -223,8 +392,8 @@ try {
     const sy = (y - cam.worldView.y) * cam.zoom;
     return document.elementFromPoint(sx, sy) === s.game.canvas;
   }, [islet.x, islet.y]);
-  if (isletTappable) ok('HUD-safe camera: the north-border islet is visible and tappable on a portrait phone');
-  else fail('islet portal is hidden under the HUD on a portrait phone');
+  if (isletTappable) ok(`HUD-safe camera: the north-border islet is visible and tappable (${deviceName})`);
+  else fail(`islet portal is hidden under the HUD (${deviceName})`);
 
   // ------------------------------------------------------------ Prism Gate: closed, then open with 3 elements
   await warp('vale.stormbreak_approach', 'west');
@@ -314,13 +483,60 @@ try {
   if (await page.evaluate(() => window.omnipath.session.book.hasElement('holy'))) ok('Alba grants holy at 3 elements');
   else fail('Alba did not grant holy');
 
+  // Lessons are quest rewards now: Hale's First Drill (accept in his dialog → objectives → turn in) teaches Rising Kick.
   await warp('vale.greenmeadow');
-  await page.evaluate(() => window.omnipath.ui.open('trainer', 'hale'));
-  await page.click('[data-lesson="hale_rising_kick"]');
-  await page.waitForTimeout(200);
+  const questNow = () => page.evaluate(() => window.omnipath.session.book.questStatus('hale_first_drill'));
+  const halePanel = async () => {
+    await closeModal();
+    await dbg('npc', 'hale');
+    return waitFor(async () => (await info()).panel === 'dialog', 3000, "Hale's dialog");
+  };
+  if ((await questNow()) === 'available' && (await halePanel())) {
+    const accept = await page.$('.dialog [data-accept="hale_first_drill"]');
+    if (accept) await page.click('.dialog [data-accept="hale_first_drill"]');
+    else fail("no Accept for First Drill in Hale's dialog");
+    await page.waitForTimeout(200);
+  }
   await closeModal();
-  if (await page.evaluate(() => window.omnipath.session.book.has('rising_kick'))) ok('trainer lesson bought (Rising Kick)');
-  else fail('could not take the Rising Kick lesson');
+  if ((await questNow()) === 'active') ok("First Drill accepted in Hale's dialog");
+  else fail(`First Drill after Accept: ${await questNow()}`);
+  // Counters by the debug hook; the basic attack rank (a live 'state' objective) by real mastery.
+  await dbg('complete', 'hale_first_drill');
+  await page.evaluate(() => {
+    const b = window.omnipath.session.book;
+    for (let i = 0; i < 40 && b.rank('slash') < 3; i++) b.addMastery('slash', 50);
+    b.refreshQuests();
+  });
+  await closeModal();
+  if ((await questNow()) === 'ready' && (await halePanel())) {
+    const complete = await page.$('.dialog [data-complete="hale_first_drill"]');
+    if (complete) await page.click('.dialog [data-complete="hale_first_drill"]');
+    else fail("no Complete for First Drill in Hale's dialog");
+    await page.waitForTimeout(300);
+    await shot('09b-quest-reward');
+    // Every slot of yours is full (the flows above filled them): the reward card offers Equip → the slot picker →
+    // back to Hale's dialog.
+    const equip = await page.$('.dialog [data-equip-skill="rising_kick"]');
+    if (equip) {
+      await page.click('.dialog [data-equip-skill="rising_kick"]');
+      await page.waitForTimeout(200);
+      const pick = (await info()).panel === 'picker' ? await page.$('.picker-sheet .pk-tile[data-slot]') : null;
+      if (pick) {
+        await page.click(`.picker-sheet .pk-tile[data-slot="${await pick.getAttribute('data-slot')}"]`);
+        await page.waitForTimeout(250);
+        if ((await info()).panel === 'dialog') ok("reward Equip → slot picker → back in Hale's dialog");
+        else fail(`after the reward's slot picker: panel ${(await info()).panel}`);
+      }
+    }
+  } else fail(`First Drill not ready to turn in: ${await questNow()}`);
+  await closeModal();
+  const kick = await page.evaluate(() => ({
+    known: window.omnipath.session.book.has('rising_kick'),
+    onBar: window.omnipath.scene.barSlots().some((v) => v.skillId === 'rising_kick'),
+    status: window.omnipath.session.book.questStatus('hale_first_drill'),
+  }));
+  if (kick.known && kick.onBar) ok(`First Drill turned in at Hale: Rising Kick learned and on the bar (${kick.status})`);
+  else fail(`First Drill reward: ${JSON.stringify(kick)}`);
 
   await warp('vale.lake_islet');
   const coins0 = await page.evaluate(() => window.omnipath.session.player.coins);
@@ -384,8 +600,8 @@ try {
       return !!b && ts.some((t) => t.bottom > b.top && t.top < b.bottom && t.right > b.left && t.left < b.right);
     });
   };
-  if (await bannerToast()) fail('portrait: a toast covers the zone banner');
-  else ok('zone banner clear of toasts (portrait)');
+  if (await bannerToast()) fail(`${deviceName}: a toast covers the zone banner`);
+  else ok(`zone banner clear of toasts (${deviceName})`);
 
   // Death -> respawn at the save point (50% HP).
   await warp('vale.greenmeadow');

@@ -1,22 +1,24 @@
-// Shape FX, hit tests, projectiles and riders (docs/CLIENT-v2.md §6): turns SkillDef shapes into on-screen
-// effects and calls the host for every hit. Damage, statuses and XP live in Combat.ts.
+// Shape timing, hit tests, projectiles and riders (docs/CLIENT-v2.md §6): turns SkillDef shapes into gameplay and
+// calls the host for every hit. Damage, statuses and XP live in Combat.ts.
 //
-// Riders implemented here: `returns` (projectiles fly back once, hit set cleared once, with a tether / glint on the
-// way home) and `reprise` (the whole cast re-executes once after delayMs at `mult`, shown by a ghost of the caster).
-// `arc`, `leech` and `knockback` are per-hit and live in Combat.hit (their FX helpers are here).
-// Chain shapes tagged projectile/pierce render as bouncing knives (blades when tagged blade), not lightning.
+// Riders implemented here: `returns` (projectiles fly back once, hit set cleared once) and `reprise` (the whole cast
+// re-executes once after delayMs at `mult`). `arc`, `leech` and `knockback` are per-hit and live in Combat.hit.
+// Chain shapes tagged projectile/pierce are bouncing knives (blades when tagged blade), not lightning.
 //
-// FX use the art team's fx_* textures plus a few client-generated `cfx_*` motes (flame, drop, rock, shard, spark,
-// streak, knife, feather, thorn, bubble, ray, cracked-star rune) so each element reads differently.
+// Visuals: every player effect is drawn by the VFX runtime (src/game/vfx/runtime, docs/VFX.md §8) from the bus
+// events emitted here (skillPulse, projectileSpawn/End, chainLaunch, novaTelegraph/Blast, dash): this file never
+// draws a player skill. A projectile's Image stays as its bus identity but is invisible. fxBurst / fxRing remain as
+// thin adapters onto the VFX runtime for MapScene's portal reveal and blink (docs/VFX.md §8.7); every other legacy
+// fx helper and the client `cfx_*` textures are gone (monsters, statuses and world moments are vfx/world.ts's).
 import Phaser from 'phaser';
 import type { DamageRoll } from '../../core/combat';
-import type { ElementId, SkillDef, WeaponType } from '../../core/types';
+import type { SkillDef, WeaponType } from '../../core/types';
 import { isBlockedPx } from '../../core/world/compile';
 import type { CompiledMap } from '../../core/world/types';
 import type { Monster } from '../entities/Monster';
 import type { Player } from '../entities/Player';
 import { gameBus, type Pt, type SkillRef } from '../events';
-import { DEPTH, Y_BIAS, ySort } from '../render/depths';
+import { Y_BIAS, ySort } from '../render/depths';
 
 export interface Cast {
   id: number;
@@ -100,21 +102,8 @@ interface Projectile {
   returning: boolean;
 }
 
-/** How a projectile looks: texture, scale, spin (rad/s), additive or not, rotation offset. */
-export interface ProjectileLook {
-  key: string;
-  scale: number;
-  spin: number;
-  add: boolean;
-}
-
-export type StrikeStyle = 'sword' | 'dagger' | 'staff' | 'cone' | 'claw';
 
 const DEG = Math.PI / 180;
-const ADD = Phaser.BlendModes.ADD;
-const NORMAL = Phaser.BlendModes.NORMAL;
-/** Particle budget (mid phones): extra motes are skipped beyond this. */
-const MAX_PARTICLES = 240;
 
 export const hex = (c: number): string => `#${c.toString(16).padStart(6, '0')}`;
 
@@ -151,216 +140,10 @@ export function isKnifeChain(skill: SkillDef): boolean {
   return skill.shape.kind === 'chain' && (skill.tags.includes('projectile') || skill.tags.includes('pierce'));
 }
 
-// ------------------------------------------------------------------ client FX textures
-
-export const CFX = {
-  flame: 'cfx_flame',
-  drop: 'cfx_drop',
-  rock: 'cfx_rock',
-  shard: 'cfx_shard',
-  spark: 'cfx_spark',
-  streak: 'cfx_streak',
-  star: 'cfx_star',
-  knife: 'cfx_knife',
-  ray: 'cfx_ray',
-  bubble: 'cfx_bubble',
-  feather: 'cfx_feather',
-  thorn: 'cfx_thorn',
-} as const;
-
-function canvasTex(scene: Phaser.Scene, key: string, w: number, h: number, draw: (c: CanvasRenderingContext2D) => void): void {
-  if (scene.textures.exists(key)) return;
-  const tex = scene.textures.createCanvas(key, w, h);
-  if (!tex) return;
-  draw(tex.getContext());
-  tex.refresh();
-}
-
-function path(c: CanvasRenderingContext2D, pts: number[], fill: string | CanvasGradient): void {
-  c.beginPath();
-  c.moveTo(pts[0], pts[1]);
-  for (let i = 2; i < pts.length; i += 2) c.lineTo(pts[i], pts[i + 1]);
-  c.closePath();
-  c.fillStyle = fill;
-  c.fill();
-}
-
-/** Generates the client FX motes once per game (idempotent per key). All white so they tint per element. */
-export function ensureFxTextures(scene: Phaser.Scene): void {
-  canvasTex(scene, CFX.flame, 12, 16, (c) => {
-    const g = c.createRadialGradient(6, 11, 0, 6, 11, 8);
-    g.addColorStop(0, 'rgba(255,255,255,1)');
-    g.addColorStop(0.55, 'rgba(255,255,255,0.75)');
-    g.addColorStop(1, 'rgba(255,255,255,0)');
-    c.fillStyle = g;
-    c.beginPath();
-    c.moveTo(6, 0);
-    c.quadraticCurveTo(11.5, 7, 10.5, 11);
-    c.arc(6, 11, 4.6, 0.1, Math.PI - 0.1);
-    c.quadraticCurveTo(0.5, 7, 6, 0);
-    c.fill();
-  });
-  canvasTex(scene, CFX.drop, 8, 11, (c) => {
-    c.fillStyle = 'rgba(255,255,255,0.95)';
-    c.beginPath();
-    c.moveTo(4, 0);
-    c.quadraticCurveTo(8, 5, 7.5, 7.5);
-    c.arc(4, 7.5, 3.5, 0, Math.PI);
-    c.quadraticCurveTo(0, 5, 4, 0);
-    c.fill();
-    c.fillStyle = 'rgba(255,255,255,1)';
-    c.fillRect(2.5, 6, 1.5, 2);
-  });
-  canvasTex(scene, CFX.rock, 9, 8, (c) => {
-    path(c, [1, 3, 4, 0, 8, 2, 9, 6, 5, 8, 1, 7], '#ffffff');
-    path(c, [1, 7, 5, 8, 9, 6, 8, 4.5, 4.5, 5.5, 1, 5], 'rgba(0,0,0,0.35)');
-  });
-  canvasTex(scene, CFX.shard, 14, 6, (c) => {
-    path(c, [0, 3, 5, 0, 14, 3, 5, 6], 'rgba(255,255,255,0.9)');
-    path(c, [3, 3, 6, 1.4, 12, 3, 6, 4.2], '#ffffff');
-  });
-  canvasTex(scene, CFX.spark, 12, 12, (c) => {
-    path(c, [6, 0, 7, 5, 12, 6, 7, 7, 6, 12, 5, 7, 0, 6, 5, 5], '#ffffff');
-    const g = c.createRadialGradient(6, 6, 0, 6, 6, 4);
-    g.addColorStop(0, 'rgba(255,255,255,1)');
-    g.addColorStop(1, 'rgba(255,255,255,0)');
-    c.fillStyle = g;
-    c.fillRect(2, 2, 8, 8);
-  });
-  canvasTex(scene, CFX.streak, 16, 6, (c) => {
-    c.strokeStyle = 'rgba(255,255,255,0.95)';
-    c.lineWidth = 2;
-    c.lineCap = 'round';
-    c.beginPath();
-    c.arc(8, 14, 12, -Math.PI * 0.78, -Math.PI * 0.22);
-    c.stroke();
-  });
-  canvasTex(scene, CFX.knife, 22, 8, (c) => {
-    // Handle (dark, stays dark under tint), gold guard, bright blade pointing +x.
-    c.fillStyle = '#4a2e1a';
-    c.fillRect(0, 3, 6, 2);
-    c.fillStyle = '#d8b04a';
-    c.fillRect(6, 1, 2, 6);
-    path(c, [8, 2, 19, 3, 22, 4, 19, 5, 8, 6], '#ffffff');
-    path(c, [8, 4, 22, 4, 19, 5, 8, 6], 'rgba(150,170,200,0.55)');
-  });
-  canvasTex(scene, CFX.ray, 64, 6, (c) => {
-    const g = c.createLinearGradient(0, 0, 64, 0);
-    g.addColorStop(0, 'rgba(255,255,255,1)');
-    g.addColorStop(0.6, 'rgba(255,255,255,0.5)');
-    g.addColorStop(1, 'rgba(255,255,255,0)');
-    c.fillStyle = g;
-    path(c, [0, 1, 64, 3, 0, 5], g);
-  });
-  canvasTex(scene, CFX.bubble, 16, 16, (c) => {
-    c.fillStyle = 'rgba(255,255,255,0.22)';
-    c.beginPath();
-    c.arc(8, 8, 7, 0, Math.PI * 2);
-    c.fill();
-    c.strokeStyle = 'rgba(255,255,255,0.95)';
-    c.lineWidth = 1.5;
-    c.stroke();
-    c.fillStyle = '#ffffff';
-    c.fillRect(4, 4, 2.5, 2.5);
-  });
-  canvasTex(scene, CFX.feather, 16, 6, (c) => {
-    path(c, [0, 3, 4, 0.5, 12, 1, 16, 3, 12, 5, 4, 5.5], 'rgba(255,255,255,0.95)');
-    c.strokeStyle = 'rgba(0,0,0,0.3)';
-    c.lineWidth = 1;
-    c.beginPath();
-    c.moveTo(1, 3);
-    c.lineTo(15, 3);
-    c.stroke();
-  });
-  canvasTex(scene, CFX.thorn, 14, 6, (c) => {
-    path(c, [0, 1, 6, 1.5, 14, 3, 6, 4.5, 0, 5], '#ffffff');
-    path(c, [0, 3, 14, 3, 6, 4.5, 0, 5], 'rgba(0,0,0,0.3)');
-  });
-  canvasTex(scene, CFX.star, 64, 64, (c) => {
-    // Cracked-star rune (the spark moment): eight-point star, inner ring, a crack running through it.
-    const cx = 32;
-    const cy = 32;
-    const pts: number[] = [];
-    for (let i = 0; i < 16; i++) {
-      const r = i % 2 === 0 ? 30 : 12;
-      const a = -Math.PI / 2 + (i / 16) * Math.PI * 2;
-      pts.push(cx + Math.cos(a) * r, cy + Math.sin(a) * r);
-    }
-    const g = c.createRadialGradient(cx, cy, 0, cx, cy, 30);
-    g.addColorStop(0, 'rgba(255,255,255,1)');
-    g.addColorStop(0.5, 'rgba(255,255,255,0.85)');
-    g.addColorStop(1, 'rgba(255,255,255,0.35)');
-    path(c, pts, g);
-    c.strokeStyle = 'rgba(255,255,255,1)';
-    c.lineWidth = 2;
-    c.beginPath();
-    c.arc(cx, cy, 16, 0, Math.PI * 2);
-    c.stroke();
-    c.strokeStyle = 'rgba(40,20,0,0.85)';
-    c.lineWidth = 2;
-    c.beginPath();
-    c.moveTo(18, 6);
-    c.lineTo(27, 22);
-    c.lineTo(23, 30);
-    c.lineTo(36, 38);
-    c.lineTo(33, 46);
-    c.lineTo(44, 60);
-    c.stroke();
-  });
-}
-
-// ------------------------------------------------------------------ element styles
-
-type Motion = 'rise' | 'fall' | 'swirl' | 'jitter' | 'drift' | 'sink';
-
-export interface FxStyle {
-  tex: string;
-  add: boolean;
-  motion: Motion;
-  /** Secondary colour (cores, glints). */
-  accent: number;
-  scale: number;
-}
-
-const PLAIN: FxStyle = { tex: 'fx_dot', add: true, motion: 'drift', accent: 0xffffff, scale: 0.55 };
-
-const STYLES: Record<ElementId, FxStyle> = {
-  fire: { tex: CFX.flame, add: true, motion: 'rise', accent: 0xffd27a, scale: 0.9 },
-  magma: { tex: CFX.rock, add: false, motion: 'fall', accent: 0xffa040, scale: 0.9 },
-  water: { tex: CFX.drop, add: false, motion: 'fall', accent: 0xe0f4ff, scale: 0.9 },
-  earth: { tex: CFX.rock, add: false, motion: 'fall', accent: 0xf0dcb0, scale: 0.9 },
-  wind: { tex: CFX.streak, add: true, motion: 'swirl', accent: 0xf0fff8, scale: 0.9 },
-  lightning: { tex: CFX.spark, add: true, motion: 'jitter', accent: 0xffffff, scale: 0.85 },
-  shadow: { tex: 'fx_dot', add: false, motion: 'sink', accent: 0xd8c0ff, scale: 0.7 },
-  holy: { tex: CFX.spark, add: true, motion: 'rise', accent: 0xffffff, scale: 0.8 },
-  ice: { tex: CFX.shard, add: true, motion: 'fall', accent: 0xffffff, scale: 0.8 },
-  storm: { tex: CFX.spark, add: true, motion: 'swirl', accent: 0xe0ecff, scale: 0.85 },
-  twilight: { tex: CFX.spark, add: true, motion: 'drift', accent: 0xffe0a0, scale: 0.8 },
-};
-
-export function fxStyle(el?: ElementId): FxStyle {
-  return el ? STYLES[el] : PLAIN;
-}
-
-interface PartOpts {
-  tex?: string;
-  add?: boolean;
-  easeY?: string;
-  rot?: number;
-  spin?: number;
-  endScale?: number;
-  depth?: number;
-  delay?: number;
-}
-
 export class SkillSystem {
   private projectiles: Projectile[] = [];
-  private pool: Phaser.GameObjects.Image[] = [];
-  private live = 0;
 
-  constructor(private host: CombatHost) {
-    ensureFxTextures(host.world);
-  }
+  constructor(private host: CombatHost) {}
 
   /** Reserves a cast id at wind-up (castStart carries it; the cast that fires later reuses it). */
   reserveId(): number {
@@ -643,55 +426,6 @@ export class SkillSystem {
 
   // ------------------------------------------------------------ helpers
 
-  /** Projectile art: blades spin, knives/thorns/feathers/shards point along the flight, magic flies as orbs. */
-  lookFor(skill: SkillDef, size: number): ProjectileLook {
-    const tags = skill.tags;
-    const el = skill.element;
-    if (tags.includes('blade') && !tags.includes('arcane')) return { key: 'fx_blade', scale: size / 14, spin: 18, add: false };
-    if (tags.includes('pierce') && !tags.includes('arcane')) return { key: CFX.knife, scale: size / 13, spin: 0, add: false };
-    if (el === 'ice') return { key: CFX.shard, scale: size / 8, spin: 0, add: true };
-    if (el === 'wind' && tags.includes('echo')) return { key: CFX.feather, scale: size / 8, spin: 0, add: false };
-    if (el === 'earth' || el === 'magma') return { key: el === 'earth' ? CFX.rock : 'fx_orb', scale: el === 'earth' ? size / 6 : size / 14, spin: el === 'earth' ? 10 : 0, add: el !== 'earth' };
-    if (el === 'water' && size >= 14) return { key: CFX.bubble, scale: size / 13, spin: 0, add: false };
-    if (!el && skill.status === 'bleed') return { key: CFX.thorn, scale: size / 7, spin: 0, add: false };
-    return { key: 'fx_orb', scale: size / 16, spin: 0, add: true };
-  }
-
-  /** One trail mote behind a projectile (element styled). */
-  trail(x: number, y: number, skill: SkillDef, color: number, size: number): void {
-    const st = fxStyle(skill.element);
-    const s = Math.max(0.35, size / 22);
-    if (!skill.element) {
-      this.particle(x, y, color, 0, 0, 200, size / 20);
-      return;
-    }
-    switch (st.motion) {
-      case 'rise':
-        this.particle(x, y, color, (Math.random() - 0.5) * 20, -30, 300, s * st.scale, { tex: st.tex, add: st.add });
-        break;
-      case 'fall':
-        this.particle(x, y, Math.random() < 0.3 ? st.accent : color, (Math.random() - 0.5) * 20, 26, 260, s * st.scale, {
-          tex: st.tex,
-          add: st.add,
-          rot: Math.random() * Math.PI,
-        });
-        break;
-      case 'jitter':
-        this.particle(x + (Math.random() - 0.5) * 10, y + (Math.random() - 0.5) * 10, Math.random() < 0.5 ? st.accent : color, 0, 0, 140, s * st.scale, {
-          tex: st.tex,
-          add: true,
-          rot: Math.random() * Math.PI,
-        });
-        break;
-      case 'sink':
-        this.particle(x, y, 0x2a1640, 0, 10, 320, s * 1.1, { add: false });
-        this.particle(x, y, color, 0, 0, 200, s * 0.7);
-        break;
-      default:
-        this.particle(x, y, color, 0, 0, 220, s * st.scale, { tex: st.tex, add: st.add, rot: Math.random() * Math.PI });
-    }
-  }
-
   private spawnProjectile(cast: Cast, a: number, speed: number, range: number, pierce: number, size: number, index = 0, count = 1) {
     // The projectile's Image is its identity on the bus (projectileSpawn.obj); the VFX runtime draws the body and
     // trails, so the Image itself stays invisible.
@@ -779,399 +513,22 @@ export class SkillSystem {
     });
   }
 
-  /** Strike arc style: weapon-specific for the player, claws for monsters, cones for elemental breaths. */
-  strikeStyle(skill: SkillDef, monster: boolean): StrikeStyle {
-    const tags = skill.tags;
-    if (tags.includes('aoe') && skill.element && !tags.includes('melee')) return 'cone';
-    if (monster || tags.includes('monster')) return 'claw';
-    if (tags.includes('arcane')) return 'staff';
-    const w = skill.weapons?.length === 1 ? skill.weapons[0] : this.host.weapon();
-    return w === 'dagger' ? 'dagger' : w === 'staff' ? 'staff' : 'sword';
+  // ------------------------------------------------------------ legacy fx adapters
+
+  /**
+   * Thin adapters onto the VFX runtime (docs/VFX.md §8.7) for the few callers outside the VFX path (MapScene's
+   * portal reveal and blink): a magic burst / a ground ring in the nearest family. Nothing here draws by itself.
+   */
+  fxBurst(x: number, y: number, color: number, n: number): void {
+    (this.host.world as unknown as { vfx?: { world: { legacyBurst(x: number, y: number, c: number, n: number): void } } }).vfx?.world.legacyBurst(x, y, color, n);
   }
 
-  // ------------------------------------------------------------ particles
-
-  particle(x: number, y: number, color: number, vx: number, vy: number, life: number, scale = 0.6, o: PartOpts = {}): void {
-    if (this.live >= MAX_PARTICLES) return;
-    const scene = this.host.world;
-    const tex = o.tex ?? 'fx_dot';
-    let img = this.pool.pop();
-    if (img && img.active) img.setTexture(tex).setVisible(true);
-    else img = scene.add.image(x, y, tex);
-    const rot = o.rot ?? 0;
-    img
-      .setPosition(x, y)
-      .setTint(color)
-      .setScale(scale)
-      .setAlpha(1)
-      .setRotation(rot)
-      .setBlendMode(o.add === false ? NORMAL : ADD)
-      .setDepth(o.depth ?? ySort(y, Y_BIAS.PARTICLE));
-    if (o.delay) img.setVisible(false);
-    this.live++;
-    const target = img;
-    scene.tweens.add({
-      targets: target,
-      x: x + (vx * life) / 1000,
-      y: { value: y + (vy * life) / 1000, ease: o.easeY ?? 'Linear' },
-      alpha: 0,
-      scale: scale * (o.endScale ?? 0.3),
-      rotation: rot + (o.spin ?? 0),
-      duration: life,
-      delay: o.delay ?? 0,
-      onStart: () => target.setVisible(true),
-      onComplete: () => {
-        this.live--;
-        if (target.active) {
-          target.setVisible(false);
-          if (this.pool.length < 300) this.pool.push(target);
-          else target.destroy();
-        }
-      },
-    });
-  }
-
-  /** One element-styled mote at (x, y). `power` scales speed and size. */
-  mote(x: number, y: number, color: number, st: FxStyle, power = 1, delay = 0): void {
-    const sc = st.scale * (0.7 + Math.random() * 0.5) * power;
-    const tint = Math.random() < 0.3 ? st.accent : color;
-    const a = Math.random() * Math.PI * 2;
-    const o: PartOpts = { tex: st.tex, add: st.add, delay };
-    switch (st.motion) {
-      case 'rise':
-        this.particle(x + (Math.random() - 0.5) * 12, y, tint, Math.cos(a) * 25 * power, -(50 + Math.random() * 50) * power, 420 + Math.random() * 220, sc, {
-          ...o,
-          easeY: 'Quad.out',
-        });
-        break;
-      case 'fall': {
-        const sp = (50 + Math.random() * 70) * power;
-        this.particle(x, y, tint, Math.cos(a) * sp, 40 + Math.random() * 50, 380 + Math.random() * 200, sc, {
-          ...o,
-          easeY: 'Back.in',
-          rot: Math.random() * Math.PI,
-          spin: (Math.random() - 0.5) * 6,
-          endScale: 0.6,
-        });
-        break;
-      }
-      case 'swirl':
-        this.particle(x, y, tint, Math.cos(a) * 70 * power, Math.sin(a) * 40 * power - 20, 360 + Math.random() * 160, sc, {
-          ...o,
-          rot: a + Math.PI / 2,
-          spin: 4,
-          endScale: 0.8,
-        });
-        break;
-      case 'jitter':
-        this.particle(x + Math.cos(a) * 14 * power, y + Math.sin(a) * 10 * power, tint, 0, 0, 120 + Math.random() * 140, sc, {
-          ...o,
-          rot: Math.random() * Math.PI,
-          endScale: 1.4,
-        });
-        break;
-      case 'sink':
-        this.particle(x + Math.cos(a) * 10, y, 0x2a1640, Math.cos(a) * 20, 18, 460, sc * 1.4, { ...o, add: false, endScale: 1.2 });
-        this.particle(x, y, tint, Math.cos(a) * 40 * power, Math.sin(a) * 30 * power, 340, sc, { ...o, add: true });
-        break;
-      default:
-        this.particle(x, y, tint, Math.cos(a) * 45 * power, Math.sin(a) * 30 * power - 12, 420 + Math.random() * 200, sc, o);
-    }
-  }
-
-  fxBurst(x: number, y: number, color: number, n: number) {
-    for (let i = 0; i < n; i++) {
-      const a = Math.random() * Math.PI * 2;
-      const sp = 40 + Math.random() * 90;
-      this.particle(x, y, color, Math.cos(a) * sp, Math.sin(a) * sp, 300 + Math.random() * 200);
-    }
-  }
-
-  /** A soft additive flash disc (crits, glints, turn points). */
-  fxFlash(x: number, y: number, r: number, color: number) {
-    const scene = this.host.world;
-    const img = scene.add.image(x, y, 'fx_orb').setTint(color).setBlendMode(ADD).setDepth(DEPTH.FX_GLOW).setScale((r * 2) / 32);
-    scene.tweens.add({ targets: img, scale: (r * 3.2) / 32, alpha: 0, duration: 180, onComplete: () => img.destroy() });
-  }
-
-  fxImpactAt(x: number, y: number, skill: SkillDef, color: number, n: number): void {
-    const st = fxStyle(skill.element);
-    for (let i = 0; i < n; i++) this.mote(x, y, color, st, 1);
-    const tags = skill.tags;
-    if (!skill.element && (tags.includes('blade') || tags.includes('pierce'))) {
-      this.particle(x, y, 0xffffff, 0, 0, 160, 1.1, { tex: CFX.spark, rot: Math.random(), endScale: 0.2 });
-    }
-    if (tags.includes('heavy')) this.fxDust(x, y + 10);
-  }
-
-  /** Low dust puff (heavy hits, knockback, dashes landing). */
-  fxDust(x: number, y: number) {
-    for (let i = 0; i < 6; i++) {
-      const a = (i / 6) * Math.PI * 2;
-      this.particle(x + Math.cos(a) * 6, y, 0xc8b8a0, Math.cos(a) * 60, Math.sin(a) * 18 - 8, 380, 0.9, { add: false, endScale: 1.6 });
-    }
-  }
-
-  // ------------------------------------------------------------ shapes
-
-  fxStrike(x: number, y: number, ang: number, arc: number, range: number, color: number, flip: boolean, style: StrikeStyle, el?: ElementId) {
-    const scene = this.host.world;
-    const g = scene.add.graphics({ x, y }).setDepth(ySort(y, Y_BIAS.ARC)).setBlendMode(ADD);
-    const r = range * 0.75;
-    let dur = 200;
-    switch (style) {
-      case 'sword': {
-        g.lineStyle(16, color, 0.16);
-        g.beginPath();
-        g.arc(0, 0, r - 6, ang - arc / 2, ang + arc / 2, flip);
-        g.strokePath();
-        g.lineStyle(7, color, 0.9);
-        g.beginPath();
-        g.arc(0, 0, r, ang - arc / 2, ang + arc / 2, flip);
-        g.strokePath();
-        g.lineStyle(2, 0xffffff, 0.9);
-        g.beginPath();
-        g.arc(0, 0, r + 3, ang - arc / 2.4, ang + arc / 2.4, flip);
-        g.strokePath();
-        break;
-      }
-      case 'dagger': {
-        // Two quick crossing cuts at the point of the stab.
-        const px = Math.cos(ang) * range * 0.55;
-        const py = Math.sin(ang) * range * 0.55;
-        const L = Math.max(16, range * 0.45);
-        const tilt = flip ? 0.35 : 0;
-        for (const da of [Math.PI / 4 + tilt, -Math.PI / 4 + tilt]) {
-          const a = ang + da;
-          const dx = Math.cos(a) * L * 0.5;
-          const dy = Math.sin(a) * L * 0.5;
-          g.lineStyle(6, color, 0.5).lineBetween(px - dx, py - dy, px + dx, py + dy);
-          g.lineStyle(2, 0xffffff, 1).lineBetween(px - dx, py - dy, px + dx, py + dy);
-        }
-        g.lineStyle(2, color, 0.7).lineBetween(Math.cos(ang) * 10, Math.sin(ang) * 10, px, py);
-        dur = 150;
-        break;
-      }
-      case 'staff': {
-        // Arcane bash: a short glowing arc and a rune-ring shock at the point of impact.
-        g.lineStyle(10, color, 0.35);
-        g.beginPath();
-        g.arc(0, 0, r * 0.8, ang - arc / 3, ang + arc / 3, flip);
-        g.strokePath();
-        g.lineStyle(2, 0xffffff, 0.9);
-        g.beginPath();
-        g.arc(0, 0, r * 0.8, ang - arc / 4, ang + arc / 4, flip);
-        g.strokePath();
-        const px = Math.cos(ang) * r;
-        const py = Math.sin(ang) * r;
-        g.lineStyle(2, color, 0.9).strokeCircle(px, py, 12);
-        for (let i = 0; i < 4; i++) {
-          const a = (i / 4) * Math.PI * 2 + 0.4;
-          g.fillStyle(0xffffff, 0.9).fillCircle(px + Math.cos(a) * 12, py + Math.sin(a) * 12, 1.8);
-        }
-        break;
-      }
-      case 'cone': {
-        // Elemental breath: a soft filled cone with motes streaming out of it.
-        for (let k = 1; k <= 3; k++) {
-          g.fillStyle(color, 0.22 / k);
-          g.slice(0, 0, (range * k) / 3 + 6, ang - arc / 2, ang + arc / 2, false);
-          g.fillPath();
-        }
-        g.lineStyle(2, 0xffffff, 0.5);
-        g.beginPath();
-        g.arc(0, 0, range, ang - arc / 2, ang + arc / 2, false);
-        g.strokePath();
-        const st = fxStyle(el);
-        for (let i = 0; i < 8; i++) {
-          const a = ang + (Math.random() - 0.5) * arc;
-          const d = range * (0.3 + Math.random() * 0.6);
-          this.particle(x + Math.cos(a) * 10, y + Math.sin(a) * 10, color, (Math.cos(a) * d) / 0.3, (Math.sin(a) * d) / 0.3, 300, 0.7 * st.scale, {
-            tex: st.tex,
-            add: st.add,
-            rot: a,
-            endScale: 1.2,
-          });
-        }
-        dur = 280;
-        break;
-      }
-      case 'claw': {
-        // Three parallel rakes.
-        for (let k = 0; k < 3; k++) {
-          const rr = r * (0.55 + k * 0.17);
-          g.lineStyle(5, color, 0.55);
-          g.beginPath();
-          g.arc(0, 0, rr, ang - arc * 0.3, ang + arc * 0.3, flip);
-          g.strokePath();
-          g.lineStyle(2, 0xffffff, 0.9);
-          g.beginPath();
-          g.arc(0, 0, rr, ang - arc * 0.26, ang + arc * 0.26, flip);
-          g.strokePath();
-        }
-        break;
-      }
-    }
-    g.setScale(style === 'cone' ? 0.85 : 0.7);
-    scene.tweens.add({ targets: g, scale: style === 'cone' ? 1 : 1.1, alpha: 0, duration: dur, onComplete: () => g.destroy() });
-  }
-
-  fxRing(x: number, y: number, radius: number, color: number, blades: boolean) {
-    const scene = this.host.world;
-    const g = scene.add.graphics({ x, y }).setDepth(ySort(y, Y_BIAS.ARC)).setBlendMode(ADD);
-    g.fillStyle(color, 0.16);
-    g.fillEllipse(0, 0, radius * 2, radius * 1.3);
-    g.lineStyle(3, color, 0.9);
-    g.strokeEllipse(0, 0, radius * 2, radius * 1.3);
-    if (blades) {
-      g.lineStyle(5, 0xffffff, 0.8);
-      for (let i = 0; i < 3; i++) {
-        const a = (i / 3) * Math.PI * 2;
-        g.beginPath();
-        g.arc(0, 0, radius * 0.8, a, a + 0.9);
-        g.strokePath();
-      }
-    }
-    g.setScale(0.35);
-    scene.tweens.add({
-      targets: g,
-      scale: 1,
-      alpha: 0,
-      rotation: blades ? Math.PI : 0,
-      duration: 260,
-      onComplete: () => g.destroy(),
-    });
-  }
-
-  /** Spin pulse: bladed ring plus element motes around the rim. */
-  fxSpin(x: number, y: number, radius: number, color: number, el?: ElementId) {
-    this.fxRing(x, y, radius, color, true);
-    if (!el) return;
-    const st = fxStyle(el);
-    for (let i = 0; i < 8; i++) {
-      const a = (i / 8) * Math.PI * 2 + Math.random() * 0.4;
-      this.mote(x + Math.cos(a) * radius * 0.85, y + Math.sin(a) * radius * 0.55, color, st, 0.8);
-    }
-  }
-
-  /** Nova landing: ring + burst, plus an element signature (sky bolt, flame column, splash, rubble, shards...). */
-  fxNova(cx: number, cy: number, r: number, color: number, el: ElementId | undefined, heavy: boolean) {
-    this.fxRing(cx, cy, r, color, false);
-    const st = fxStyle(el);
-    const n = Math.min(18, 8 + Math.round(r / 10));
-    for (let i = 0; i < n; i++) {
-      const a = Math.random() * Math.PI * 2;
-      const d = Math.random() * r * 0.8;
-      this.mote(cx + Math.cos(a) * d, cy + Math.sin(a) * d * 0.6, color, st, 1);
-    }
-    switch (el) {
-      case 'lightning':
-      case 'storm':
-        this.fxBolt(cx, cy, color);
-        break;
-      case 'holy': {
-        const scene = this.host.world;
-        const pillar = scene.add.image(cx, cy - 60, 'fx_orb').setTint(color).setBlendMode(ADD).setDepth(ySort(cy, Y_BIAS.PILLAR)).setScale(r / 22, 140 / 32).setAlpha(0.9);
-        scene.tweens.add({ targets: pillar, scaleX: 0.2, alpha: 0, duration: 380, onComplete: () => pillar.destroy() });
-        break;
-      }
-      case 'earth':
-      case 'magma':
-        this.fxCracks(cx, cy, r, el === 'magma' ? 0xff6a20 : 0x6a4a2a);
-        break;
-      default:
-        break;
-    }
-    if (heavy) this.fxDust(cx, cy);
-  }
-
-  /** Ground cracks radiating from an impact (earth/magma novas). */
-  private fxCracks(cx: number, cy: number, r: number, color: number) {
-    const scene = this.host.world;
-    const g = scene.add.graphics().setDepth(DEPTH.FX_GROUND);
-    g.lineStyle(2, color, 0.9);
-    for (let i = 0; i < 6; i++) {
-      const a = (i / 6) * Math.PI * 2 + Math.random() * 0.5;
-      g.beginPath();
-      g.moveTo(cx, cy);
-      let x = cx;
-      let y = cy;
-      for (let k = 1; k <= 3; k++) {
-        x = cx + Math.cos(a + (Math.random() - 0.5) * 0.5) * r * 0.28 * k;
-        y = cy + Math.sin(a + (Math.random() - 0.5) * 0.5) * r * 0.18 * k;
-        g.lineTo(x, y);
-      }
-      g.strokePath();
-    }
-    scene.tweens.add({ targets: g, alpha: 0, delay: 250, duration: 500, onComplete: () => g.destroy() });
-  }
-
-  /** A bolt from the sky onto (x, y). */
-  fxBolt(x: number, y: number, color: number) {
-    const pts: { x: number; y: number }[] = [];
-    const top = y - 240;
-    for (let i = 0; i <= 6; i++) {
-      const t = i / 6;
-      pts.push({ x: x + (i === 0 || i === 6 ? 0 : (Math.random() - 0.5) * 30), y: top + (y - top) * t });
-    }
-    this.fxLightning(pts, color, 1.4);
-    this.fxFlash(x, y - 6, 26, 0xffffff);
-  }
-
-  /** Jagged lightning through `pts`, with a few short forks. `weight` scales the stroke. */
-  fxLightning(pts: { x: number; y: number }[], color: number, weight = 1) {
-    const scene = this.host.world;
-    const g = scene.add.graphics().setDepth(DEPTH.FX_GLOW).setBlendMode(ADD);
-    const forks: [number, number, number, number][] = [];
-    const nodes: { x: number; y: number }[] = [pts[0]];
-    for (let i = 1; i < pts.length; i++) {
-      const a0 = pts[i - 1];
-      const a1 = pts[i];
-      const segs = 5;
-      for (let k = 1; k <= segs; k++) {
-        const t = k / segs;
-        const jitter = k === segs ? 0 : (Math.random() - 0.5) * 18;
-        const n = { x: a0.x + (a1.x - a0.x) * t + jitter, y: a0.y + (a1.y - a0.y) * t + jitter };
-        nodes.push(n);
-        if (k < segs && Math.random() < 0.22 * weight) {
-          const fa = Math.atan2(a1.y - a0.y, a1.x - a0.x) + (Math.random() < 0.5 ? 0.8 : -0.8);
-          const fl = 10 + Math.random() * 14;
-          forks.push([n.x, n.y, n.x + Math.cos(fa) * fl, n.y + Math.sin(fa) * fl]);
-        }
-      }
-    }
-    const draw = (w: number, c: number, a: number) => {
-      g.lineStyle(w * weight, c, a);
-      g.beginPath();
-      g.moveTo(nodes[0].x, nodes[0].y);
-      for (let i = 1; i < nodes.length; i++) g.lineTo(nodes[i].x, nodes[i].y);
-      g.strokePath();
-      for (const [x0, y0, x1, y1] of forks) g.lineBetween(x0, y0, x1, y1);
-    };
-    draw(5, color, 0.6);
-    draw(2, 0xffffff, 1);
-    scene.tweens.add({ targets: g, alpha: 0, duration: 260, onComplete: () => g.destroy() });
-    for (const p of pts.slice(1)) this.fxBurst(p.x, p.y, color, weight < 1 ? 2 : 4);
-  }
-
-  /** Shatter combo: ice bursts into shards. */
-  fxShatter(x: number, y: number, r: number) {
-    for (let i = 0; i < 12; i++) {
-      const a = (i / 12) * Math.PI * 2 + Math.random() * 0.3;
-      const sp = 90 + Math.random() * 90;
-      this.particle(x, y, i % 3 === 0 ? 0xffffff : 0xaee9ff, Math.cos(a) * sp, Math.sin(a) * sp * 0.7, 420, 1, {
-        tex: CFX.shard,
-        rot: a,
-        endScale: 0.6,
-      });
-    }
-    this.fxFlash(x, y, r, 0xdff6ff);
+  fxRing(x: number, y: number, radius: number, color: number, _blades = false): void {
+    (this.host.world as unknown as { vfx?: { world: { legacyRing(x: number, y: number, r: number, c: number): void } } }).vfx?.world.legacyRing(x, y, radius, color);
   }
 
   clear(): void {
     for (const p of this.projectiles) p.img.destroy();
     this.projectiles = [];
-    this.pool = [];
-    this.live = 0;
   }
 }

@@ -284,9 +284,9 @@ export function classChangeBlock(s: MapScene): string | null {
 
 /**
  * Becomes a class (or "No class" with null) — the ONE path for becomeClass and wearClass. Becoming a class refills
- * the 5 class slots with its best known skills (your own slots stay as they are) and emits classChanged (the
- * "You are now a Pyroblade" headline, the outfit change). "No class" turns the class slots into your own slots,
- * keeping their skills.
+ * the 5 class slots with its most relevant known skills (a class pick sitting in one of your slots moves in and frees
+ * that slot; your other picks stay) and emits classChanged (the "You are now a Pyroblade" headline, the outfit
+ * change). "No class" turns the class slots into your own slots, keeping their skills.
  */
 export function becomeClass(s: MapScene, id: string | null): Outcome {
   const block = classChangeBlock(s);

@@ -16,7 +16,7 @@
 import Phaser from 'phaser';
 import { hashSeed, mulberry32 } from '../../../core/rng';
 import { DEPTH, VFX_DEPTH, Y_BIAS, ySort } from '../../render/depths';
-import type { GhostSource, LivePt, PlayCtx, VfxGroup, VfxStage } from '../play';
+import type { GhostSource, LivePt, PlayCtx, TellSpec, VfxGroup, VfxStage } from '../play';
 import { RAMPS, hexToRgb } from '../ramps';
 import {
   RING_WHOLE_MAX,
@@ -36,12 +36,14 @@ import {
   type VfxQuality,
 } from '../types';
 import { TEMPLATES } from '../components';
+import { reachBucket } from '../recipe';
 import { Atlas, type AtlasEntry, type FrameRef, type StripRef } from './atlas';
 import { Baker, bakeReq, type BakeReq } from './baker';
 import { BoltCanvases } from './bolts';
 import { freePos, launch, scaledCount, spotMotion, spots, type Launch, type Rng } from './place';
 import { BobPool, ImagePool } from './pools';
 import { vfxSettings } from './settings';
+import { TelegraphFx, TellCanvases } from './telegraph';
 
 const TAU = Math.PI * 2;
 const RING_INKS: readonly RingInk[] = ['hot', 'lit', 'mid', 'dim'];
@@ -69,6 +71,7 @@ interface Shared {
   atlas: Atlas;
   baker: Baker;
   bolts: BoltCanvases;
+  tells: TellCanvases;
 }
 const SHARED = new WeakMap<Phaser.Game, Shared>();
 
@@ -79,11 +82,12 @@ function sharedFor(scene: Phaser.Scene): Shared {
   if (!s) {
     const atlas = new Atlas(game.textures, gl);
     const baker = new Baker(atlas, () => performance.now());
-    s = { atlas, baker, bolts: new BoltCanvases(game.textures, gl) };
+    s = { atlas, baker, bolts: new BoltCanvases(game.textures, gl), tells: new TellCanvases(game.textures, gl) };
     SHARED.set(game, s);
   } else {
     s.atlas.setGl(gl);
     s.bolts.setGl(gl);
+    s.tells.setGl(gl);
   }
   return s;
 }
@@ -143,6 +147,8 @@ interface SpriteOpts {
   holdMs?: number;
   /** Counts toward a target's spark cap. */
   spark?: object;
+  /** Low priority: only while the pools are under 2/3 full. */
+  low?: boolean;
 }
 
 class SpriteInst extends Inst {
@@ -244,7 +250,7 @@ class SpriteInst extends Inst {
   private place(img: Phaser.GameObjects.Image | null, f: FrameRef, p: Pt, dir: DirPick, depth: number, tier: 'body' | 'ground' | 'glow'): Phaser.GameObjects.Image | null {
     const pool = this.rt.pool(tier);
     if (!img) {
-      img = pool.get(f.tex, f.name);
+      img = pool.get(f.tex, f.name, this.o.low ? 2 / 3 : 1);
       if (!img) return null;
     } else if (img.texture.key !== f.tex || img.frame.name !== f.name) img.setTexture(f.tex, f.name);
     const ax = Math.round(p.x);
@@ -289,6 +295,8 @@ class ChunkRingInst extends Inst {
   private glowBobs: Phaser.GameObjects.Bob[] = [];
   private privates = new Map<string, Phaser.GameObjects.Blitter>();
   private readonly reqs: Map<RingInk, BakeReq>;
+  /** Static / marching rings skip the re-layout while nothing that places them changed. */
+  private laid = '';
 
   constructor(
     rt: VfxRuntime,
@@ -337,7 +345,18 @@ class ChunkRingInst extends Inst {
     const per = Math.PI * (rx + ry) * (1 + (3 * h) / (10 + Math.sqrt(4 - 3 * h)));
     const N = Math.max(8, Math.ceil(per / 10));
     const aim = this.o.ang();
-    const step = this.rt.quality < 1 ? 2 : 1;
+    // Chunk density: every chunk for cue rings; thin / dim bands (1 px floor bands, fading shocks) and a crowded bob
+    // pool (> 60 % of the player share) place every 2nd chunk, which reads like the 50 % dither of whole dim rings.
+    const thin = prm.thick <= 1 || ink === 'dim' || ink === 'mid';
+    const share = (this.rt.bobs.live - this.rt.bobs.liveTell) / (VFX_BUDGET.bobs - VFX_BUDGET.bobsReservedForTells);
+    // Cue rings (wind-up previews, nova markers, telegraphs) are never thinned: a gameplay rim stays whole.
+    const cue = this.o.layer === 'preview' || (this.piece.tags ?? []).includes('neverGoverned');
+    const step = cue ? 1 : share > 0.85 ? 3 : this.rt.quality < 1 || thin || share > 0.6 ? 2 : 1;
+    if (prm.anim === 'static' || prm.anim === 'march') {
+      const key = `${Math.round(c.x)},${Math.round(c.y)},${Math.round(r)},${step},${prm.anim === 'march' ? Math.floor(t / 67) : 0},${this.o.arcRel ? Math.round(this.o.ang() * 32) : 0},${this.rt.glowOn ? 1 : 0}`;
+      if (key === this.laid && this.bobs.length) return;
+      this.laid = key;
+    }
     const march = Math.floor(t / 67);
     let nb = 0;
     let ng = 0;
@@ -391,7 +410,8 @@ class ChunkRingInst extends Inst {
       const y = pick.flipY ? py - (f.h - 1 - f.oy) : py - f.oy;
       nb = this.setBob(this.bobs, nb, bl, f, x, y, pick);
       const g = s?.glow?.[0];
-      if (g?.w && this.o.glow && !back && this.rt.glowOn) {
+      // Glow twins on the front half, every 2nd chunk (the light reads as a band; half the bobs).
+      if (g?.w && this.o.glow && !back && this.rt.glowOn && k % (2 * step) === 0) {
         const gb = this.rt.bobs.sharedFor('glow', g.tex, 0, true, this.rt.profile.glowGain);
         const gx = pick.flipX ? px - (g.w - 1 - g.ox) : px - g.ox;
         const gy = pick.flipY ? py - (g.h - 1 - g.oy) : py - g.oy;
@@ -783,6 +803,7 @@ export interface VfxStats {
   sprites: { body: number; glow: number; ground: number; peakBody: number; peakGlow: number; peakGround: number; refused: number };
   bobs: number;
   peakBobs: number;
+  bobsRefused: number;
   particles: number;
   peakParticles: number;
   blitters: number;
@@ -794,9 +815,12 @@ export interface VfxStats {
   uploadedKB: number;
   updateMs: number;
   peakUpdateMs: number;
+  split: { bake: number; insts: number; particles: number };
   frameMs: number;
   boltCanvasesBusy: number;
   fallbacks: number;
+  /** Monster telegraphs on show (peak), tell canvases, tell bytes uploaded (KB). */
+  tells: { live: number; peak: number; canvases: number; uploadedKB: number };
 }
 
 export class VfxRuntime implements VfxStage {
@@ -805,6 +829,7 @@ export class VfxRuntime implements VfxStage {
   readonly bolts: BoltCanvases;
   readonly bobs: BobPool;
   readonly profile: VfxBiomeProfile;
+  readonly telegraphs: TelegraphFx;
   private readonly glowLayer: Phaser.GameObjects.Layer;
   private readonly pools: Record<'body' | 'glow' | 'ground', ImagePool>;
   private groups: Group[] = [];
@@ -816,11 +841,15 @@ export class VfxRuntime implements VfxStage {
   private fallbackReqs: Record<'burst' | 'orb', BakeReq>;
   private readonly canvasTier: boolean;
   quality: VfxQuality = 1;
+  /** A pinned tier (QA / settings) overrides the governor. */
+  private pinned: VfxQuality | null = null;
   private ema = 16.7;
   private over = 0;
   private under = 0;
   private stats0 = { updateMs: 0, peakUpdateMs: 0, peakParticles: 0, fallbacks: 0 };
-  private idle: ReturnType<typeof setTimeout> | null = null;
+  /** EMA of the update's parts (ms): in-frame bakes, instances, particles. */
+  private split = { bake: 0, insts: 0, particles: 0 };
+  private idle: number | null = null;
   private destroyed = false;
   private readonly onPost = (_t: number, delta: number) => this.update(delta);
   private readonly onPreRender = () => this.atlas.flush();
@@ -844,6 +873,7 @@ export class VfxRuntime implements VfxStage {
       ground: new ImagePool(scene, 'ground'),
     };
     this.bobs = new BobPool(scene, this.glowLayer);
+    this.telegraphs = new TelegraphFx(scene, sh.tells);
     this.fallbackReqs = {
       burst: bakeReq({ component: 'burst', params: { cls: 'magic', size: 'm' }, ramp: 'steel', motif: 'steel', lut: 'base', blend: 'normal', layer: 'body', anchor: { to: 'target', dy: 0 } }),
       orb: bakeReq({ component: 'orb', params: { form: 'orb', cell: 16, halo: false, mode: 'charge' }, ramp: 'steel', motif: 'steel', lut: 'base', blend: 'normal', layer: 'body', anchor: { to: 'caster', dy: 0 } }),
@@ -851,6 +881,7 @@ export class VfxRuntime implements VfxStage {
     this.baker.request(this.fallbackReqs.burst, true);
     this.baker.request(this.fallbackReqs.orb, true);
     this.baker.pump(50);
+    this.atlas.flush(VFX_BUDGET.uploadBytesPerFrame);
     scene.events.on(Phaser.Scenes.Events.POST_UPDATE, this.onPost);
     scene.game.events.on(Phaser.Core.Events.PRE_RENDER, this.onPreRender);
     scene.events.once(Phaser.Scenes.Events.SHUTDOWN, () => this.destroy());
@@ -875,9 +906,15 @@ export class VfxRuntime implements VfxStage {
     this.ticks.push(fn);
   }
 
+  /** A monster telegraph at its exact live geometry (TelegraphFx). Never governed. */
+  telegraph(spec: TellSpec): VfxGroup {
+    if (this.destroyed) return { end() {}, done: true };
+    return this.telegraphs.add(spec);
+  }
+
   trauma(amount: number): void {
-    if (amount <= 0) return;
-    this.host.trauma?.(amount * (this.reduceFlash ? 0.3 : 1));
+    // The camera rig scales it under "Reduce shake & flashes" (render/camera.ts).
+    if (amount > 0) this.host.trauma?.(amount);
   }
 
   /** Queues every bake variant of these pieces (the warm set); baked in idle slices, even while the scene pauses. */
@@ -997,9 +1034,6 @@ export class VfxRuntime implements VfxStage {
     if (p.component === 'bolt' && (p.tags ?? []).includes('geometryFromEvent')) return [];
     if (p.component === 'ring' && this.chunked(p as RingPiece)) return this.chunkInks(p as RingPiece).map((ink) => this.chunkReq(p as RingPiece, ink));
     const o = this.optsFor(p, shift);
-    if (p.component === 'slash' && p.params.form !== 'chop') {
-      return [1, -1].map((s) => bakeReq({ ...p, params: { ...p.params, sense: s as 1 | -1 } }, o));
-    }
     if (this.splits(p)) return (['back', 'front'] as const).map((h) => bakeReq({ ...p, anchor: { ...p.anchor, half: h } } as VfxPiece, o));
     return [bakeReq(p, o)];
   }
@@ -1077,8 +1111,27 @@ export class VfxRuntime implements VfxStage {
     }
   }
 
-  private spawn(g: Group, p: VfxPiece, rng: Rng): void {
+  /** geometryFromEvent pieces scaled to a monster's true reach (PlayCtx.rScale). */
+  private fromEvent(p: VfxPiece, ctx: PlayCtx): VfxPiece {
+    const k = ctx.rScale;
+    if (!k || Math.abs(k - 1) < 0.01 || !(p.tags ?? []).includes('geometryFromEvent')) return p;
+    switch (p.component) {
+      case 'ring': {
+        const q = p.params;
+        return { ...p, params: { ...q, r: Math.max(4, Math.round(q.r * k)), ...(q.r0 !== undefined ? { r0: Math.round(q.r0 * k) } : {}) } };
+      }
+      case 'slash':
+        return { ...p, params: { ...p.params, r: reachBucket(p.params.r * k) } };
+      case 'thrust':
+        return { ...p, params: { ...p.params, len: reachBucket(p.params.len * k) } };
+      default:
+        return p;
+    }
+  }
+
+  private spawn(g: Group, p0: VfxPiece, rng: Rng): void {
     const ctx = g.ctx;
+    const p = this.fromEvent(p0, ctx);
     const tags = p.tags ?? [];
     const governed = !tags.includes('neverGoverned');
     const q = this.quality;
@@ -1142,7 +1195,7 @@ export class VfxRuntime implements VfxStage {
     }
     if (p.component === 'ring' && this.chunked(p as RingPiece)) {
       const rp = p as RingPiece;
-      const evR = tags.includes('geometryFromEvent') && ctx.r !== undefined ? ctx.r : rp.params.r;
+      const evR = tags.includes('geometryFromEvent') && ctx.r !== undefined && ctx.rScale === undefined ? ctx.r : rp.params.r;
       const life = p.lifeMs ?? (rp.params.anim === 'sweep' ? rp.params.ms + 220 : rp.params.anim === 'expand' || rp.params.anim === 'contract' ? rp.params.ms : rp.params.ms);
       const life2 = rp.params.anim === 'static' || rp.params.anim === 'march' ? (p.lifeMs ?? (ctx.alive ? 1e9 : rp.params.ms)) : life;
       const n = p.place?.pattern === 'path' ? 1 : 1;
@@ -1201,6 +1254,7 @@ export class VfxRuntime implements VfxStage {
             tier: layer === 'ground' || layer === 'preview' || layer === 'tell' ? 'ground' : 'body',
             holdMs: isSpark && k === 0 ? ctx.holdMs : undefined,
             spark: isSpark ? victim : undefined,
+            low: ctx.low,
           });
         if (repeat && life) for (let w = 0; w * repeat < life; w++) g.insts.push(mk(t0 + s.delay + w * repeat));
         else g.insts.push(mk(t0 + s.delay));
@@ -1225,11 +1279,11 @@ export class VfxRuntime implements VfxStage {
   /** The bake request for a piece instance (slash sense resolved against the flip). */
   private reqFor(p: VfxPiece, ctx: PlayCtx, dir: DirPick | (() => DirPick)): { req: BakeReq; dir: DirPick | (() => DirPick) } {
     const o = this.optsFor(p, ctx.shift);
-    if (p.component === 'slash' && p.params.form !== 'chop' && typeof dir !== 'function') {
-      const want = (p.params.sense * (ctx.sense ?? 1)) as 1 | -1;
-      const flipped = dir.flipX !== dir.flipY;
-      const sense = (flipped ? -want : want) as 1 | -1;
-      return { req: bakeReq({ ...p, params: { ...p.params, sense } }, o), dir };
+    if (p.component === 'slash' && p.params.form !== 'chop' && ctx.sense === -1) {
+      // Odd swings of a multi-hit strike sweep back. The sense is not mirror-corrected for flipped headings (a
+      // left-facing swing sweeps the other way round): one bake per smear instead of two, and alternating swings
+      // still alternate (the bridge warms the -1 sense for multi-hit strikes only).
+      return { req: bakeReq({ ...p, params: { ...p.params, sense: (-p.params.sense) as 1 | -1 } }, o), dir };
     }
     return { req: bakeReq(p, o), dir };
   }
@@ -1531,7 +1585,9 @@ export class VfxRuntime implements VfxStage {
     this.govern(delta);
     // Urgent bakes (live effects waiting) within the slice budget; warm work only when the frame is calm.
     const budget = VFX_BUDGET.cpuMs.bakeSlice;
-    if (this.baker.pending) this.baker.pump(budget, true, this.ema > 20);
+    if (this.baker.pending) this.baker.pump(budget, false, this.ema > 20, true);
+    if (this.baker.pending) this.kickIdle();
+    const t1 = performance.now();
     if (this.ticks.length) {
       this.ticks = this.ticks.filter((fn) => {
         try {
@@ -1555,15 +1611,22 @@ export class VfxRuntime implements VfxStage {
       g.insts = g.insts.filter((i) => !i.dead);
       return g.insts.length > 0;
     });
+    this.telegraphs.update();
+    const t2 = performance.now();
     this.updateParticles(now);
-    const ms = performance.now() - t0;
+    const t3 = performance.now();
+    const ms = t3 - t0;
+    const k = this.split;
+    k.bake = k.bake * 0.95 + (t1 - t0) * 0.05;
+    k.insts = k.insts * 0.95 + (t2 - t1) * 0.05;
+    k.particles = k.particles * 0.95 + (t3 - t2) * 0.05;
     this.stats0.updateMs = this.stats0.updateMs * 0.9 + ms * 0.1;
     if (ms > this.stats0.peakUpdateMs) this.stats0.peakUpdateMs = ms;
   }
 
   /** Quality governor (docs/VFX.md §9) on an EMA of the frame delta. */
   private govern(delta: number): void {
-    if (this.canvasTier) return;
+    if (this.canvasTier || this.pinned !== null) return;
     this.ema = this.ema * 0.9 + Math.min(delta, 100) * 0.1;
     const G = VFX_GOVERNOR;
     if (this.ema > G.quarter.overMs) this.over = Math.max(this.over + 1, 0);
@@ -1582,17 +1645,27 @@ export class VfxRuntime implements VfxStage {
     }
   }
 
-  /** Bakes the warm set in real-time slices (setTimeout), so it progresses behind the fade and while paused. */
+  /**
+   * Bakes in idle time (requestIdleCallback, setTimeout fallback): the warm set behind the map fade, big strips, and
+   * everything while a panel pauses the scene. A slice never exceeds the idle deadline (8 ms at most).
+   */
   private kickIdle(): void {
-    if (this.idle || this.destroyed) return;
-    const run = () => {
+    if (this.idle !== null || this.destroyed) return;
+    const ric = (globalThis as { requestIdleCallback?: (cb: (d: { timeRemaining(): number }) => void, o?: { timeout: number }) => number }).requestIdleCallback;
+    const run = (d?: { timeRemaining(): number }) => {
       this.idle = null;
       if (this.destroyed || !this.baker.pending) return;
-      this.baker.pump(8);
+      const budget = d ? Math.min(8, Math.max(1, d.timeRemaining() - 1)) : 6;
+      this.baker.pump(budget, true);
       this.atlas.flush(VFX_BUDGET.uploadBytesPerFrame);
-      this.idle = setTimeout(run, 16);
+      this.idleSchedule(run, ric);
     };
-    this.idle = setTimeout(run, 0);
+    this.idleSchedule(run, ric);
+  }
+
+  private idleSchedule(run: (d?: { timeRemaining(): number }) => void, ric?: (cb: (d: { timeRemaining(): number }) => void, o?: { timeout: number }) => number): void {
+    if (ric) this.idle = ric(run, { timeout: 120 });
+    else this.idle = setTimeout(() => run(), 16) as unknown as number;
   }
 
   private busyKeys(): Set<string> {
@@ -1629,6 +1702,7 @@ export class VfxRuntime implements VfxStage {
       },
       bobs: this.bobs.live,
       peakBobs: this.bobs.peak,
+      bobsRefused: this.bobs.refused,
       particles: this.particles.length,
       peakParticles: this.stats0.peakParticles,
       blitters: this.bobs.blitterCount,
@@ -1639,10 +1713,12 @@ export class VfxRuntime implements VfxStage {
       bakedMs: Math.round(this.baker.bakedMs),
       uploadedKB: Math.round(this.atlas.uploadedBytes / 1024),
       updateMs: Math.round(this.stats0.updateMs * 100) / 100,
+      split: { bake: Math.round(this.split.bake * 100) / 100, insts: Math.round(this.split.insts * 100) / 100, particles: Math.round(this.split.particles * 100) / 100 },
       peakUpdateMs: Math.round(this.stats0.peakUpdateMs * 100) / 100,
       frameMs: Math.round(this.ema * 10) / 10,
       boltCanvasesBusy: this.bolts.busy,
       fallbacks: this.stats0.fallbacks,
+      tells: { live: this.telegraphs.live, peak: this.telegraphs.peak, canvases: sharedFor(this.scene).tells.count, uploadedKB: Math.round(sharedFor(this.scene).tells.bytes / 1024) },
     };
   }
 
@@ -1654,17 +1730,23 @@ export class VfxRuntime implements VfxStage {
     this.bobs.peak = this.bobs.live;
     this.stats0.peakParticles = this.particles.length;
     this.stats0.peakUpdateMs = 0;
+    this.telegraphs.peak = this.telegraphs.live;
   }
 
-  /** Forces a quality tier (QA); null returns control to the governor. */
-  setQuality(q: VfxQuality): void {
-    this.quality = q;
+  /** Pins a quality tier (QA); null returns control to the governor. */
+  setQuality(q: VfxQuality | null): void {
+    this.pinned = q;
+    if (q !== null) this.quality = q;
   }
 
   destroy(): void {
     if (this.destroyed) return;
     this.destroyed = true;
-    if (this.idle) clearTimeout(this.idle);
+    if (this.idle !== null) {
+      const cic = (globalThis as { cancelIdleCallback?: (h: number) => void }).cancelIdleCallback;
+      if (cic) cic(this.idle);
+      clearTimeout(this.idle);
+    }
     this.scene.events.off(Phaser.Scenes.Events.POST_UPDATE, this.onPost);
     this.scene.game.events.off(Phaser.Core.Events.PRE_RENDER, this.onPreRender);
     for (const g of this.groups) for (const i of g.insts) i.destroy();
@@ -1678,6 +1760,7 @@ export class VfxRuntime implements VfxStage {
     this.pools.body.destroy();
     this.pools.glow.destroy();
     this.pools.ground.destroy();
+    this.telegraphs.destroy();
     this.bobs.destroy();
     this.glowLayer.destroy();
     // Keep baking the warm set run-wide: the next map's runtime picks the queue up.

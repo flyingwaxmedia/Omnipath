@@ -29,9 +29,13 @@ export interface Admission {
 /** Why a request was refused (debug hooks and tests). */
 export type Refusal = 'gap' | 'group' | 'global';
 
+/** Start times older than this are forgotten (longer than any group gap). */
+const GAP_MEMORY_MS = 1000;
+
 export class VoiceLimiter {
   private voices: Voice[] = [];
-  private readonly lastStart = new Map<string, number>();
+  /** Recent start times per group (a delayed voice starts in the future, so this is not just "the last one"). */
+  private readonly starts = new Map<string, number[]>();
   private nextId = 1;
   /** The last refusal reason (null after an admission). */
   lastRefusal: Refusal | null = null;
@@ -39,13 +43,16 @@ export class VoiceLimiter {
   constructor(readonly maxTotal: number) {}
 
   /**
-   * Asks for a voice of `group` lasting `durMs` from `now`. Returns the admission (with the voices to evict) or null
-   * when the request is dropped. `priority` overrides the group's (a crit layer in the hit group).
+   * Asks for a voice of `group` lasting `durMs`, starting `delayMs` after `now`. Returns the admission (with the
+   * voices to evict) or null when the request is dropped. `priority` overrides the group's (a crit layer in the hit
+   * group). A voice scheduled ahead counts against the caps from now on, and its gap is measured at its own start,
+   * so a delayed sound neither blocks nor slips past the sounds around it.
    */
-  admit(group: string, policy: VoicePolicy, now: number, durMs: number, priority = policy.priority): Admission | null {
+  admit(group: string, policy: VoicePolicy, now: number, durMs: number, priority = policy.priority, delayMs = 0): Admission | null {
     this.prune(now);
-    const last = this.lastStart.get(group);
-    if (last !== undefined && now - last < policy.gap && priority <= policy.priority) {
+    const start = now + Math.max(0, delayMs);
+    const recent = this.starts.get(group);
+    if (priority <= policy.priority && recent?.some((t) => Math.abs(start - t) < policy.gap)) {
       this.lastRefusal = 'gap';
       return null;
     }
@@ -68,9 +75,11 @@ export class VoiceLimiter {
       evict.push(victim);
     }
     if (evict.length) this.voices = this.voices.filter((v) => !evict.includes(v));
-    const voice: Voice = { id: this.nextId++, group, priority, start: now, end: now + Math.max(1, durMs) };
+    const voice: Voice = { id: this.nextId++, group, priority, start, end: start + Math.max(1, durMs) };
     this.voices.push(voice);
-    this.lastStart.set(group, now);
+    const kept = (recent ?? []).filter((t) => t > now - GAP_MEMORY_MS);
+    kept.push(start);
+    this.starts.set(group, kept);
     this.lastRefusal = null;
     return { id: voice.id, evict };
   }
@@ -95,7 +104,7 @@ export class VoiceLimiter {
   /** Forgets every voice and gap (context suspended / closed). */
   reset(): void {
     this.voices = [];
-    this.lastStart.clear();
+    this.starts.clear();
   }
 }
 

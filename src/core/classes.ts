@@ -6,7 +6,7 @@
 import type { Registry } from './registry';
 import { countTagged, describeRequirement, meetsRequirement, type RequirementContext } from './requirements';
 import type { ClassProgress, SkillBookState, SkillProgress } from './state';
-import type { ClassClause, ClassDef, ClassTier, SkillDef, StatBonus } from './types';
+import type { ClassClause, ClassDef, ClassTier, ElementId, SkillDef, StatBonus } from './types';
 
 /** Class tuning (SPEC §5). */
 export const CLASS: {
@@ -487,36 +487,101 @@ export function barEligible(skill: Pick<SkillDef, 'tier' | 'tags'>): boolean {
 }
 
 /**
- * The skills a class equips into its class slots, picked from KNOWN skills (pure and deterministic):
- * first enough skills to satisfy each clause's count (in clause order), then the best remaining
- * matching skills. "Best" = higher tier, then higher rank, then the class's own signature skills,
- * then most recently learned, then id. Prefers one skill per authored base (a variant and its base
- * do not both take class slots unless nothing else matches). Returns at most `n` skill ids.
+ * The tags a class's tree builds on, main tag first: the `tag` of each tree passive node and of the imprint
+ * (classTreeTemplate puts the seed's `tree.tag` on n1/n2 and its `tree.tag2` on n3). Pyroblade → ['fire', 'blade'].
+ */
+export function classTreeTags(reg: Registry, cls: Pick<ClassDef, 'tree' | 'imprint'>): string[] {
+  const tags: string[] = [];
+  const add = (passiveId: string | undefined) => {
+    const effect = passiveId ? reg.passive(passiveId)?.effect : undefined;
+    const tag = effect && 'tag' in effect ? effect.tag : undefined;
+    if (tag && !tags.includes(tag)) tags.push(tag);
+  };
+  for (const node of cls.tree ?? []) if (node.kind !== 'skill') add(node.ref);
+  add(cls.imprint);
+  return tags;
+}
+
+/** What a class is about, for "related" skills: tags (patterns + tree) and elements (patterns, requirements, bonus). */
+interface ClassTheme {
+  tags: ReadonlySet<string>;
+  elements: ReadonlySet<string>;
+}
+
+function classTheme(reg: Registry, cls: ClassDef): ClassTheme {
+  const clauseTags = cls.clauses.flatMap((c) => c.tags);
+  const named = [
+    ...clauseTags,
+    ...Object.keys(cls.bonus.tagPower ?? {}),
+    ...(cls.requires ?? []).flatMap((r) => (r.type === 'element' ? [r.id] : [])),
+  ];
+  return {
+    tags: new Set([...clauseTags, ...classTreeTags(reg, cls)]),
+    elements: new Set(named.filter((t) => reg.element(t as ElementId) !== undefined)),
+  };
+}
+
+/** How a skill fits a class: 'match' (fits a pattern, classMatchesSkill), 'related' (shares a theme), else null. */
+export type ClassFit = 'match' | 'related';
+
+function fitOf(cls: ClassDef, theme: ClassTheme, skill: Pick<SkillDef, 'tags' | 'element'>): ClassFit | null {
+  if (classMatchesSkill(cls, skill)) return 'match';
+  if (skill.tags.some((t) => theme.tags.has(t))) return 'related';
+  if (skill.element !== undefined && theme.elements.has(skill.element)) return 'related';
+  return null;
+}
+
+/**
+ * How a skill fits a class's slots (pure): 'match' when it fits one of the class's patterns (classMatchesSkill);
+ * 'related' when it shares any tag with the class's patterns or its tree (tree.tag / tree.tag2), or carries an
+ * element the class's patterns, requirements or bonus name (a blade skill for Pyroblade, a heavy one for
+ * Earthshaper); null when it has nothing to do with the class.
+ */
+export function classSkillFit(reg: Registry, cls: ClassDef, skill: Pick<SkillDef, 'tags' | 'element'>): ClassFit | null {
+  return fitOf(cls, classTheme(reg, cls), skill);
+}
+
+/**
+ * The skills a class equips into its class slots, picked from KNOWN bar-eligible skills (pure and deterministic),
+ * most relevant first:
+ *   1. enough pattern matches to satisfy each clause's count (in clause order);
+ *   2. elemental classes (distinctElements): one matching skill per distinct element;
+ *   3. the best remaining pattern matches, then the best RELATED skills (classSkillFit) — one skill per authored
+ *      base first (a variant and its base do not both take slots while another skill could), then the rest;
+ *   4. nothing related known: fewer ids than `n` (those class slots stay empty).
+ * "Best" = higher tier, then higher rank, then the class's own signature skills, then most recently learned, then
+ * id. Returns at most `n` skill ids (ask for more than CLASS_SLOTS to get spares for picks that sit elsewhere).
  */
 export function classSkills(reg: Registry, state: Readonly<SkillBookState>, cls: ClassDef, n = CLASS_SLOTS): string[] {
   const grants = new Set(cls.grants ?? []);
-  const known = Object.values(state.skills)
-    .map((p) => ({ p, s: reg.skill(p.id) }))
-    .filter((x): x is { p: SkillProgress; s: SkillDef } => !!x.s && barEligible(x.s) && classMatchesSkill(cls, x.s));
-  const score = (x: { p: SkillProgress; s: SkillDef }) =>
+  const theme = classTheme(reg, cls);
+  type Known = { p: SkillProgress; s: SkillDef; fit: ClassFit };
+  const known: Known[] = [];
+  for (const p of Object.values(state.skills)) {
+    const s = reg.skill(p.id);
+    const fit = s && barEligible(s) ? fitOf(cls, theme, s) : null;
+    if (s && fit) known.push({ p, s, fit });
+  }
+  const score = (x: Known) =>
     x.s.tier * 1e6 + x.p.rank * 1e4 + (grants.has(x.s.id) ? 5e3 : 0) + Math.min(4999, x.p.learnedAt / 1e9);
   known.sort((a, b) => score(b) - score(a) || (a.s.id < b.s.id ? -1 : a.s.id > b.s.id ? 1 : 0));
+  const matches = known.filter((x) => x.fit === 'match');
+  const related = known.filter((x) => x.fit === 'related');
 
   const picked: string[] = [];
   const bases = new Set<string>();
   const baseOf = (id: string) => reg.baseOf(id) ?? id;
-  const take = (x: { s: SkillDef }) => {
+  const take = (x: Known) => {
     picked.push(x.s.id);
     bases.add(baseOf(x.s.id));
   };
-  const free = (x: { s: SkillDef }, distinct: boolean) =>
-    !picked.includes(x.s.id) && (!distinct || !bases.has(baseOf(x.s.id)));
+  const free = (x: Known, distinct: boolean) => !picked.includes(x.s.id) && (!distinct || !bases.has(baseOf(x.s.id)));
 
   // 1) satisfy each clause's own count.
   for (const clause of cls.clauses) {
     let have = picked.filter((id) => clause.tags.every((t) => reg.skill(id)!.tags.includes(t))).length;
     for (const distinct of [true, false]) {
-      for (const x of known) {
+      for (const x of matches) {
         if (picked.length >= n || have >= clause.count) break;
         if (!free(x, distinct) || !clause.tags.every((t) => x.s.tags.includes(t))) continue;
         take(x);
@@ -527,18 +592,20 @@ export function classSkills(reg: Registry, state: Readonly<SkillBookState>, cls:
   // 2) elemental classes: one skill per distinct element first.
   if (cls.distinctElements) {
     const els = new Set(picked.map((id) => reg.skill(id)!.element).filter(Boolean));
-    for (const x of known) {
+    for (const x of matches) {
       if (picked.length >= n) break;
       if (!x.s.element || els.has(x.s.element) || !free(x, true)) continue;
       take(x);
       els.add(x.s.element);
     }
   }
-  // 3) fill with the best remaining matches (distinct bases first).
+  // 3) the best remaining matches, then related skills (distinct bases first).
   for (const distinct of [true, false]) {
-    for (const x of known) {
-      if (picked.length >= n) break;
-      if (free(x, distinct)) take(x);
+    for (const group of [matches, related]) {
+      for (const x of group) {
+        if (picked.length >= n) break;
+        if (free(x, distinct)) take(x);
+      }
     }
   }
   return picked;

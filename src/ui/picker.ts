@@ -2,13 +2,24 @@
 //   'picker'  arg '<slot>'       — choose a skill for one of YOUR slots: a grid of skill icons with names, newest
 //                                  first ('New' dot), tap to equip, 'Empty' to clear the slot;
 //             arg 'skill:<id>'   — choose which of your slots gets that skill (a card's Equip when every slot is full);
+//                                  after the pick it goes back where it came from: the Star Chart with that star's card,
+//                                  the skill card, or the NPC dialog that offered the Equip;
 //   'menu'    the ☰ button       — New game (with a one-line confirm) and only what exists.
 // Class slots are never edited here: the class fills them (holding a class slot opens that skill's card instead).
 import { pickerHtml, slotChooserHtml } from './hud/html';
-import type { PanelHost, PanelRender } from './panels/common';
+import { OPENED_FROM, type OpenedFrom, type PanelHost, type PanelRender } from './panels/common';
 import { $, $$, esc } from './util';
 
 const CLASS = 'hud-sheet';
+
+/** A slot was picked for `skillId`: back to the card / dialog the picker was opened from, else to the world. */
+function finish(host: PanelHost, skillId: string): void {
+  const from = host.state[OPENED_FROM] as OpenedFrom | undefined;
+  if (from?.panel === 'skills') host.open('skills', `card:${skillId}`);
+  else if (from?.panel === 'skill' && from.arg) host.open('skill', from.arg);
+  else if ((from?.panel === 'dialog' || from?.panel === 'npc') && from.arg) host.open(from.panel, from.arg);
+  else host.close();
+}
 
 export function renderPicker(host: PanelHost, arg?: string): void {
   const ctrl = host.ctrl;
@@ -27,7 +38,7 @@ export function renderPicker(host: PanelHost, arg?: string): void {
       b.addEventListener('click', () => {
         const r = ctrl.equipSkill(id, Number(b.dataset.slot));
         if (!r.ok && r.message) host.toast(esc(r.message));
-        host.close();
+        finish(host, id);
       }),
     );
     return;

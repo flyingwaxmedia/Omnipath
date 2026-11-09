@@ -71,6 +71,8 @@ export function createGame(scenes: Phaser.Types.Scenes.SceneType[], reg?: Regist
       autoCenter: Phaser.Scale.NO_CENTER,
     },
     input: { activePointers: 3 },
+    // All sound comes from src/game/audio (one AudioContext); Phaser's own sound manager stays off.
+    audio: { noAudio: true },
     scene: scenes,
   });
   if (reg) game.registry.set(REGISTRY_KEY, reg);

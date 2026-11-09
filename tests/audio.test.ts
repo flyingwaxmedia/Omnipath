@@ -21,7 +21,7 @@ import {
   gainOf,
   hitSound,
   novaSound,
-  shortTermLoudness,
+  perceivedLoudness,
   soundDuration,
   soundNames,
   statusSound,
@@ -164,7 +164,7 @@ describe('SFX bank', () => {
       const def = SOUNDS[name];
       expect(GROUPS[def.group], name).toBeDefined();
       expect(gainOf(def), name).toBeGreaterThan(0);
-      expect(gainOf(def), name).toBeLessThanOrEqual(0.6);
+      expect(gainOf(def), name).toBeLessThanOrEqual(0.8); // the level table: tests/audio-bank.test.ts
       const x = buildSound(name, def, SR, 1);
       expect(x.length, name).toBeGreaterThan(0);
       let peak = 0;
@@ -175,7 +175,9 @@ describe('SFX bank', () => {
       }
       expect(finite, name).toBe(true);
       expect(peak, name).toBeLessThanOrEqual(PEAK_CEILING + 1e-6);
-      expect(shortTermLoudness(x, SR), name).toBeLessThanOrEqual(TARGET_LOUDNESS + 1e-6);
+      expect(perceivedLoudness(x, SR), name).toBeLessThanOrEqual(TARGET_LOUDNESS + 1e-6);
+      // reaches its target unless the peak ceiling held it back (tests/audio-bank.test.ts bounds that at 1 dB)
+      expect(perceivedLoudness(x, SR), name).toBeGreaterThan(TARGET_LOUDNESS * 0.89);
       expect(soundDuration(def, SR), name).toBeCloseTo(x.length / SR, 2);
       const limit = def.bus === 'ambience' ? 2.6 : def.group === 'fanfare' || def.group === 'boss' ? 1.5 : def.group === 'quest' || def.group === 'gather' ? 1.1 : 0.7;
       expect(x.length / SR, name).toBeLessThanOrEqual(limit);
@@ -208,6 +210,17 @@ describe('SFX bank', () => {
     expect(GROUPS.crit.priority).toBeGreaterThan(GROUPS.hit.priority);
     expect(GROUPS.telegraph.priority).toBeGreaterThan(GROUPS.swing.priority);
   });
+
+  it('normalises by perceived loudness: a short tap and a long swell of equal level measure alike', () => {
+    const tone = (ms: number, f: number) => Float32Array.from({ length: Math.round((SR * ms) / 1000) }, (_, i) => 0.5 * Math.sin((2 * Math.PI * f * i) / SR));
+    // longer than the 100 ms window: duration no longer matters
+    expect(perceivedLoudness(tone(400, 500), SR)).toBeCloseTo(perceivedLoudness(tone(200, 500), SR), 2);
+    // a 25 ms burst counts as quieter than a 200 ms tone (the ear integrates ≈ 100 ms)
+    expect(perceivedLoudness(tone(25, 500), SR)).toBeLessThan(perceivedLoudness(tone(200, 500), SR) * 0.6);
+    // the K-weighting shelf: 3 kHz counts louder than 500 Hz; the master high-pass: 60 Hz barely counts
+    expect(perceivedLoudness(tone(200, 3000), SR)).toBeGreaterThan(perceivedLoudness(tone(200, 500), SR) * 1.4);
+    expect(perceivedLoudness(tone(200, 60), SR)).toBeLessThan(perceivedLoudness(tone(200, 500), SR) * 0.35);
+  });
 });
 
 describe('voice limiter', () => {
@@ -229,6 +242,20 @@ describe('voice limiter', () => {
     expect(v.admit('hit', pol, 160, 200, 9)?.evict.length).toBe(1);
     // Expired voices free their slots.
     expect(v.active(1000)).toBe(0);
+  });
+
+  it('measures the gap of a delayed voice at its own start, and counts it from now on', () => {
+    const v = new VoiceLimiter(10);
+    const warp = { max: 2, gap: 300, priority: 6 };
+    expect(v.admit('warp', warp, 0, 380)).not.toBeNull();
+    expect(v.admit('warp', warp, 0, 380, 6, 340)).not.toBeNull(); // warp_in 340 ms later
+    expect(v.active(1, 'warp')).toBe(2);
+    expect(v.admit('warp', warp, 100, 380)).toBeNull(); // too close to warp_out
+    // an immediate sound is not blocked by a scheduled one far enough ahead of it
+    const hurt = { max: 2, gap: 90, priority: 6 };
+    expect(v.admit('hurt', hurt, 0, 90, 6, 250)).not.toBeNull();
+    expect(v.admit('hurt', hurt, 100, 90)).not.toBeNull();
+    expect(v.admit('hurt', hurt, 200, 90)).toBeNull(); // within 90 ms of the delayed one at 250
   });
 
   it('a high-priority sound beats ticks at the global cap, never the reverse', () => {
@@ -357,7 +384,8 @@ describe('ambience', () => {
   it('bed one-shots are ambience-bus bank sounds with sane timing', () => {
     for (const bed of Object.values(BEDS)) {
       expect(bed.layers.length, bed.id).toBeGreaterThan(0);
-      expect(bed.gain).toBeLessThanOrEqual(0.6);
+      // (bed gains are set from an offline render of every bed: outdoor beds within ±1 dB, caves / crypts ~3 dB under)
+      expect(bed.gain, bed.id).toBeLessThanOrEqual(1);
       for (const l of bed.layers) {
         expect(l.freq, bed.id).toBeGreaterThanOrEqual(200);
         expect(l.freq, bed.id).toBeLessThanOrEqual(6000);
