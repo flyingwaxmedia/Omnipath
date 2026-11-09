@@ -40,18 +40,18 @@ interface Table {
 }
 
 const GREEN: Table = {
-  density: 0.2,
+  density: 0.22,
   flowers: ['crimson', 'rose', 'cream', 'violet'],
   items: [
-    ['flower', 42],
-    ['dr_tallgrass_a', 16],
+    ['flower', 40],
+    ['dr_tallgrass_a', 14],
     ['dr_tallgrass_b', 14],
-    ['dr_stone', 5],
-    ['dr_pebbles', 5],
-    ['dr_mushrooms_red', 4],
+    ['dr_stone', 7],
+    ['dr_pebbles', 4],
+    ['dr_mushrooms_red', 5],
     ['dr_mushrooms_brown', 3],
-    ['dr_stump', 3],
-    ['dr_log', 2],
+    ['dr_stump', 5],
+    ['dr_log', 3],
   ],
 };
 const TOWN_GREEN: Table = {
@@ -340,13 +340,13 @@ export function planDressing(cm: CompiledMap): DressingItem[] {
   };
   const patchMul = (x: number, y: number) => {
     const v = noise(x, y);
-    return v < 0.3 ? 0.25 : 0.55 + (v - 0.3) * 2.1;
+    return v < 0.3 ? 0.5 : 0.72 + (v - 0.3) * 1.6;
   };
   const flowerKey = (table: Table, x: number, y: number, r: () => number, color?: FlowerColor): string => {
     const cols = table.flowers ?? ['cream'];
     const c = color ?? cols[Math.floor(mulberry32(hashSeed(seed, 'fcol', Math.floor(x / CELL), Math.floor(y / CELL)))() * cols.length)];
     const s = r();
-    return `dr_flower_${c}_${s < 0.25 ? 's' : s < 0.65 ? 'm' : 'l'}`;
+    return `dr_flower_${c}_${s < 0.15 ? 's' : s < 0.6 ? 'm' : 'l'}`;
   };
   const pick = (items: readonly Pick[], r: () => number): string => {
     let total = 0;

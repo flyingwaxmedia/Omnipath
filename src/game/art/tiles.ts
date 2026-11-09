@@ -390,7 +390,7 @@ function waterGround(g: WaterLook): Ground {
   };
 }
 
-const MOSS_LOOK = { base: '#4e6c33', dark: '#3d5628', deep: '#33481f', light: '#62843d', hi: '#7a9e4b' };
+const MOSS_LOOK = { base: '#48632f', dark: '#3a5127', deep: '#2f4220', light: '#5b7b39', hi: '#729447' };
 function mossGround(): Ground {
   const base = hx(MOSS_LOOK.base);
   return {
@@ -667,19 +667,22 @@ const BLOOMS: readonly [string, string][] = [
 ];
 
 function flowers(b: Buf, rnd: Rnd, place: Place, v: number): void {
-  const clusters = 2 + (v === 2 ? 1 : 0);
+  // sparse clumps (the dressing layer adds the big flower beds): v0 one clump, v1 none, v2 two
+  const clusters = v === 0 ? 1 : v === 2 ? 2 : 0;
+  const leaf = hx(GRASS_LOOK.deep);
+  const leafLight = hx(GRASS_LOOK.dark);
   for (let c = 0; c < clusters; c++) {
-    const p = place(7, 6, 1);
+    const p = place(6, 5, 2);
     if (!p) continue;
     const [petal, eye] = BLOOMS[ri(rnd, BLOOMS.length)];
     const n = 3 + ri(rnd, 3);
     for (let i = 0; i < n; i++) {
-      const x = p[0] + 1 + ri(rnd, 5);
-      const y = p[1] + 1 + ri(rnd, 4);
-      b.set(x, y + 1, hx(GRASS_LOOK.deep));
+      const x = p[0] + ri(rnd, 5);
+      const y = p[1] + 1 + ri(rnd, 3);
+      b.set(x, y + 1, rnd() < 0.5 ? leaf : leafLight);
       b.set(x, y, hx(petal));
-      if (rnd() < 0.5) b.set(x + 1, y, sh(hx(petal), -30));
-      if (rnd() < 0.35) b.set(x, y - 1, hx(eye));
+      if (rnd() < 0.4) b.set(x + 1, y, sh(hx(petal), -34));
+      if (rnd() < 0.3) b.set(x, y - 1, hx(eye));
     }
   }
 }
@@ -785,17 +788,20 @@ function paintCrypt(b: Buf, v: number): void {
     for (let q = 0; q < 3; q++) b.set((st.x + 3 + ri(rnd, 10)) % S, st.y + 3 + ri(rnd, 10), sh(body, rnd() < 0.5 ? -10 : 8));
     if (i === feature) {
       if (v === 1) {
-        // crack
-        let x = st.x + 3 + ri(rnd, 4);
-        for (let y = st.y + 2; y < st.y + 13; y++) {
-          b.set(x, y, sh(body, -28));
-          if (rnd() < 0.4) x += rnd() < 0.5 ? 1 : -1;
+        // short hairline crack
+        let x = st.x + 4 + ri(rnd, 6);
+        const y0 = st.y + 3 + ri(rnd, 4);
+        for (let y = y0; y < y0 + 5; y++) {
+          b.set(x % S, y, sh(body, -20));
+          if (rnd() < 0.5) x += rnd() < 0.5 ? 1 : -1;
         }
       } else {
-        // moss in the corner
-        b.rect(st.x + 1, st.y + 11, 4, 3, hx('#4f6a3e'));
-        b.rect(st.x + 2, st.y + 10, 2, 1, hx('#62804c'));
-        b.set(st.x + 1, st.y + 11, hx('#62804c'));
+        // chipped corner with a tuft of moss
+        const x = st.x + 1;
+        const y = st.y + st.h - 4;
+        b.rect(x, y, 2, 2, hx('#4a6040'));
+        b.set(x + 2, y + 1, hx('#4a6040'));
+        b.set(x, y, hx('#5c7650'));
       }
     }
   });
@@ -889,6 +895,7 @@ interface WallLook {
   top: RGB;
   topLight: RGB;
   topDark: RGB;
+  crevice: RGB;
   lip: RGB;
   face: RGB;
   faceLight: RGB;
@@ -897,7 +904,7 @@ interface WallLook {
   outline: RGB;
   /** Face height inside the wall cell. */
   fh: number;
-  /** Bricks instead of rock strata. */
+  /** Brick courses and a dark cap instead of rock plates and rock columns. */
   masonry: boolean;
   /** Bits of vegetation on top (cliffs). */
   tuft?: [RGB, RGB];
@@ -905,124 +912,200 @@ interface WallLook {
 
 const WALLS: Readonly<Record<number, WallLook>> = {
   [T.CLIFF]: {
-    top: hx('#8d816d'),
-    topLight: hx('#a2957f'),
-    topDark: hx('#716654'),
-    lip: hx('#b9ab92'),
-    face: hx('#685c4c'),
-    faceLight: hx('#7b6e5b'),
-    faceDark: hx('#4f4539'),
-    strata: hx('#5a4f41'),
+    top: hx('#7f7766'),
+    topLight: hx('#958c79'),
+    topDark: hx('#686152'),
+    crevice: hx('#433d33'),
+    lip: hx('#aea38c'),
+    face: hx('#5e5649'),
+    faceLight: hx('#71685a'),
+    faceDark: hx('#3f3931'),
+    strata: hx('#4a443a'),
     outline: hx(PAL.outline),
-    fh: 13,
+    fh: 18,
     masonry: false,
-    tuft: [hx('#5a7536'), hx('#83a04d')],
+    tuft: [hx('#56702f'), hx('#7a9845')],
   },
   [T.CAVE_WALL]: {
-    top: hx('#5d544b'),
-    topLight: hx('#6e645a'),
-    topDark: hx('#4a423b'),
-    lip: hx('#807468'),
-    face: hx('#433b34'),
-    faceLight: hx('#51483f'),
-    faceDark: hx('#312b26'),
-    strata: hx('#3a332d'),
-    outline: hx('#16110d'),
-    fh: 13,
+    top: hx('#544b43'),
+    topLight: hx('#655a50'),
+    topDark: hx('#463e37'),
+    crevice: hx('#2a2420'),
+    lip: hx('#7d7064'),
+    face: hx('#3f3731'),
+    faceLight: hx('#4d443c'),
+    faceDark: hx('#2a2420'),
+    strata: hx('#332c27'),
+    outline: hx('#130f0c'),
+    fh: 18,
     masonry: false,
   },
   [T.CRYPT_WALL]: {
-    top: hx('#625d72'),
-    topLight: hx('#736e84'),
-    topDark: hx('#504b5e'),
-    lip: hx('#8a849c'),
-    face: hx('#4c475c'),
-    faceLight: hx('#5a556b'),
-    faceDark: hx('#3a3647'),
-    strata: hx('#2c2936'),
-    outline: hx('#141218'),
-    fh: 14,
+    top: hx('#2e2b38'),
+    topLight: hx('#3a3646'),
+    topDark: hx('#25222d'),
+    crevice: hx('#1d1b24'),
+    lip: hx('#7a7490'),
+    face: hx('#544f68'),
+    faceLight: hx('#67617e'),
+    faceDark: hx('#3a3649'),
+    strata: hx('#26232f'),
+    outline: hx('#121017'),
+    fh: 20,
     masonry: true,
   },
 };
 
+/** Toroidal Voronoi plates for rock tops (layout shared by every variant so edges always match). */
+interface Plates {
+  /** nearest plate id per pixel */
+  id: Uint8Array;
+  /** distance to the plate border (second-nearest minus nearest) */
+  edge: Float32Array;
+  /** +1 when the pixel lies on the lower-right half of its plate (shadow side) */
+  side: Int8Array;
+}
+const plateCache = new Map<number, Plates>();
+function rockPlates(seed: number): Plates {
+  const hit = plateCache.get(seed);
+  if (hit) return hit;
+  const rnd = artRng(seed);
+  const pts: [number, number][] = [];
+  for (let gy = 0; gy < 3; gy++) for (let gx = 0; gx < 3; gx++) pts.push([(gx + 0.2 + rnd() * 0.6) * (S / 3), (gy + 0.2 + rnd() * 0.6) * (S / 3)]);
+  const id = new Uint8Array(S * S);
+  const edge = new Float32Array(S * S);
+  const side = new Int8Array(S * S);
+  for (let y = 0; y < S; y++)
+    for (let x = 0; x < S; x++) {
+      let d1 = 1e9;
+      let d2 = 1e9;
+      let best = 0;
+      let bdx = 0;
+      let bdy = 0;
+      pts.forEach(([px, py], i) => {
+        for (const ox of [-S, 0, S])
+          for (const oy of [-S, 0, S]) {
+            const dx = x + 0.5 - (px + ox);
+            const dy = (y + 0.5 - (py + oy)) * 1.25;
+            const d = Math.sqrt(dx * dx + dy * dy);
+            if (d < d1) {
+              d2 = d1;
+              d1 = d;
+              best = i;
+              bdx = dx;
+              bdy = dy;
+            } else if (d < d2) d2 = d;
+          }
+      });
+      id[y * S + x] = best;
+      edge[y * S + x] = d2 - d1;
+      side[y * S + x] = bdx + bdy > 0 ? 1 : -1;
+    }
+  const out = { id, edge, side };
+  plateCache.set(seed, out);
+  return out;
+}
+
 function paintWallTop(b: Buf, t: number, v: number): void {
   const L = WALLS[t];
-  b.fill(L.top);
   const rnd = artRng(keySeed('walltop') + t * 101 + v * 7);
   const place = makePlacer(rnd, () => true);
   if (L.masonry) {
-    // capstones: 16x8 blocks in offset rows (layout fixed; tone only on interior blocks)
-    for (let r = 0; r < 4; r++) {
-      const off = r % 2 ? 8 : 0;
-      for (let q = 0; q < 3; q++) {
-        const x0 = off + q * 16 - (off ? 16 : 0);
-        const wraps = x0 < 0 || x0 + 16 > S;
-        const br = artRng(r * 17 + q * 5 + (wraps ? 0 : v * 911));
-        const tone = sh(L.top, ri(br, 9) - 4);
-        for (let j = 0; j < 7; j++)
-          for (let i = 0; i < 15; i++) {
-            const x = x0 + i;
-            if (x < 0 || x >= S) continue;
-            let c = tone;
-            if (j === 0) c = L.topLight;
-            if (j === 6) c = L.topDark;
-            b.set(x, r * 8 + j, c);
-          }
-        if (x0 + 15 >= 0 && x0 + 15 < S) b.rect(x0 + 15, r * 8, 1, 8, L.strata);
-        b.rect(Math.max(0, x0), r * 8 + 7, Math.min(16, S - Math.max(0, x0)), 1, L.strata);
-        if (!wraps && br() < 0.4) b.set(x0 + 3 + ri(br, 9), r * 8 + 2 + ri(br, 3), sh(tone, -14));
+    // dark capstones: big 16 px slabs, faint seams, worn specks
+    b.fill(L.top);
+    for (let y = 0; y < S; y++)
+      for (let x = 0; x < S; x++) {
+        const sx = (x + (y < 16 ? 0 : 8)) % 16;
+        const sy = y % 16;
+        if (sx === 15 || sy === 15) b.set(x, y, L.crevice);
+        else if (sx === 0 || sy === 0) b.set(x, y, L.topLight);
       }
+    const n = 2 + v;
+    for (let i = 0; i < n; i++) {
+      const p = place(2, 1, 2);
+      if (p) b.set(p[0], p[1], rnd() < 0.5 ? L.topLight : L.topDark);
     }
     return;
   }
-  // rock plateau: low clustered plates, cracks and grit, optional tuft or boulder
-  const plates = 2 + (v === 1 ? 1 : 0);
-  for (let i = 0; i < plates; i++) {
-    const w = 6 + ri(rnd, 5);
-    const h = 4 + ri(rnd, 3);
-    const p = place(w, h + 1);
-    if (!p) continue;
-    const [x, y] = p;
-    for (let j = 0; j < h; j++)
-      for (let k = 0; k < w; k++) {
-        const corner = (j === 0 || j === h - 1) && (k === 0 || k === w - 1);
-        if (corner) continue;
-        b.set(x + k, y + j, j === 0 ? L.topLight : sh(L.top, 5));
-      }
-    b.rect(x + 1, y + h, w - 2, 1, L.topDark);
-  }
-  for (let i = 0; i < 2; i++) {
-    const p = place(6, 3);
-    if (!p) continue;
-    let [x, y] = p;
-    y += 1;
-    for (let k = 0; k < 6; k++) {
-      b.set(x + k, y, L.topDark);
-      if (rnd() < 0.4) y = clamp(y + (rnd() < 0.5 ? -1 : 1), p[1], p[1] + 2);
+  // rock plateau: irregular plates with dark crevices, lit upper-left rims, shaded lower-right rims
+  const pl = rockPlates(keySeed('plates') + t);
+  for (let y = 0; y < S; y++)
+    for (let x = 0; x < S; x++) {
+      const i = y * S + x;
+      const tone = sh(L.top, ((pl.id[i] * 5) % 7) * 2 - 6);
+      let c = tone;
+      const e = pl.edge[i];
+      if (e < 1.1) c = L.crevice;
+      else if (e < 2.3) c = pl.side[i] > 0 ? L.topDark : L.topLight;
+      b.set(x, y, c);
     }
-    x += 0;
-  }
-  for (let i = 0; i < 5; i++) {
+  for (let i = 0; i < 3; i++) {
     const p = place(2, 1);
     if (p) b.set(p[0], p[1], rnd() < 0.5 ? L.topLight : L.topDark);
   }
-  if (v === 2 && L.tuft) {
-    const p = place(4, 3);
-    if (p) stamp(b, p[0], p[1], TUFTS[1], { d: L.tuft[0], l: L.tuft[1], h: sh(L.tuft[1], 20) });
-  }
-  if (v === 1 && !L.tuft) {
-    const p = place(7, 6);
+  if (v === 1) {
+    const p = place(5, 3);
     if (p) {
+      // a loose stone sitting on the plateau
       const [x, y] = p;
-      b.rect(x + 1, y, 5, 1, L.lip);
-      b.rect(x, y + 1, 7, 2, L.topLight);
-      b.rect(x, y + 3, 7, 2, L.face);
-      b.rect(x + 1, y + 5, 5, 1, L.outline);
-      b.set(x, y + 5, L.faceDark);
-      b.set(x + 6, y + 5, L.faceDark);
+      b.rect(x + 1, y, 3, 1, L.lip);
+      b.rect(x, y + 1, 5, 1, L.topLight);
+      b.rect(x, y + 2, 5, 1, L.faceDark);
     }
   }
+  if (v === 2) {
+    const p = place(4, 3);
+    if (p) {
+      if (L.tuft) stamp(b, p[0], p[1], TUFTS[1], { d: L.tuft[0], l: L.tuft[1], h: sh(L.tuft[1], 20) });
+      else {
+        b.rect(p[0], p[1] + 1, 3, 1, L.crevice);
+        b.rect(p[0] + 1, p[1] + 2, 3, 1, L.crevice);
+      }
+    }
+  }
+}
+
+/** Rock face columns (period 32, shared by every variant): [start, width, tone shift, crack start depth]. */
+const faceColCache = new Map<number, [number, number, number, number][]>();
+function faceColumns(seed: number): [number, number, number, number][] {
+  const hit = faceColCache.get(seed);
+  if (hit) return hit;
+  const rnd = artRng(seed);
+  const cols: [number, number, number, number][] = [];
+  let x = 0;
+  while (x < S) {
+    let w = 4 + ri(rnd, 4);
+    if (S - (x + w) < 4) w = S - x;
+    cols.push([x, w, [0, 9, -7][cols.length % 3] + ri(rnd, 5) - 2, ri(rnd, 8)]);
+    x += w;
+  }
+  faceColCache.set(seed, cols);
+  return cols;
+}
+
+/** One face pixel: rock columns or brick courses, with a lit top edge and ambient occlusion at the foot. */
+function facePixel(L: WallLook, t: number, x: number, depth: number, h: number): RGB {
+  let c: RGB;
+  if (L.masonry) {
+    const row = Math.floor(depth / 5);
+    const off = row % 2 ? 4 : 0;
+    const k = depth % 5;
+    const mortar = k === 4 || (x + off) % 8 === 7;
+    c = mortar ? L.strata : k === 0 ? L.faceLight : k === 3 ? sh(L.face, -8) : L.face;
+    if (!mortar && (x + off) % 8 === 0) c = sh(c, 6);
+  } else {
+    const cols = faceColumns(keySeed('facecols') + t);
+    let col = cols[0];
+    for (const cc of cols) if (x >= cc[0] && x < cc[0] + cc[1]) col = cc;
+    const [start, w, tone, crack] = col;
+    c = sh(L.face, tone);
+    if (x === start) c = sh(c, 10);
+    if (x === start + w - 1 && depth >= crack) c = L.strata;
+    if (depth === 0) c = L.faceLight;
+    if (depth === 1 && x !== start + w - 1) c = sh(c, 6);
+  }
+  if (depth >= h - 4) c = mixc(c, L.faceDark, (depth - (h - 5)) / 5);
+  return c;
 }
 
 // ================================================================== tile table
@@ -1506,61 +1589,46 @@ function wallFacePiece(b: Buf, t: number, mask: number, v: number): void {
   const sw = !!(mask & CORNER.SW);
   const se = !!(mask & CORNER.SE);
   const noise = familyNoise(`wall-${t}`, v);
-  // face top (row where the top surface breaks into the face), wobbling for rock, straight for masonry
-  const faceTop = (x: number) => S - L.fh + (L.masonry ? 0 : Math.round(noise[pi(x, 6)] * 2));
+  // face top (where the top surface breaks into the face): wobbling rock, straight masonry
+  const faceTop = (x: number) => S - L.fh + (L.masonry ? 0 : Math.round(noise[pi(x, 6)] * 1.6));
   const south = sw && se;
   if (south) {
     for (let x = 0; x < S; x++) {
       const top = faceTop(x);
+      b.set(x, top - 2, L.lip, L.masonry ? 1 : 0.45);
       b.set(x, top - 1, L.lip);
-      for (let y = top; y < S; y++) {
-        let c = L.face;
-        const depth = y - top;
-        if (L.masonry) {
-          const row = Math.floor(depth / 4);
-          const off = row % 2 ? 4 : 0;
-          const mortar = depth % 4 === 3 || (x + off) % 8 === 7;
-          c = mortar ? L.strata : depth % 4 === 0 ? L.faceLight : L.face;
-          if (!mortar && depth >= L.fh - 4) c = sh(c, -8);
-        } else {
-          const strata = Math.abs(noise[pi(x, 20)] * 6 + (x % 7)) % 7 < 1 || (x * 13 + 5) % 11 === 0;
-          if (depth === 0) c = L.faceLight;
-          else if (strata && depth > 1) c = L.strata;
-          if (depth >= L.fh - 4) c = mixc(c, L.faceDark, 0.6);
-        }
-        if (y === S - 1) c = L.faceDark;
-        b.set(x, y, c);
-      }
+      for (let y = top; y < S; y++) b.set(x, y, facePixel(L, t, x, y - top, S - top));
     }
   }
   // lit north lip
   if (nw && ne) {
     b.rect(0, 0, S, 1, L.lip);
-    b.rect(0, 1, S, 1, L.topLight);
+    b.rect(0, 1, S, 1, L.masonry ? L.topLight : mixc(L.lip, L.top, 0.5));
   }
   // west edge lit, east edge in shade
   if (nw && sw) {
     for (let y = 0; y < S; y++) {
       const inFace = south && y >= faceTop(0);
-      b.set(0, y, inFace ? L.faceLight : L.lip);
-      if (!inFace) b.set(1, y, L.topLight);
+      b.set(0, y, inFace ? sh(L.faceLight, 8) : L.lip);
+      if (!inFace) b.set(1, y, mixc(L.lip, L.top, 0.5));
     }
   }
   if (ne && se) {
     for (let y = 0; y < S; y++) {
       const inFace = south && y >= faceTop(S - 1);
-      b.set(S - 1, y, inFace ? L.faceDark : L.topDark);
+      b.set(S - 1, y, inFace ? L.faceDark : L.crevice);
     }
   }
-  // face ends where a perpendicular wall continues (inner corners of the floor)
-  if (se && !sw && !ne) for (let y = faceTop(S - 1); y < S; y++) b.set(S - 1, y, L.topDark);
-  if (sw && !se && !nw) for (let y = faceTop(0); y < S; y++) b.set(0, y, L.lip);
+  // the face ends where a perpendicular wall continues (inner corners of the floor)
+  if (se && !sw && !ne) for (let y = faceTop(S - 1) - 1; y < S; y++) b.set(S - 1, y, L.crevice);
+  if (sw && !se && !nw) for (let y = faceTop(0) - 1; y < S; y++) b.set(0, y, L.lip);
+  if (nw && !ne && !sw) b.set(0, 0, L.lip);
+  if (ne && !nw && !se) b.set(S - 1, 0, L.lip);
   // vegetation spilling over cliff tops
   if (L.tuft && south && v === 1) {
     const rnd = artRng(mask * 31 + t);
     const x = 6 + ri(rnd, 18);
-    const top = faceTop(x);
-    stamp(b, x, top - 2, ['l.l', 'dld', '.d.'], { d: L.tuft[0], l: L.tuft[1] });
+    stamp(b, x, faceTop(x) - 3, ['l.l', 'dld', 'ddd', '.d.'], { d: L.tuft[0], l: L.tuft[1] });
   }
 }
 
@@ -1574,44 +1642,43 @@ function wallRimPiece(b: Buf, t: number, mask: number, v: number): void {
   const noise = familyNoise(`rim-${t}`, v);
   const rnd = artRng(keySeed(`rim-${t}`) + mask * 17 + v * 3);
   const shadow = (x: number, y: number, a: number) => b.set(x, y, L.outline, a);
-  // wall to the north: the face foot
+  // wall to the north: the face foot (rock bumps for cliffs), outline and a cast shadow
   if (nw && ne) {
     for (let x = 0; x < S; x++) {
-      const bump = L.masonry ? 0 : Math.max(0, Math.round(INTERIOR[pi(x, 2)] * (1.2 + 1.6 * noise[pi(x, 2)])));
-      for (let y = 0; y < bump; y++) b.set(x, y, y === bump - 1 ? L.faceDark : L.face);
+      const bump = L.masonry ? 0 : Math.max(0, Math.round(INTERIOR[pi(x, 2)] * (0.8 + 1.6 * noise[pi(x, 2)])));
+      for (let y = 0; y < bump; y++) b.set(x, y, y === bump - 1 ? L.faceDark : mixc(L.face, L.faceDark, 0.6));
       b.set(x, bump, L.outline);
-      shadow(x, bump + 1, 0.32);
-      shadow(x, bump + 2, 0.16);
+      shadow(x, bump + 1, 0.34);
+      shadow(x, bump + 2, 0.2);
+      shadow(x, bump + 3, 0.08);
     }
-    // a couple of fallen stones
-    if (!L.masonry || v === 1) {
-      for (let i = 0; i < 2; i++) {
-        const x = 5 + ri(rnd, 20);
-        const y = 4 + ri(rnd, 3);
-        b.rect(x, y, 3, 1, L.topLight);
-        b.rect(x, y + 1, 3, 1, L.face);
-        b.set(x - 1, y + 1, L.outline);
-        b.set(x + 3, y + 1, L.outline);
-        b.rect(x, y + 2, 3, 1, L.outline);
-        b.set(x - 1, y, L.outline, 0.6);
-        b.set(x + 3, y, L.outline, 0.6);
-        b.rect(x, y - 1, 3, 1, L.outline, 0.6);
-      }
+    // one fallen stone at the foot of rock walls
+    if (!L.masonry && rnd() < 0.6) {
+      const x = 5 + ri(rnd, 20);
+      const y = 5 + ri(rnd, 3);
+      b.rect(x, y - 1, 3, 1, L.outline, 0.7);
+      b.set(x - 1, y, L.outline, 0.7);
+      b.set(x + 3, y, L.outline, 0.7);
+      b.set(x - 1, y + 1, L.outline);
+      b.set(x + 3, y + 1, L.outline);
+      b.rect(x, y, 3, 1, L.lip);
+      b.rect(x, y + 1, 3, 1, L.face);
+      b.rect(x, y + 2, 3, 1, L.outline);
     }
   }
   // wall to the west: outline + shadow to the east (light from the top-left)
   if (nw && sw) {
     for (let y = 0; y < S; y++) {
       b.set(0, y, L.outline);
-      shadow(1, y, 0.28);
+      shadow(1, y, 0.3);
       shadow(2, y, 0.12);
     }
   }
   // wall to the east: thin outline only
   if (ne && se) for (let y = 0; y < S; y++) b.set(S - 1, y, L.outline, 0.9);
-  // wall to the south: its lit top lip meets the floor along an outline
+  // wall to the south: its lit back edge meets the floor along an outline
   if (sw && se) for (let x = 0; x < S; x++) b.set(x, S - 1, L.outline);
-  // convex wall corners touching only one of our corners: short shadow wedge under a north-west wall corner
+  // a north-west wall corner touching only our corner: short shadow wedge
   if (nw && !ne && !sw) {
     shadow(0, 0, 0.3);
     shadow(1, 0, 0.18);

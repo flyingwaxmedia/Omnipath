@@ -209,8 +209,8 @@ const FLOWERS: Record<'crimson' | 'rose' | 'cream' | 'violet', FlowerSpec> = {
 /** Size presets: canvas, number of blooms, number of leaves, leaf length. */
 const FLOWER_SIZES = {
   s: { w: 14, h: 14, blooms: 3, leaves: 3, leaf: 6 },
-  m: { w: 22, h: 20, blooms: 5, leaves: 5, leaf: 9 },
-  l: { w: 30, h: 28, blooms: 9, leaves: 8, leaf: 13 },
+  m: { w: 22, h: 21, blooms: 6, leaves: 6, leaf: 10 },
+  l: { w: 32, h: 30, blooms: 10, leaves: 9, leaf: 15 },
 } as const;
 
 function flowerClump(scene: Phaser.Scene, color: keyof typeof FLOWERS, size: keyof typeof FLOWER_SIZES): void {
@@ -276,23 +276,27 @@ function mushrooms(scene: Phaser.Scene, key: string, cap: Ramp): void {
 }
 
 function tallGrass(scene: Phaser.Scene, key: string, ramp: Ramp, wide: boolean, tips?: string): void {
-  const w = wide ? 22 : 16;
-  const h = wide ? 20 : 17;
+  // 'a' = upright tuft; wide = a big arching fern-like clump
+  const w = wide ? 30 : 18;
+  const h = wide ? 26 : 19;
   tex(scene, key, w, h, (c, rnd) => {
     const cx = w / 2;
     const base = h - 2;
-    shadow(c, cx, base + 0.5, w * 0.36, 1.5);
+    shadow(c, cx, base + 0.5, w * 0.36, 1.6);
     sprite(c, w, h, (b) => {
-      const n = wide ? 9 : 6;
-      for (let i = 0; i < n; i++) {
+      const n = wide ? 11 : 7;
+      // back blades first (darker), front blades last (lighter)
+      const order = Array.from({ length: n }, (_, i) => i).sort((a, z) => Math.abs(z - (n - 1) / 2) - Math.abs(a - (n - 1) / 2));
+      for (const i of order) {
         const t = i / (n - 1);
-        const x0 = cx + (t - 0.5) * (wide ? 8 : 5);
-        const lean = (t - 0.5) * (wide ? 14 : 9) + (rnd() - 0.5) * 3;
-        const len = (wide ? 13 : 11) * (0.65 + rnd() * 0.4) * (1 - Math.abs(t - 0.5) * 0.6);
+        const x0 = cx + (t - 0.5) * (wide ? 10 : 6);
+        const lean = (t - 0.5) * (wide ? 22 : 11) + (rnd() - 0.5) * 3;
+        const len = (wide ? 19 : 14) * (0.62 + rnd() * 0.38) * (1 - Math.abs(t - 0.5) * 0.55);
         const x1 = x0 + lean;
-        const y1 = base - len;
-        const tone = t < 0.4 ? 4 : t < 0.7 ? 3 : 2;
-        blade(b, x0, base, x1, y1, 2, ramp, tone);
+        const y1 = base - len + (wide ? Math.abs(t - 0.5) * 8 : 0);
+        const front = Math.abs(t - 0.5) < 0.2;
+        const tone = front ? 4 : t < 0.5 ? 3 : 2;
+        blade(b, x0, base, x1, y1, wide ? 3 : 2, ramp, tone);
         if (tips && i % 3 === 1) px(b, Math.round(x1), Math.round(y1), tips);
       }
       box(b, Math.round(cx - 3), base - 1, 6, 2, ramp[1]);
@@ -631,22 +635,29 @@ function drawFences(scene: Phaser.Scene): void {
     });
   });
   // Vertical segment (a run going north-south seen from the 3/4 view): stacked posts joined by the rails seen edge-on.
-  // Vertical segment: a run going north-south in the 3/4 view. One post per tile at the foot; the two rails seen
-  // edge-on become a strip that climbs to where the next segment's post stands (a run is capped by dr_fence_post).
+  // Vertical segment: a run going north-south in the 3/4 view. One chunky post per tile at the foot; the two rails
+  // seen edge-on become a thin darker strip climbing to where the next segment's post stands (a run is capped by
+  // dr_fence_post).
   tex(scene, 'dr_fence_v', 10, 52, (c) => {
     const vf = 51;
-    disc(c, 5, vf, 4, 1.2, SHADOW);
-    box(c, 6, 20, 2, vf - 20, 'rgba(36,24,15,0.14)');
+    const B = R.bark;
+    disc(c, 5, vf, 4.5, 1.4, SHADOW);
+    box(c, 6, 22, 2, vf - 24, 'rgba(36,24,15,0.14)');
     sprite(c, 10, 52, (b) => {
-      const B = R.bark;
-      box(b, 3, 5, 4, vf - 12, B[3]);
-      box(b, 3, 5, 1, vf - 12, B[4]);
-      box(b, 6, 5, 1, vf - 12, B[1]);
-      for (let y = 10; y < vf - 8; y += 9) box(b, 4, y, 2, 1, B[2]);
-      box(b, 4, 12, 2, 1, B[5]);
-      post(b, 3, vf, 18);
-      rope(b, 3, vf - 14);
-      rope(b, 3, vf - 7);
+      box(b, 4, 4, 2, vf - 10, B[2]);
+      box(b, 4, 4, 1, vf - 10, B[4]);
+      for (let y = 8; y < vf - 8; y += 7) px(b, 5, y, B[1]);
+      // chunky post with a cut top and two rope ties
+      box(b, 2, vf - 17, 6, 17, B[3]);
+      box(b, 2, vf - 17, 2, 17, B[4]);
+      box(b, 7, vf - 17, 1, 17, B[1]);
+      box(b, 2, vf - 18, 6, 1, R.cream[2]);
+      px(b, 2, vf - 18, R.cream[3]);
+      box(b, 3, vf - 4, 1, 2, B[2]);
+      for (const yy of [vf - 13, vf - 7]) {
+        box(b, 2, yy, 6, 1, R.cream[1]);
+        box(b, 2, yy + 1, 6, 1, R.cream[2]);
+      }
     });
   });
   tex(scene, 'dr_fence_post', 8, H, (c) => {
