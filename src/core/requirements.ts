@@ -75,8 +75,8 @@ const plural = (n: number, one: string, many: string): string => `${n} ${n === 1
  * Short human text for a requirement: 'Whirlwind rank 5', 'Attune Wind', a flag's label (else
  * 'Ore Mined ×6', or 'Ore Mined 3/6' when `ctx` is given), 'Base level 6', 'Pyroblade CR 10' /
  * 'Discover Pyroblade' / 'Wear Pyroblade', '3 elements attuned', '2 skills tagged blade + fire
- * (rank 5)', '20 Ore', 'Lesson: Rising Kick', 'Visit Moonlit Glade' (map id without its region
- * prefix, prettified), 'Witness Boulder Roll 3 times'.
+ * (rank 5)' (no tags = any skill: 'Any skill rank 3'), '20 Ore', 'Lesson: Rising Kick',
+ * 'Visit Moonlit Glade' (map id without its region prefix, prettified), 'Witness Boulder Roll 3 times'.
  */
 export function describeRequirement(reg: Registry, req: Requirement, ctx?: RequirementContext): string {
   switch (req.type) {
@@ -98,6 +98,10 @@ export function describeRequirement(reg: Registry, req: Requirement, ctx?: Requi
     }
     case 'tagCount': {
       const min = req.minRank ?? 1;
+      if (req.tags.length === 0) {
+        const who = req.count === 1 ? 'Any skill' : `${req.count} skills`;
+        return min > 1 ? `${who} rank ${min}` : who;
+      }
       return `${plural(req.count, 'skill', 'skills')} tagged ${req.tags.join(' + ')}${min > 1 ? ` (rank ${min})` : ''}`;
     }
     case 'item':

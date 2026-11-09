@@ -1,10 +1,12 @@
 import type { SkillDef } from '../../core/types';
 
+// Universal skills: any weapon, learned from the world (hermit, tomes) or a staff fusion (sanctuary).
+
 export const UNIVERSAL_SKILLS: SkillDef[] = [
   {
     id: 'meditation',
     name: 'Meditation',
-    desc: 'Taught by the Hermit. Rapidly restores health for a short time.',
+    desc: 'Taught by the Hermit. Sit with your breath: rapid health regeneration for 8 s.',
     icon: '🧘',
     tier: 1,
     tags: ['buff', 'spirit'],
@@ -43,8 +45,8 @@ export const UNIVERSAL_SKILLS: SkillDef[] = [
   },
   {
     id: 'sanctuary',
-    name: 'Sanctuary',
-    desc: 'Holy light fills your meditation. Powerful regeneration.',
+    name: 'Hallowed Rest',
+    desc: 'Holy light fills your meditation: powerful health regeneration for 10 s.',
     icon: '⛪',
     tier: 2,
     tags: ['buff', 'spirit'],

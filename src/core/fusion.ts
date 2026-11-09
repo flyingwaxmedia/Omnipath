@@ -53,6 +53,7 @@ export type FusionOutcome =
 type FusionFailure = Extract<FusionOutcome, { ok: false }>;
 
 const fail = (reason: FusionFailure['reason'], message: string): FusionFailure => ({ ok: false, reason, message });
+const nothing = (message: string): FusionFailure => fail('nothing', message);
 
 /** Essence slots of a skill: 0 for buffs, 1 otherwise, 2 once the skill has ≥ 3 overmastery bars. */
 export function essenceSlots(skill: SkillDef, overBars: number): number {
@@ -141,10 +142,12 @@ export function resolveFusion(reg: Registry, ctx: FusionContext, a: IngredientRe
     if (y.kind === 'el') return applyElement(reg, x.id, x.def, y.def);
     return mergePair(reg, x, y);
   }
-  return nothing(x.kind === 'el' && y.kind === 'el' ? 'The two elements swirl together, then drift apart.' : 'The essence finds no technique to shape.');
+  return nothing(
+    x.kind === 'el' && y.kind === 'el'
+      ? 'The two elements swirl together, then drift apart.'
+      : 'The essence finds no technique to shape.',
+  );
 }
-
-const nothing = (message: string): FusionFailure => fail('nothing', message);
 
 function applyEssence(reg: Registry, ctx: FusionContext, id: string, skill: SkillDef, ess: EssenceDef): FusionOutcome {
   const parts = parseVariantId(id);

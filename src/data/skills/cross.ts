@@ -1,6 +1,15 @@
 import type { SkillDef } from '../../core/types';
 
+// Cross skills: authored results that no single weapon tree reaches.
+//   - v1 cross-weapon fusions (arcane_cyclone, spell_sabre, hex_blade, twin_fang).
+//   - v2 fusions of an echo or technique with a weapon skill, of an echo with a technique, or of two
+//     weapons' skills (recipes in src/data/recipes/cross.ts). Weapons = the weapon parent's weapons
+//     (union across weapons); undefined when both parents are any-weapon echoes/techniques.
+//   - v2 morphs of techniques and echoes (src/data/morphs/misc.ts): any weapon, tier 2.
+// Fusion results do not carry the parents' `echo`/`technique` tags: those mark how a skill is learned.
+
 export const CROSS_SKILLS: SkillDef[] = [
+  // ---------------------------------------------------------------- v1 cross-weapon fusions
   {
     id: 'arcane_cyclone',
     name: 'Arcane Cyclone',
@@ -58,5 +67,227 @@ export const CROSS_SKILLS: SkillDef[] = [
     cooldown: 2000,
     shape: { kind: 'strike', range: 56, arc: 100, hits: 2 },
     maxRank: 8,
+  },
+
+  // ---------------------------------------------------------------- v2: echo + weapon skill
+  {
+    // whirlwind + boulder_roll (Boulderback)
+    id: 'millstone_whirl',
+    name: 'Millstone Whirl',
+    desc: 'Curl into a rolling spin of stone and steel that grinds through every foe in your path. Hits large foes hardest.',
+    icon: '⚙️',
+    tier: 2,
+    weapons: ['sword'],
+    tags: ['blade', 'spin', 'dash', 'heavy', 'aoe'],
+    element: 'earth',
+    power: 1.5,
+    spCost: 16,
+    cooldown: 5500,
+    shape: { kind: 'dash', distance: 200, width: 72, spin: true },
+    maxRank: 8,
+    status: 'knockback',
+    castMs: 300,
+  },
+  {
+    // fan_of_knives + gale_feather (Galeplume)
+    id: 'fletched_fan',
+    name: 'Fletched Fan',
+    desc: 'Knives fletched with Galeplume quills fly far in a fan. Each punches through a foe and knocks it back.',
+    icon: '🪁',
+    tier: 2,
+    weapons: ['dagger'],
+    tags: ['pierce', 'projectile', 'aoe', 'ranged'],
+    element: 'wind',
+    power: 0.8,
+    spCost: 14,
+    cooldown: 3400,
+    shape: { kind: 'projectile', speed: 640, range: 320, count: 5, spread: 50, pierce: 1, size: 10 },
+    maxRank: 8,
+  },
+  {
+    // shadowstep + ember_pounce (Emberkit Alpha)
+    id: 'ashen_pounce',
+    name: 'Ashen Pounce',
+    desc: 'Vanish in a puff of ash and pounce clean through your foes, setting each one alight. High crit chance.',
+    icon: '🐆',
+    tier: 2,
+    weapons: ['dagger'],
+    tags: ['dash', 'stealth', 'pierce'],
+    element: 'fire',
+    power: 2.0,
+    spCost: 14,
+    cooldown: 4000,
+    shape: { kind: 'dash', distance: 190, width: 48 },
+    maxRank: 8,
+    critBonus: 20,
+  },
+  {
+    // arcane_orb + bubble_lance (Brinewisp)
+    id: 'undertow_orb',
+    name: 'Undertow Orb',
+    desc: 'A drifting globe of lake water passes through every foe, soaking each one and dragging it along.',
+    icon: '🐚',
+    tier: 2,
+    weapons: ['staff'],
+    tags: ['arcane', 'projectile'],
+    element: 'water',
+    power: 1.9,
+    spCost: 16,
+    cooldown: 3600,
+    shape: { kind: 'projectile', speed: 220, range: 320, pierce: 99, size: 26 },
+    maxRank: 8,
+    status: 'pull',
+  },
+  {
+    // sword_throw (or boomerang_blade) + static_charge (Voltmane)
+    id: 'thunder_tether',
+    name: 'Thunder Tether',
+    desc: 'Hurl your blade on a leash of lightning. It cuts through three foes, then snaps back to your hand.',
+    icon: '🔗',
+    tier: 2,
+    weapons: ['sword'],
+    tags: ['blade', 'projectile', 'ranged'],
+    element: 'lightning',
+    power: 1.15,
+    spCost: 14,
+    cooldown: 3600,
+    shape: { kind: 'projectile', speed: 560, range: 280, pierce: 2, size: 14 },
+    maxRank: 8,
+    riders: { returns: true },
+  },
+
+  // ---------------------------------------------------------------- v2: echo + technique (any weapon)
+  {
+    // hook_pull (Fisher Pell) + grave_chill (Crypt Keeper)
+    id: 'grave_hook',
+    name: 'Grave Hook',
+    desc: 'Cast a hook of barrow-cold shadow that snags a distant foe, opens a bleeding wound and reels it in.',
+    icon: '⚓',
+    tier: 2,
+    tags: ['projectile', 'ranged'],
+    element: 'shadow',
+    power: 1.5,
+    spCost: 11,
+    cooldown: 4000,
+    shape: { kind: 'projectile', speed: 520, range: 300, size: 12 },
+    maxRank: 8,
+    status: 'pull',
+  },
+  {
+    // palm_strike (Old Hermit Oru) + static_charge (Voltmane)
+    id: 'static_palm',
+    name: 'Static Palm',
+    desc: "Slap a jolt of static into a foe at arm's length. The charge leaps on through three more.",
+    icon: '✋',
+    tier: 2,
+    tags: ['spirit', 'melee'],
+    element: 'lightning',
+    power: 1.3,
+    spCost: 12,
+    cooldown: 3400,
+    shape: { kind: 'chain', range: 150, jumps: 3 },
+    maxRank: 8,
+  },
+  {
+    // hammer_toss (Brann the Smith) + geode_spikes (Geode Sentinel)
+    id: 'crystal_mallet',
+    name: 'Crystal Mallet',
+    desc: 'Hurl a geode-studded hammer that bursts into crystal spikes where it lands, stunning everything nearby.',
+    icon: '⛏️',
+    tier: 2,
+    tags: ['heavy', 'aoe', 'ranged'],
+    element: 'earth',
+    power: 2.0,
+    spCost: 16,
+    cooldown: 5500,
+    shape: { kind: 'nova', radius: 96, range: 240, delay: 300 },
+    maxRank: 8,
+    castMs: 350,
+  },
+  {
+    // shoulder_charge (Drillmaster Hale) + tremor_stomp (Ironroot Colossus, warden)
+    id: 'quakestride',
+    name: 'Quakestride',
+    desc: 'Brace, then charge like the Colossus: every stride is a tremor that stuns and flattens foes in your path.',
+    icon: '🦣',
+    tier: 3,
+    tags: ['dash', 'heavy', 'aoe'],
+    element: 'earth',
+    power: 2.8,
+    spCost: 24,
+    cooldown: 8000,
+    shape: { kind: 'dash', distance: 220, width: 80 },
+    maxRank: 5,
+    status: 'knockback',
+    castMs: 450,
+  },
+
+  // ---------------------------------------------------------------- v2: across weapons
+  {
+    // heavy_cleave (sword) + backstab (dagger)
+    id: 'felling_cut',
+    name: 'Felling Cut',
+    desc: "A low, weighted cut at the legs: a sword's weight with a dagger's aim. Slows; hits large foes hardest.",
+    icon: '🪚',
+    tier: 2,
+    weapons: ['sword', 'dagger'],
+    tags: ['blade', 'pierce', 'heavy', 'melee'],
+    power: 2.5,
+    spCost: 12,
+    cooldown: 4200,
+    shape: { kind: 'strike', range: 54, arc: 80 },
+    maxRank: 8,
+    status: 'slow',
+    critBonus: 15,
+    castMs: 300,
+  },
+
+  // ---------------------------------------------------------------- v2: technique / echo morphs (any weapon)
+  {
+    // morph of rising_kick (needs shoulder_charge)
+    id: 'soaring_heel',
+    name: 'Soaring Heel',
+    desc: 'Leap and drive your heel down on a foe: two quick blows, each one knocking it back.',
+    icon: '🦅',
+    tier: 2,
+    tags: ['melee'],
+    power: 1.1,
+    spCost: 9,
+    cooldown: 3000,
+    shape: { kind: 'strike', range: 56, arc: 80, hits: 2 },
+    maxRank: 8,
+    status: 'knockback',
+  },
+  {
+    // morph of palm_strike (needs meditation)
+    id: 'rippling_palm',
+    name: 'Rippling Palm',
+    desc: 'Strike the air itself: a ring of spirit force bursts out from you and knocks back every foe around.',
+    icon: '☯️',
+    tier: 2,
+    tags: ['spirit', 'aoe'],
+    power: 1.7,
+    spCost: 12,
+    cooldown: 4200,
+    shape: { kind: 'spin', radius: 100, pulses: 1 },
+    maxRank: 8,
+    status: 'knockback',
+    castMs: 300,
+  },
+  {
+    // morph of jelly_slam (Jellop Monarch echo)
+    id: 'crown_slam',
+    name: 'Crown Slam',
+    desc: "Bound high and land with a Monarch's full weight at a nearby point, knocking back every foe beneath.",
+    icon: '👑',
+    tier: 2,
+    tags: ['heavy', 'aoe'],
+    power: 1.7,
+    spCost: 14,
+    cooldown: 5500,
+    shape: { kind: 'nova', radius: 110, range: 140, delay: 300 },
+    maxRank: 8,
+    status: 'knockback',
+    castMs: 350,
   },
 ];

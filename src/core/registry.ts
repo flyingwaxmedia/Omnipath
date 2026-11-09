@@ -336,8 +336,6 @@ export class Registry {
             if (!this.items.has(r.id)) errs.push(`${where}: unknown item ${r.id}`);
             break;
           case 'tagCount':
-            if (r.tags.length === 0) errs.push(`${where}: tagCount without tags`);
-            break;
           case 'elementsKnown':
           case 'flag':
           case 'level':
