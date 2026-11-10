@@ -46,7 +46,6 @@ import {
   hudLayoutClasses,
   hudScale,
   placeZone,
-  rowsThatFit,
 } from './hud/layout';
 import { $, $$, esc, hex } from './util';
 

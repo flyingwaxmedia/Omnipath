@@ -2218,7 +2218,9 @@
   --fs-tiny: var(--fs-s);
   --fs-num: var(--fs-s);
   --fs-big: var(--fs-m);
-  --vb-h: calc(14 * var(--px));
+  /* bars that hold a number are as tall as the body face needs (whole art px) */
+  --vb-h: round(up, calc(7 * var(--tx) + 6 * var(--px)), var(--px));
+  --exp-h: round(up, calc(7 * var(--tx) + 5 * var(--px)), var(--px));
   font-family: var(--font-body);
   font-size: var(--fs-s);
   font-synthesis: none;
@@ -2306,7 +2308,7 @@
 }
 
 .hud-layer .tbar {
-  height: calc(10 * var(--px));
+  height: round(up, calc(7 * var(--tx) + 5 * var(--px)), var(--px));
 }
 
 /* ---- toasts: one line of text on the strip */
@@ -2744,13 +2746,13 @@
 .mech .mech-cells i {
   width: calc(6 * var(--px));
   height: calc(6 * var(--px));
-  background: #120c08;
+  background: #6a5238;
   box-shadow: 0 0 0 calc(1 * var(--px)) var(--h-out);
 }
 
 .mech .mech-pips i {
   clip-path: polygon(33.4% 0, 66.6% 0, 100% 33.4%, 100% 66.6%, 66.6% 100%, 33.4% 100%, 0 66.6%, 0 33.4%);
-  background: #3a2a1c;
+  background: #6a5238;
 }
 
 .mech .mech-pips.marks i {

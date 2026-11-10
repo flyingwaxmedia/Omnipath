@@ -1061,6 +1061,8 @@ try {
         if (p && !p.classList.contains('open')) p.querySelector('.pz-tab')?.click();
       });
       await page.waitForTimeout(400);
+      // (No room for a single row above the middle band: the one line leads to the quest log instead — close it.)
+      await closeModal();
       const mid = await middleBand(ALL_BOXES, { name: 'Jellop', level: 1, hp: 20, maxHp: 30 });
       if (mid.length) fail(`${name}: HUD in the middle of the screen: ${mid.join(', ')}`);
       else ok(`${name}: the middle band is free of HUD (Pursuits open, a target up)`);
