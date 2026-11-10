@@ -2369,6 +2369,12 @@
   background: linear-gradient(90deg, rgba(18, 12, 10, 0), rgba(18, 12, 10, 0.6) calc(10 * var(--px))) center / 100% calc(18 * var(--px)) no-repeat;
 }
 
+/* Portrait phones: the line stays in the right-hand column under the minimap (the middle of the top band — where a
+   north-border portal shows — stays free for taps). */
+:where(.hud-port) .hud-layer .pz-tab {
+  max-width: calc(150 * var(--px));
+}
+
 .pz-tab .pz-ico {
   flex: none;
   display: grid;

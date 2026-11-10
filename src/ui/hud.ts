@@ -164,6 +164,8 @@ export class Hud {
   private t = { stats: 0, badges: 0, zone: 0, pz: 0, slots: 0 };
   private pursuits: PursuitView[] = [];
   private pzOpen: boolean | null = null;
+  /** The open tracker has room for at least one row on this screen. */
+  private pzRoom = true;
   /** Slot presses in progress, one per finger (two-thumb play: each press casts or edits on its own). */
   private holds = new Map<number, { i: number; x: number; y: number; timer: number }>();
   private suppressClick = false;
@@ -316,9 +318,16 @@ export class Hud {
     $(this.navEl, '.np-open').addEventListener('click', () => this.actions.open('map', 'route'));
     $(this.navEl, '.np-stop').addEventListener('click', () => this.cancelNav());
     $(this.pzEl, '.pz-tab').addEventListener('click', () => {
+      // Open but no room for a row on this screen: the tap goes to the quest log.
+      if (this.pursuitsOpen() && !this.pzRoom) {
+        this.actions.open('codex', 'quests');
+        return;
+      }
       this.pzOpen = !this.pursuitsOpen();
       store(PZ_KEY, this.pzOpen ? '1' : '0');
       this.applyPursuits();
+      this.layout();
+      if (this.pzOpen && !this.pzRoom) this.actions.open('codex', 'quests');
     });
     this.pzList.addEventListener('click', (e) => {
       const row = (e.target as HTMLElement).closest<HTMLElement>('.pz-row');
@@ -767,30 +776,30 @@ export class Hud {
   /** The open tracker: at most PURSUIT_ROWS rows, only those above `limit`; "+N" (→ the quest log) for the rest. */
   private fitPursuits(limit: number): void {
     const open = this.pursuitsOpen();
-    if (this.pzEl.classList.contains('open') !== open) {
-      this.pzEl.classList.toggle('open', open);
-      $(this.pzEl, '.pz-tab').setAttribute('aria-expanded', String(open));
-    }
+    const tab = $(this.pzEl, '.pz-tab');
+    this.pzEl.classList.toggle('open', open);
     const rows = $$<HTMLElement>(this.pzList, '.pz-row');
     rows.forEach((r) => r.classList.remove('cut'));
     const more = $(this.pzEl, '.pz-more');
     let shown = rows.length;
     if (rows.length && open) {
-      const fit = rowsThatFit(
-        rows.map((r) => {
-          const b = r.getBoundingClientRect();
-          return { top: b.top, bottom: b.bottom };
-        }),
-        limit,
-      );
-      shown = Math.min(PURSUIT_ROWS, fit);
+      // Only whole rows above the limit (the first too: with no room at all the tracker stays its one line).
+      shown = 0;
+      for (const r of rows) {
+        if (shown >= PURSUIT_ROWS || r.getBoundingClientRect().bottom > limit) break;
+        shown++;
+      }
       rows.forEach((r, i) => r.classList.toggle('cut', i >= shown));
     }
-    const rest = rows.length - shown;
+    this.pzRoom = !open || shown > 0;
+    // No room for a single row: it reads as collapsed (its one line shows); a tap leads to the quest log instead.
+    if (open && shown === 0) this.pzEl.classList.remove('open');
+    tab.setAttribute('aria-expanded', String(open && shown > 0));
+    const rest = open && shown > 0 ? rows.length - shown : 0;
     more.classList.toggle('hidden', rest <= 0);
     more.textContent = rest > 0 ? `+${rest}` : '';
-    // No room for "+N" under the tab (a short portrait band): leave it out — every row and the tab still lead on.
-    if (rest > 0 && more.getBoundingClientRect().bottom > limit) more.classList.add('hidden');
+    // No room for "+N" under the rows (a short band): leave it out — every row and the tab still lead on.
+    if (rest > 0 && more.getBoundingClientRect().bottom - 10 * this.scale.px > limit) more.classList.add('hidden');
   }
 
   // ================================================================ vitals, stats, portrait, badges (≤ 10 Hz)
