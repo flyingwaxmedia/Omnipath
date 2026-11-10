@@ -64,6 +64,8 @@ function portal(
 const at = (cm: CompiledMap, x: number, y: number) => cm.coll[y * cm.w + x];
 const tileOfPx = (p: { x: number; y: number }): [number, number] => [Math.floor(p.x / TILE), Math.floor(p.y / TILE)];
 const propAt = (cm: CompiledMap, x: number, y: number) => cm.props.find((p) => p.tx === x && p.ty === y);
+/** v4: a tree line blocks every hostable tile and is DRAWN as layered rows (cm.forest = the row depth), not a tree per tile. */
+const inForest = (cm: CompiledMap, x: number, y: number) => (cm.forest?.[y * cm.w + x] ?? 0) > 0 && isBlocked(cm, x, y);
 
 // ------------------------------------------------------------------ legend & biomes
 
@@ -138,8 +140,8 @@ describe('macro legend & biomes', () => {
             const label = `${biome} '${ch}' (${x},${y})`;
             expect(tileAt(cm, x, y), label).toBe(want);
             expect(isBlocked(cm, x, y), label).toBe(BLOCKING_CHARS.has(ch) || (ch === 't' || ch === 'o' ? isBlocked(cm, x, y) : false));
-            if (ch === 'T') expect(propAt(cm, x, y)?.kind, label).toBe(tree);
-            if (ch === 'C') expect(propAt(cm, x, y)?.kind, label).toBe('boulder');
+            // a tree line where the biome's tree is a tree (layered rows), else one prop per tile as before
+            if (ch === 'T') expect(inForest(cm, x, y) || propAt(cm, x, y)?.kind === tree, label).toBe(true);
             if (ch === '~' || ch === '-') expect(at(cm, x, y) & COLL.WATER, label).toBe(COLL.WATER);
             else expect(at(cm, x, y) & COLL.WATER, label).toBe(0);
           }
@@ -255,8 +257,8 @@ describe('compileMap', () => {
     const cm = compileMap(mk({ layout: fill(8, 8, 'T'), paths: [[[0, 6], [15, 6]]] }));
     for (let x = 0; x < 16; x++) {
       for (const y of [5, 6, 7, 8]) expect(propAt(cm, x, y), `(${x},${y})`).toBeUndefined();
-      expect(propAt(cm, x, 4)?.kind).toBe('tree');
-      expect(propAt(cm, x, 9)?.kind).toBe('tree');
+      expect(inForest(cm, x, 4)).toBe(true);
+      expect(inForest(cm, x, 9)).toBe(true);
     }
   });
 
@@ -285,8 +287,8 @@ describe('compileMap', () => {
         expect(propAt(cm, x, 4 + fp.h), `${kind} apron`).toBeUndefined();
         expect(isBlocked(cm, x, 4 + fp.h), `${kind} apron`).toBe(false);
       }
-      expect(propAt(cm, 3, 4)?.kind).toBe('tree');
-      expect(propAt(cm, 4 + fp.w, 4)?.kind).toBe('tree');
+      expect(inForest(cm, 3, 4)).toBe(true);
+      expect(inForest(cm, 4 + fp.w, 4)).toBe(true);
     }
   });
 
@@ -304,7 +306,7 @@ describe('compileMap', () => {
     }
     expect(tileAt(cm, 5, 0)).toBe(T.CLIFF);
     for (let y = 0; y <= 2; y++) for (let x = 4; x <= 11; x++) expect(propAt(cm, x, y)).toBeUndefined();
-    expect(propAt(cm, 8, 3)?.kind).toBe('tree');
+    expect(inForest(cm, 8, 3)).toBe(true);
   });
 
   it('blocks node/object/NPC tiles and reserves their neighbours', () => {
@@ -327,7 +329,7 @@ describe('compileMap', () => {
       for (let dx = -1; dx <= 1; dx++) if (dx) expect(isBlocked(cm, ex + dx, ey)).toBe(false);
     }
     for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) expect(isBlocked(cm, 11 + dx, 11 + dy)).toBe(false);
-    expect(propAt(cm, 7, 7)?.kind).toBe('tree');
+    expect(inForest(cm, 7, 7)).toBe(true);
   });
 
   it('places arrivals 2 tiles inward from the rect centre, on walkable ground', () => {

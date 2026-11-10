@@ -162,7 +162,7 @@ function dome(p: Painter, skin: Skin, motif: FamilyId, g: Geo, f: number, seed: 
         [-52, 52],
         [128, 232],
       ] as const)
-        p.band(0, cy, wx + off, wy, 2, (q, deg) => (q === 0 ? (deg < -10 || deg > 190 ? IDX.R5 : IDX.R4) : IDX.R2), 1, arc);
+        p.band(0, cy, wx + off, wy, 3, (q, deg) => (q === 0 ? IDX.R5 : q === 1 ? (deg < -10 || deg > 190 ? IDX.R5 : IDX.R4) : IDX.R2), 1, arc);
       if (f < 2) glint(p, (wx + off) * 0.82, cy - wy * 0.5, 2 - f, IDX.R5, IDX.R4);
       break;
     }

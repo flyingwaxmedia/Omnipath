@@ -7,6 +7,7 @@ import type { MechanicEffect } from '../src/core/mechanics';
 import type { ElementId, SkillDef, SkillShape, StatusKind } from '../src/core/types';
 import { NEW_SHAPE_KINDS, NEW_STATUSES } from '../src/core/types';
 import { GAME_DATA } from '../src/data';
+import { fistBlow } from '../src/game/audio/bridge';
 import { EventBus, type GameEvents } from '../src/game/events';
 import type { Monster } from '../src/game/entities/Monster';
 import { bakePiece } from '../src/game/vfx/bake';
@@ -73,7 +74,7 @@ describe('v4 kinds: a real recipe for every kind in every family', () => {
       expect(rim.lifeMs).toBe(4000);
       const unit = ph(r, 'aura').find((p) => p.component === 'field')!;
       // The living interior speaks the family's language and stays inside the rim, on the ground.
-      expect(unit).toMatchObject({ motif: fam, ramp: fam, layer: 'ground', lifeMs: 4000 });
+      expect(unit).toMatchObject({ motif: fam, ramp: fam, layer: 'body', lifeMs: 4000 });
       expect(unit.place!.radius!).toBeLessThan(90);
       expect(unit.place!.count!).toBeGreaterThanOrEqual(4);
       const z = r.riders.zone!;
@@ -225,6 +226,10 @@ describe('fists: the impact set and bare-handed swings', () => {
       if (r.carrier.kind === 'spin') expect(r.carrier.style, s.id).toBe('kick');
       if (ph(r, 'impact').length) expect(FIST_CLASSES, s.id).toContain(fistClassOf(s, r.weight));
     }
+  });
+
+  it('the sound of a blow is the blow drawn (audio fistBlow = VFX fistClassOf for every authored fist skill)', () => {
+    for (const s of GAME_DATA.skills.filter((x) => x.tags.includes('fist'))) expect(fistBlow(s), s.id).toBe(fistClassOf(s, deriveVfx(s).weight));
   });
 
   it('bakes the five blows as distinct strips with one white hero frame up front', () => {

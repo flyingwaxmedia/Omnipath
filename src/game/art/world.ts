@@ -1025,12 +1025,12 @@ function bigDead(scene: Phaser.Scene, key: string, w: number, h: number, v: numb
         const y1 = y - Math.sin(ang) * len;
         brush(b, [x, y, x1, y1], Math.max(1, Math.round(wd)), ang > Math.PI / 2 ? B[3] : B[2]);
         seg(b, Math.round(x), Math.round(y - 1), Math.round(x1), Math.round(y1 - 1), B[4]);
-        if (depth <= 0 || len < 7 || y1 < 6 || x1 < 6 || x1 > w - 6) return;
+        if (depth <= 0 || len < 6 || y1 < 14 || x1 < 12 || x1 > w - 12) return;
         const n = depth > 1 ? 2 : 1 + (rnd() < 0.5 ? 1 : 0);
         for (let i = 0; i < n; i++) grow(x1, y1, ang + (i === 0 ? 0.35 + rnd() * 0.4 : -(0.3 + rnd() * 0.45)), len * (0.6 + rnd() * 0.18), wd * 0.66, depth - 1);
       };
       const lim = v === 0 ? [2.0, 1.15, 1.6] : v === 1 ? [2.2, 1.5, 0.95] : [1.85, 1.3, 0.8];
-      for (const a of lim) grow(cx + (a > 1.57 ? -1 : 1), split + 4, a, h * (0.2 + rnd() * 0.06), tw * 0.8, 3);
+      for (const a of lim) grow(cx + (a > 1.57 ? -1 : 1), split + 4, a, h * (0.15 + rnd() * 0.04), tw * 0.8, 3);
       box(b, cx - tw / 2, split, 2, h - 12 - split, B[4]);
       box(b, cx + tw / 2 - 2, split, 2, h - 12 - split, B[1]);
       disc(b, cx, split + (h - split) * 0.4, tw * 0.22, tw * 0.3, B[0]);

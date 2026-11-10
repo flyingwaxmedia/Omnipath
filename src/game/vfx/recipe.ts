@@ -860,7 +860,7 @@ const fistInk = (c: Pick<Ctx, 'family' | 'ink' | 'lut'>): Ink => (c.family === '
 const openStyle = (c: Pick<Ctx, 'look'>): 'solid' | 'double' | 'jagged' => (c.look.ring === 'double' || c.look.ring === 'jagged' ? c.look.ring : 'solid');
 
 /** How many living units a field of `area` px² scatters. */
-const fieldCount = (area: number): number => clamp(round(area / 2200), 4, 10);
+const fieldCount = (area: number): number => clamp(round(area / 2600), 4, 8);
 
 /**
  * Zone: a field that stays and ticks. `area` plays once when it is placed (the field opens), `aura` stands while it
@@ -897,7 +897,7 @@ function zonePieces(c: Ctx, ph: Phases, rd: RiderFx): void {
       edge(L / 2),
       cap(0, [90, 270]),
       cap(L, [-90, 90]),
-      piece('field', { size }, c.acc, { anchor: from, layer: 'ground', place: { pattern: 'line', count: clamp(round(L / 24), 4, 10), radius: L, spacing: R }, lifeMs: life }),
+      piece('field', { size }, c.acc, { anchor: from, place: { pattern: 'line', count: clamp(round(L / 28), 4, 8), radius: L, spacing: R }, lifeMs: life }),
     );
     rd.zone = {
       tick: [along(c.accLook.hit, c.acc, 8), ...healMotes(from, { pattern: 'line', count: 6, radius: L, spacing: R })],
@@ -918,7 +918,9 @@ function zonePieces(c: Ctx, ph: Phases, rd: RiderFx): void {
     // The truthful rim: solid, 2 px, at the hit radius for as long as the zone stands; a 12.5 % tint inside it.
     piece('ring', { r: R, aspect: asp, thick: 2, style: 'solid', ink: 'lit', anim: 'static', ms: vsync(life) }, c.ink, { anchor: aim, layer: 'preview', lifeMs: life }),
     piece('decal', { kind: 'shadow', r: decalR(R), aspect: asp, density: 0.125, shape: 'disc' }, c.ink, { anchor: aim, layer: 'preview', lifeMs: life }),
-    piece('field', { size }, c.acc, { anchor: aim, layer: 'ground', place: { pattern: 'poisson', count: fieldCount(Math.PI * R * R * asp), radius: round(R * 0.78), aspect: asp, spacing: 18 }, lifeMs: life }),
+    // (Body layer: the units sort by their own ground row, so a flame in front of a foe overlaps its feet and one
+    // behind it does not; none is taller than ~12 px.)
+    piece('field', { size }, c.acc, { anchor: aim, place: { pattern: 'poisson', count: fieldCount(Math.PI * R * R * asp), radius: round(R * 0.78), aspect: asp, spacing: 18 }, lifeMs: life }),
   );
   rd.zone = {
     tick: [

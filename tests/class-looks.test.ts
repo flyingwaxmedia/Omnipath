@@ -8,9 +8,19 @@ import { CLASSES } from '../src/data/classes';
 const HEX = /^#[0-9a-f]{6}$/i;
 
 describe('class outfits', () => {
-  it('covers all 30 classes and nothing else', () => {
-    expect(CLASSES).toHaveLength(30);
-    expect(Object.keys(CLASS_OUTFITS).sort()).toEqual(CLASSES.map((c) => c.id).sort());
+  it('covers every class (v4: 26 after the four merges; a merged class keeps its outfit entry for old saves)', () => {
+    for (const c of CLASSES) expect(CLASS_OUTFITS[c.id], c.id).toBeDefined();
+    for (const id of ['blademaster', 'knife_juggler', 'arcanist', 'wayfarer', 'pyroblade', 'shadowstalker', 'pyromancer', 'tidecaller'])
+      expect(CLASS_OUTFITS[id], `rebuilt class ${id}`).toBeDefined();
+  });
+
+  it('draws Bare Hands as its own look, alone and under every class outfit', () => {
+    expect(WEAPON_TYPES).toContain('fists');
+    expect(lookBase('fists', null)).toBe('player_fists');
+    expect(lookBase('fists', 'wayfarer')).toBe('player_fists__wayfarer');
+    const fist = CHAR_ANIMS.filter((a) => a.frames.some((f) => f.startsWith('player_fists')));
+    expect(fist.map((a) => a.frames.length).sort()).toEqual([2, 2, 4]);
+    expect(fist.flatMap((a) => a.frames).sort()).toEqual(lookFrames('player_fists').sort());
   });
 
   it('gives a cape from Tier II and an aura only at Tier III', () => {

@@ -7,6 +7,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { SkillBook } from '../src/core/skillbook';
 import { fixtureRegistry } from './fixtures/game-v4';
+import SAVE_V2_LATE from './fixtures/save-v2-late.json';
 import { gameBus, type BarChangedEvent } from '../src/game/events';
 import { barEligible } from '../src/core/classes';
 import {
@@ -502,8 +503,7 @@ describe('Session saves (v3 key; v2 and v1 are read and migrated)', () => {
   });
 
   it('the late v2 fixture save loads on the real content: version 3, 8 slots, nothing unknown on the bar', async () => {
-    const { readFileSync } = await import('node:fs');
-    const raw = readFileSync(new URL('./fixtures/save-v2-late.json', import.meta.url), 'utf8');
+    const raw = JSON.stringify(SAVE_V2_LATE);
     const { createRegistry } = await import('../src/data');
     const real = createRegistry();
     withStore((store) => {

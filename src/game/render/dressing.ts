@@ -791,10 +791,10 @@ export function planDressing(cm: CompiledMap): DressingItem[] {
         const r = rng('rim', x, y);
         // goods stand in a few STACKS (two or three pieces on neighbouring rim tiles), six or more tiles apart:
         // a rim dotted every other tile reads as a ring
-        const near = placed.filter(([px, py]) => Math.abs(px - x) <= 6 && Math.abs(py - y) <= 6);
+        const near = placed.filter(([px, py]) => Math.abs(px - x) <= 5 && Math.abs(py - y) <= 5);
         const stack = near.filter(([px, py]) => Math.abs(px - x) <= 1 && Math.abs(py - y) <= 1);
         if (near.length && (!stack.length || near.length >= 3 || near.length !== stack.length)) continue;
-        if (!near.length && r() > 0.3 * Math.max(0.5, scale)) continue;
+        if (!near.length && r() > 0.55 * Math.max(0.5, scale)) continue;
         placed.push([x, y]);
         const pickKey = pick(PLAZA_RIM, r);
         const key = pickKey === 'banner' ? banner : pickKey;

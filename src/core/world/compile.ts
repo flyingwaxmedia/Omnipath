@@ -570,7 +570,7 @@ export function compileMap(def: MapDef): CompiledMap {
             host = cell[0];
           }
           if (notch) {
-            if (cell.length >= 2 && (hsh & 1) === 0) props.push({ kind: 'log', tx: cx * 2, ty: cell[0][1], tier: 'L', look: (hsh >>> 4) % 3, ox: 16 + (jx >> 1), oy: -2, flip: (hsh & 2) !== 0 });
+            if (cell.length >= 2 && (hsh & 1) === 0) props.push({ kind: 'log', tx: cell[0][0], ty: cell[0][1], tier: 'L', look: (hsh >>> 4) % 3, ox: (cell[0][0] === cx * 2 ? 16 : -16) + (jx >> 1), oy: -2, flip: (hsh & 2) !== 0 });
             else props.push({ kind: 'bush', tx: fx, ty: fy, look: (hsh >>> 4) % 3, ox: jx >> 1 });
           } else if (tier === 'M') props.push({ kind, tx: host[0], ty: host[1], ox: jx >> 1, oy: jy });
           else props.push({ kind, tx: host[0], ty: host[1], tier, look: lookFor(kind, tier, host[0], host[1]), ox: jx, oy: jy, flip: (hsh & 4) !== 0 });
@@ -590,9 +590,9 @@ export function compileMap(def: MapDef): CompiledMap {
           const r = (hsh >>> 8) % 100;
           if (r < 62) props.push({ kind, tx: x, ty: y, tier: 'L', look: lookFor(kind, 'L', x, y), ox: jx, oy: jy, shade: 1, flip: (hsh & 4) !== 0 });
           else if (r < 72) props.push({ kind, tx: x, ty: y, ox: jx >> 1, oy: jy, shade: 1 });
-          else props.push({ kind, tx: cx * 2, ty: cell[0][1], mass: true, look: (hsh >>> 4) % 3, ox: 16 + jx, oy: jy, shade: 1, flip: (hsh & 4) !== 0 });
+          else props.push({ kind, tx: cell[0][0], ty: cell[0][1], mass: true, look: (hsh >>> 4) % 3, ox: (cell[0][0] === cx * 2 ? 16 : -16) + jx, oy: jy, shade: 1, flip: (hsh & 4) !== 0 });
         } else if (minD === 3 || ((cx + cy) & 1) === 0) {
-          props.push({ kind, tx: cx * 2, ty: cell[0][1], mass: true, look: (hsh >>> 4) % 3, ox: 16 + jx, oy: jy, shade: Math.min(4, minD - 1), flip: (hsh & 4) !== 0 });
+          props.push({ kind, tx: cell[0][0], ty: cell[0][1], mass: true, look: (hsh >>> 4) % 3, ox: (cell[0][0] === cx * 2 ? 16 : -16) + jx, oy: jy, shade: Math.min(4, minD - 1), flip: (hsh & 4) !== 0 });
         }
       }
     }
@@ -609,7 +609,7 @@ export function compileMap(def: MapDef): CompiledMap {
   };
   const AROUND: readonly [number, number][] = [[-2, 1], [2, 0], [1, 2], [-1, -1], [2, 1], [-2, 0], [1, -2], [-1, 2], [3, 1], [-3, 0]];
   /** Places `kind` as a group of big + medium + small around (x, y). Returns whether the big piece went down. */
-  const group = (kind: PropKind, x: number, y: number, rnd: () => number): boolean => {
+  const group = (kind: PropKind, x: number, y: number, rnd: () => number, where: (x: number, y: number) => boolean = () => true): boolean => {
     if (!hostable(x, y)) return false;
     const i = y * w + x;
     const start = Math.floor(rnd() * AROUND.length);
@@ -618,7 +618,7 @@ export function compileMap(def: MapDef): CompiledMap {
     const small = (k: PropKind, tier: PropTier | undefined, count: number) => {
       for (const [sx, sy] of spots) {
         if (count <= 0) break;
-        if (!hostable(sx, sy) || props.some((p) => p.tx === sx && p.ty === sy)) continue;
+        if (!hostable(sx, sy) || !where(sx, sy) || props.some((p) => p.tx === sx && p.ty === sy)) continue;
         if (TREE_KINDS.has(k) && ground[sy * w + sx] === T.SAND) continue;
         props.push({ kind: k, tx: sx, ty: sy, ...(tier ? { tier } : {}), look: Math.floor(rnd() * 3), ox: jit(), oy: -Math.floor(rnd() * 6) });
         count--;
@@ -630,7 +630,7 @@ export function compileMap(def: MapDef): CompiledMap {
       props.push({ kind, tx: x, ty: y, tier, look: lookFor(kind, tier, x, y), ox: jit(), oy: 0, flip: rnd() < 0.5 });
       let med = false;
       for (const [sx, sy] of spots) {
-        if (!inB(sx, sy) || ground[sy * w + sx] === T.SAND || clearing[sy * w + sx] || !tryBlock(sx, sy)) continue;
+        if (!inB(sx, sy) || !where(sx, sy) || ground[sy * w + sx] === T.SAND || clearing[sy * w + sx] || !tryBlock(sx, sy)) continue;
         props.push({ kind, tx: sx, ty: sy, ox: jit(), oy: 0 });
         med = true;
         break;
@@ -640,20 +640,20 @@ export function compileMap(def: MapDef): CompiledMap {
     }
     if (kind === 'rock' || kind === 'boulder') {
       if (!tryBlock(x, y)) return false;
-      const wide = hostable(x + 1, y) && safeToBlock(coll, w, h, x + 1, y);
+      const wide = hostable(x + 1, y) && where(x + 1, y) && safeToBlock(coll, w, h, x + 1, y);
       if (!wide) {
         props.push({ kind: 'boulder', tx: x, ty: y, look: Math.floor(rnd() * 3), ox: jit(), oy: 0 });
         small('rock', 'S', 2);
         return false;
       }
       coll[y * w + x + 1] |= COLL.BLOCK;
-      const xl = rnd() < 0.28 && tryBlock(x + 2, y);
+      const xl = rnd() < 0.28 && inB(x + 2, y) && where(x + 2, y) && tryBlock(x + 2, y);
       const tier: PropTier = xl ? 'XL' : 'L';
       props.push({ kind: 'rock', tx: x, ty: y, tier, look: lookFor('rock', tier, x, y), ox: xl ? 32 : 16, oy: -2 });
       let med = false;
       for (const [sx, sy] of spots) {
         if (sy === y && sx >= x && sx <= x + 2) continue;
-        if (!inB(sx, sy) || clearing[sy * w + sx] || !tryBlock(sx, sy)) continue;
+        if (!inB(sx, sy) || !where(sx, sy) || clearing[sy * w + sx] || !tryBlock(sx, sy)) continue;
         props.push({ kind: rnd() < 0.6 ? 'rock' : 'boulder', tx: sx, ty: sy, look: Math.floor(rnd() * 3), ox: jit(), oy: 0 });
         med = true;
         break;
@@ -695,22 +695,26 @@ export function compileMap(def: MapDef): CompiledMap {
     }
   };
   lattice(3, 'woods', (x, y, m, rnd) => {
-    if (m.fill === 'woods' && rnd() < WOODS_CHANCE * 2.4) group(biome.tree, x, y, rnd);
+    if (m.fill === 'woods' && rnd() < WOODS_CHANCE * 2.4) group(biome.tree, x, y, rnd, (sx, sy) => macroAt(sx, sy).fill === 'woods');
   });
   lattice(3, 'stones', (x, y, m, rnd) => {
-    if (m.fill === 'stones' && rnd() < STONES_CHANCE * 3) group(rnd() < 0.65 ? 'rock' : 'boulder', x, y, rnd);
+    if (m.fill === 'stones' && rnd() < STONES_CHANCE * 3) group(rnd() < 0.65 ? 'rock' : 'boulder', x, y, rnd, (sx, sy) => macroAt(sx, sy).fill === 'stones');
   });
+  const open = (sx: number, sy: number) => {
+    const m = macroAt(sx, sy);
+    return !m.fill && !!m.decor;
+  };
   lattice(5, 'decor', (x, y, m, rnd) => {
     if (m.fill || !m.decor || !biome.decor.length) return;
     const i = y * w + x;
     const chance = m.decor * decorScale * 9 * (0.35 + 1.3 * maskAt(x, y)) * (clearing[i] === 1 ? 1.6 : 1);
-    if (rnd() < Math.min(0.95, chance)) group(biome.decor[Math.floor(rnd() * biome.decor.length)], x, y, rnd);
+    if (rnd() < Math.min(0.95, chance)) group(biome.decor[Math.floor(rnd() * biome.decor.length)], x, y, rnd, open);
   });
 
   // 7c) tallness (SPEC-v4 §11.2 B): outdoors, every stretch of walkable ground has something three heroes tall
   // within 12 tiles — where the rolls left a gap, one more tree or rock group goes in.
   const outdoor = def.biome !== 'cave' && def.biome !== 'crypt' && def.kind !== 'dungeon' && !def.flags?.includes('indoor');
-  if (outdoor) {
+  if (outdoor && decorScale > 0) {
     const covered = new Uint8Array(n);
     const stampTall = (x: number, y: number) => {
       for (let yy = Math.max(0, y - TALL_REACH); yy <= Math.min(h - 1, y + TALL_REACH); yy++)
@@ -734,7 +738,8 @@ export function compileMap(def: MapDef): CompiledMap {
               const gx = x + dx;
               const gy = y + dy;
               if (!inB(gx, gy) || clearing[gy * w + gx] === 2) continue;
-              if (group(tallKind, gx, gy, mulberry32(hashSeed(def.seed, 'tall', gx, gy)))) {
+              if (!open(gx, gy)) continue;
+              if (group(tallKind, gx, gy, mulberry32(hashSeed(def.seed, 'tall', gx, gy)), open)) {
                 stampTall(gx, gy);
                 done = true;
               }

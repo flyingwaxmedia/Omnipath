@@ -5,10 +5,10 @@
 // camera clear colour around it. The baker repeats the map's own border terrain outward (water around an islet, wall
 // tops around a crypt, the tree wall around a glade, with the border's trees and rocks echoed on it), so the centred
 // camera always shows world. Purely visual: nothing outside the map is walkable or collides.
-import Phaser from 'phaser';
+import type Phaser from 'phaser';
 import type { CompiledMap, PropKind } from '../../core/world/types';
 import { PROP_VARIANTS } from '../art/world';
-import { type Caster, CONTACT_ALPHA, SHADOW_ALPHA, SHADOW_RGB, SHADOW_SHEAR, ShadowBaker } from './shadows';
+import { BLEND_MULTIPLY, BLEND_NORMAL, type Caster, CONTACT_ALPHA, SHADOW_ALPHA, SHADOW_RGB, SHADOW_SHEAR, ShadowBaker } from './shadows';
 import { ensureEdgeFamilies } from '../art/tiles';
 import { T } from '../../core/world/tiles';
 import { DECALS_PER_SET, DECAL_SETS, EDGE_VARIANTS, TERRAIN_CLASS, TILE_PX, TONE_TILES, cellHash, computeTerrainLayers, edgeFrameInfo, toneNoise } from './autotile';
@@ -272,11 +272,11 @@ export function bakeGround(scene: Phaser.Scene, cm: CompiledMap, shadows?: Groun
     const key = `__shade_${cm.def.id}_${tmpId++}`;
     if (scene.textures.exists(key)) scene.textures.remove(key);
     if (!scene.textures.addCanvas(key, canvas)) return;
-    const img = scene.make.image({ key, add: false }).setOrigin(0, 0).setBlendMode(Phaser.BlendModes.MULTIPLY).setAlpha(alpha);
+    const img = scene.make.image({ key, add: false }).setOrigin(0, 0).setBlendMode(BLEND_MULTIPLY).setAlpha(alpha);
     rt.batchDraw(img, 0, 0);
     // batchDrawFrame() never sets a blend mode: hand the renderer back to NORMAL, or the next chunk's tiles multiply
     const r = scene.renderer as unknown as { gl?: unknown; setBlendMode?: (mode: number, force?: boolean) => boolean };
-    if (r.gl && r.setBlendMode) r.setBlendMode(Phaser.BlendModes.NORMAL);
+    if (r.gl && r.setBlendMode) r.setBlendMode(BLEND_NORMAL);
     stale.push(() => {
       img.destroy();
       if (scene.textures.exists(key)) scene.textures.remove(key);

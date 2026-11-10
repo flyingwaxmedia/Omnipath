@@ -2492,6 +2492,53 @@ function paint(scene: Phaser.Scene, key: string, m: Mon, f: number, k = 1, tint:
   });
 }
 
+/**
+ * Per-instance looks of common monsters (SPEC-v4 §11.8): a pack is never N copies of one sprite. Look 0 is the species
+ * as drawn; the others are painted natively a little smaller or bigger (whole pixels, no sprite scale) with a small
+ * palette nudge baked in (cooler, warmer, duller). Elites and wardens keep their one look.
+ */
+export const MONSTER_INSTANCE_LOOKS: readonly { k: number; tint: number | null }[] = [
+  { k: 1, tint: null },
+  { k: 0.92, tint: 0xe2ecff },
+  { k: 1.08, tint: 0xfff0d8 },
+  { k: 1, tint: 0xe8e2d2 },
+];
+const instanceCount = new Map<string, number>();
+
+/** Which instance look the n-th spawned monster of a kind wears: a fixed, shuffled cycle (deterministic per kind). */
+export function instanceLook(id: string, n: number): number {
+  let h = 2166136261;
+  for (let i = 0; i < id.length; i++) h = Math.imul(h ^ id.charCodeAt(i), 16777619);
+  h = Math.imul(h ^ (n >>> 2), 16777619) >>> 0;
+  // every four spawns show all four looks, in an order that changes block to block
+  const order = [0, 1, 2, 3];
+  for (let i = 3; i > 0; i--) {
+    const j = (h >>> (i * 5)) % (i + 1);
+    [order[i], order[j]] = [order[j], order[i]];
+  }
+  return order[n & 3];
+}
+
+/**
+ * The instance look of one common monster as a baked variant (null: look 0, an elite / warden, or a monster that is
+ * already a baked variant of another species). `instance` picks the look; without it the monsters of a kind take the
+ * looks in turn (the order is fixed per kind, so a map always shows the same mix).
+ */
+export function instanceVariant(def: Pick<MonsterDef, 'id' | 'base' | 'texture' | 'tint' | 'scale' | 'rank'>, instance?: number): MonsterVariant | null {
+  if (def.rank !== 'common' || monsterVariant(def)) return null;
+  const species = speciesOfKey(def.texture) ?? (SPECIES[def.id] ? def.id : def.base && SPECIES[def.base] ? def.base : null);
+  if (!species) return null;
+  let n = instance;
+  if (n === undefined) {
+    n = instanceCount.get(def.id) ?? 0;
+    instanceCount.set(def.id, n + 1);
+  }
+  const i = instance === undefined ? instanceLook(def.id, n) : ((n % MONSTER_INSTANCE_LOOKS.length) + MONSTER_INSTANCE_LOOKS.length) % MONSTER_INSTANCE_LOOKS.length;
+  if (i === 0) return null;
+  const look = MONSTER_INSTANCE_LOOKS[i];
+  return { key: `mon_${def.id}~${i}`, species, k: look.k, tint: look.tint };
+}
+
 /** Paints (once) a baked variant's two frames; returns its frame-0 key. */
 function paintVariant(scene: Phaser.Scene, v: MonsterVariant): string {
   const m = SPECIES[v.species];
@@ -2505,7 +2552,17 @@ function paintVariant(scene: Phaser.Scene, v: MonsterVariant): string {
  * or the base species. `species` is the species key behind it (hover / flyer rules key on it); `baked` = the size and
  * tint are in the pixels (show it at scale 1, no tint).
  */
-export function monsterTexture(scene: Phaser.Scene, def: MonsterDef): { key: string; species: string; baked: boolean } {
+export function monsterTexture(scene: Phaser.Scene, def: MonsterDef, instance?: number): { key: string; species: string; baked: boolean } {
+  const inst = instanceVariant(def, instance);
+  if (inst) {
+    try {
+      return { key: paintVariant(scene, inst), species: `mon_${inst.species}`, baked: true };
+    } catch (e) {
+      console.error(`[omnipath] monster instance look ${inst.key} failed`, e);
+      if (scene.textures.exists(inst.key)) scene.textures.remove(inst.key);
+      if (scene.textures.exists(`${inst.key}_1`)) scene.textures.remove(`${inst.key}_1`);
+    }
+  }
   const v = monsterVariant(def);
   if (v) {
     try {
@@ -2589,7 +2646,7 @@ function speciesHide(species: string): number {
  */
 export function monsterHideColor(idOrKey: string | { id: string }): number {
   const raw = typeof idOrKey === 'string' ? idOrKey : idOrKey.id;
-  const id = raw.replace(/^mon_/, '').replace(/_1$/, '');
+  const id = raw.replace(/^mon_/, '').replace(/_1$/, '').replace(/~\d+$/, '');
   const def = MONSTERS.find((d) => d.id === id);
   const v = def ? monsterVariant(def) : null;
   const species = v?.species ?? (SPECIES[id] ? id : (def?.base ?? speciesOfKey(def?.texture) ?? id));

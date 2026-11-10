@@ -978,9 +978,9 @@ try {
 
   // ------------------------------------------------------------ save round-trip
   await page.evaluate(() => window.omnipath.scene.save());
-  const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('omnipath.save.v2') ?? 'null'));
-  if (saved?.v === 2 && saved.world?.visited?.length >= 10) ok(`save v2 written (${saved.world.visited.length} maps visited)`);
-  else fail('save v2 missing or incomplete');
+  const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('omnipath.save.v3') ?? 'null'));
+  if (saved?.v === 3 && saved.world?.visited?.length >= 10) ok(`save v3 written (${saved.world.visited.length} maps visited)`);
+  else fail(`save v3 missing or incomplete (v ${saved?.v}, ${saved?.world?.visited?.length ?? 0} maps)`);
 
   // ------------------------------------------------------------ long-press (touch): the picker / card opened by a hold
   // stays open when the finger lifts (the click the lift makes must not land on the new backdrop).
@@ -1145,12 +1145,13 @@ try {
   await p2.waitForTimeout(500);
   const mig = await p2.evaluate(() => ({
     v1: !!localStorage.getItem('omnipath.save.v1'),
-    v2: JSON.parse(localStorage.getItem('omnipath.save.v2') ?? 'null'),
+    v3: JSON.parse(localStorage.getItem('omnipath.save.v3') ?? 'null'),
     map: window.omnipath.debug.info().map,
   }));
-  if (mig.v1 && mig.v2?.v === 2 && mig.v2.player.bag.ore === 3 && mig.v2.book.skills.arcane_orb && mig.map === 'vale.hearthvale')
-    ok('v1 save migrated to v2 (v1 kept, bag + book carried over)');
-  else fail(`v1 migration: ${JSON.stringify({ v1: mig.v1, map: mig.map, bag: mig.v2?.player?.bag })}`);
+  const orb = mig.v3?.book?.skills?.arcane_orb ?? mig.v3?.book?.shelved?.arcane_orb;
+  if (mig.v1 && mig.v3?.v === 3 && mig.v3.player.bag.ore === 3 && orb && mig.map === 'vale.hearthvale')
+    ok('v1 save migrated to v3 (v1 kept, bag + book carried over)');
+  else fail(`v1 migration: ${JSON.stringify({ v1: mig.v1, v: mig.v3?.v, map: mig.map, bag: mig.v3?.player?.bag, orb: !!orb })}`);
   await ctx2.close();
 } catch (e) {
   if (e !== SKIP_MAIN) fail(`exception: ${e?.stack ?? e}`);

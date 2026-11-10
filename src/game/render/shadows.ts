@@ -14,7 +14,7 @@
 //                       actor's own shadow image on DEPTH.SHADOW. Flying monsters keep a small offset ellipse.
 //
 // Everything is whole pixels: the shear is rounded per row, nothing is scaled or rotated at draw time.
-import Phaser from 'phaser';
+import type Phaser from 'phaser';
 import { SHADOW_COLOR } from '../art/pixel';
 
 /** How far right the top of a sprite lands, as a share of its height (golden-hour and dusk maps: SHEAR_LATE). */
@@ -35,6 +35,9 @@ export const SHADOW_RGB = parseInt(SHADOW_COLOR.slice(1), 16);
 /** Atlas of actor shadows. */
 export const SHADOW_ATLAS = 'cast_shadows';
 const PAGE = 512;
+/** Phaser.BlendModes values (kept as numbers so this module stays importable without a DOM, for tests). */
+export const BLEND_NORMAL = 0;
+export const BLEND_MULTIPLY = 2;
 
 /** Maps whose light is low (dusk biomes): longer shadows through the one shear constant. */
 export function shearFor(biome: string): number {
@@ -346,7 +349,7 @@ export class ActorShadows {
       const oy = s.displayOriginY;
       sh.setDisplayOrigin(ox, oy - f.foot + 1);
     }
-    sh.setBlendMode(Phaser.BlendModes.MULTIPLY).setAlpha(this.alpha).setScale(1);
+    sh.setBlendMode(BLEND_MULTIPLY).setAlpha(this.alpha).setScale(1);
   }
 
   /** Uploads pages that got new frames this frame (once per frame, after every sync). */
