@@ -1,12 +1,15 @@
 // Bag (panels lane; docs/UX-SIMPLE.md): coins, then what you can use (Use), what you gathered (sell prices), relics,
-// books, weapons (Equip; stats behind "Details") and the essence pouch (only once you own one). Opened with arg
+// books, weapons (Equip; stats behind "Details"; Bare Hands is one of them: "put your weapon away") and the essence
+// pouch (only once you own one). Opened with arg
 // 'sell' from a Waykeeper: materials get a quantity picker and ONE Sell button each (the controller re-checks that a
 // Waykeeper is near). Words: item names with pixel icons, one short line each, no internals.
-import type { ItemDef, WeaponType } from '../../core/types';
+import { WEAPON_TYPES, type ItemDef, type WeaponType } from '../../core/types';
 import { SOLD_WEAPONS, WEAPONS } from '../../data/weapons';
 import { $$, esc } from '../util';
-import { oneLine } from '../words';
+import { ownsWeapon } from '../classinfo';
+import { WEAPON_WORD, oneLine, weaponName } from '../words';
 import { type PanelHost, detailsHtml, iconHtml, refIconHtml, wireToggles } from './common';
+import { weaponGlyph } from '../hud/html';
 import { sheet } from './skills';
 
 type Held = { it: ItemDef; id: string; n: number };
@@ -58,19 +61,23 @@ export function renderBag(host: PanelHost, arg?: string): void {
     .join('');
   const ess = ctrl.unlocks().essences ? book.ingredients().essences : [];
   const unowned = SOLD_WEAPONS.filter((w) => !p.ownedWeapons.includes(w));
-  const weapons = `<div class="weapons">${p.ownedWeapons
+  // Bare Hands are always yours (SPEC-v4 §2.1): the last weapon row, "put your weapon away".
+  const mine = [...WEAPON_TYPES.filter((w) => w !== 'fists' && ownsWeapon(p, w)), 'fists' as WeaponType];
+  const weapons = `<div class="weapons">${mine
     .map((w) => {
       const d = WEAPONS[w];
       const on = p.weapon === w;
-      return `<div class="wpn ${on ? 'on' : ''}"><span class="ico">${d.icon}</span><span><b>${d.name}</b><small>${esc(oneLine(d.blurb))}</small>
+      const bare = w === 'fists';
+      const line = bare ? (on ? 'Your weapon is put away.' : 'Put your weapon away.') : oneLine(d.blurb);
+      return `<div class="wpn ${on ? 'on' : ''} ${bare ? 'bare' : ''}" data-w="${w}"><span class="ico">${weaponGlyph(w)}</span><span><b>${esc(bare ? WEAPON_WORD.fists : weaponName(d.name))}</b><small>${esc(line)}</small>
         ${detailsHtml(`<small>ATK ${d.atk} · MATK ${d.matk} · Crit ${d.crit}%</small>`)}</span>
-        <button class="btn ${on ? '' : 'gold'}" data-equip="${w}" ${on ? 'disabled' : ''}>${on ? 'Equipped ✓' : 'Equip'}</button></div>`;
+        <button class="btn ${on ? '' : 'gold'}" data-equip="${w}" ${on ? 'disabled' : ''}>${on ? (bare ? 'Bare hands ✓' : 'Equipped ✓') : bare ? 'Put away' : 'Equip'}</button></div>`;
     })
     .join('')}
     ${unowned
       .map((w) => {
         const d = WEAPONS[w];
-        return `<div class="wpn locked"><span class="ico">${d.icon}</span><span><b>${d.name}</b><small>Brann sells one in Hearthvale · 🪙${d.price}</small></span></div>`;
+        return `<div class="wpn locked"><span class="ico">${weaponGlyph(w)}</span><span><b>${esc(weaponName(d.name))}</b><small>Brann sells one in Hearthvale · 🪙${d.price}</small></span></div>`;
       })
       .join('')}</div>`;
 
@@ -90,7 +97,7 @@ export function renderBag(host: PanelHost, arg?: string): void {
           : ''
       }
       <h3>Weapons</h3>${weapons}
-      <p class="sub">Every skill you know works with any weapon.</p>`;
+      <p class="sub">If a move uses a weapon, you need that weapon.</p>`;
   sheet(host, selling ? '🎒 Sell' : '🎒 Bag', body, 'bag3');
   wireToggles(host.modal);
   const after = (r: { ok: boolean; message?: string }) => {
@@ -114,6 +121,9 @@ export function renderBag(host: PanelHost, arg?: string): void {
     }),
   );
   $$<HTMLButtonElement>(host.modal, '[data-equip]').forEach((b) =>
-    b.addEventListener('click', () => after(ctrl.equipWeapon(b.dataset.equip as WeaponType))),
+    b.addEventListener('click', () => {
+      const w = b.dataset.equip as WeaponType;
+      after(w === 'fists' && ctrl.unequipWeapon ? ctrl.unequipWeapon() : ctrl.equipWeapon(w));
+    }),
   );
 }

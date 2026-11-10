@@ -1,6 +1,7 @@
 // The simple skill card (starchart lane; docs/UX-SIMPLE.md §3): big pixel icon, name, ★ rank, one short line,
 // cooldown / SP and ONE primary action — Equip (→ ctrl.equipSkill, slots full → the picker 'skill:<id>'),
-// "Equipped ✓", "Class skill ✓", Transform (→ ctrl.morph) or the one next step (a small "?" shows the rest).
+// "Equipped ✓", "Class skill ✓", Transform (→ ctrl.morph) or the one next step (a small "?" shows the rest). A known
+// skill the held weapon cannot use shows its lock instead: "Needs a sword — Equip" (→ ctrl.equipWeapon; SPEC-v4 §2.2).
 // "Details" is closed by default. The same card everywhere: a star in the Star Chart, a tile in its List, a class slot
 // on the HUD (ui.open('skill', id)), the Codex, the altar, the Pursuits tracker. Data: ctrl.skillCard(id).
 //
@@ -9,10 +10,12 @@
 import { fusionMinRank } from '../../core/mastery';
 import { gameBus } from '../../game/events';
 import { reqStep } from '../../game/steps';
+import { equipForSkill, lockOf } from '../classinfo';
 import type { GameController } from '../controller';
+import { weaponGlyph } from '../hud/html';
 import type { PanelHost } from '../panels/common';
 import { $$, esc } from '../util';
-import { originText, plural, stars } from '../words';
+import { lockLine, originText, plural, stars } from '../words';
 import type { StarView } from './data';
 
 /** The ONE primary action of a card. */
@@ -23,6 +26,8 @@ export type CardPrimary =
   /** `from` set: this card is the form, and its known parent (`from`) can become it right now. */
   | { kind: 'transform'; to: string; toName: string; from?: string; fromName?: string }
   | { kind: 'step'; text: string }
+  /** The held weapon cannot use it: `line` = "Needs a sword"; `owned` → the button equips that weapon. */
+  | { kind: 'needs'; weapon: string; line: string; owned: boolean }
   | { kind: 'none' };
 
 export interface CardModel {
@@ -51,6 +56,8 @@ export interface CardModel {
   details: { label: string; value: string }[];
   /** What it transforms into (Details; tap → that star). '?' names stay hidden. */
   forms: { id: string; name: string; known: boolean }[];
+  /** The held weapon cannot use it, shown small under another action: "Needs a dagger". */
+  lockNote?: { weapon: string; line: string };
   /** Transform ready with more than one form: the other forms it can take now (small "or …" chips → that form's card). */
   alts?: { id: string; name: string }[];
 }
@@ -134,6 +141,14 @@ export function cardModel(ctrl: GameController, id: string, star?: StarView): Ca
       .find((x) => book.has(x.from) && book.canMorph(x.from) && book.morphOptions(x.from).some((o) => o.morph.to === id && o.available && !o.owned && !!o.skill));
     if (via) primary = { kind: 'transform', to: id, toName: sk.name, from: via.from, fromName: reg.skill(via.from)?.name ?? '' };
   }
+  // A skill on your bar that your weapon cannot use: the lock is the card's one action ("Needs a sword — Equip").
+  // Not on the bar yet (Equip) or ready to transform: that action stays, and the lock is one small line under it.
+  let lockNote: { weapon: string; line: string } | undefined;
+  if (v.known) {
+    const lock = lockOf(ctrl, id);
+    if (lock && (primary.kind === 'equipped' || primary.kind === 'class' || primary.kind === 'none')) primary = { kind: 'needs', weapon: lock.need, line: lock.line, owned: lock.owned };
+    else if (lock) lockNote = { weapon: lock.need, line: lock.line };
+  }
   // Transform ready with several forms: the others, as small "or …" chips under the button.
   const alts =
     v.known && primary.kind === 'transform' && !primary.from
@@ -201,6 +216,7 @@ export function cardModel(ctrl: GameController, id: string, star?: StarView): Ca
     details,
     forms,
     ...(alts.length ? { alts } : {}),
+    ...(lockNote ? { lockNote } : {}),
   };
 }
 
@@ -236,6 +252,10 @@ export function cardHtml(m: CardModel, o: CardOptions = {}): string {
   const action =
     p.kind === 'equip'
       ? `<button class="sc-primary" data-act="equip">Equip</button>`
+      : p.kind === 'needs'
+        ? p.owned
+          ? `<button class="sc-primary sc-lock" data-act="weapon" data-w="${esc(p.weapon)}">${weaponGlyph(p.weapon)}<span>${esc(lockLine(p.line, true))}</span></button>`
+          : `<div class="sc-step sc-lock">${weaponGlyph(p.weapon)}<span>${esc(p.line)}. Brann sells one in Hearthvale.</span></div>`
       : p.kind === 'equipped'
         ? `<div class="sc-done" role="status">Equipped ✓<small>Slot ${p.slot + 1}</small></div>`
         : p.kind === 'class'
@@ -265,6 +285,7 @@ export function cardHtml(m: CardModel, o: CardOptions = {}): string {
     ${m.line ? `<p class="sc-line">${esc(m.line)}</p>` : ''}
     ${meta}
     <div class="sc-act">${action}</div>
+    ${m.lockNote ? `<p class="sc-next sc-locknote">${weaponGlyph(m.lockNote.weapon)}<span>${esc(m.lockNote.line)}.</span></p>` : ''}
     ${m.next ? `<p class="sc-next">${esc(m.next)}</p>` : ''}
     ${details}
     ${o.chartLink ? `<button class="sc-link" data-act="chart">✦ See it in the Star Chart</button>` : ''}
@@ -299,6 +320,13 @@ export function wireCard(host: PanelHost, root: ParentNode, m: CardModel, h: Car
       const full = ctrl.barSlots().every((s) => s.kind !== 'own' || !!s.skillId);
       if (full) host.open('picker', `skill:${m.id}`);
       else if (r.message) host.toast(esc(r.message));
+    }),
+  );
+  act('weapon').forEach((b) =>
+    b.addEventListener('click', () => {
+      const r = equipForSkill(ctrl, m.id, b.dataset.w as never);
+      if (!r.ok && r.message) host.toast(esc(r.message));
+      host.refresh();
     }),
   );
   act('transform').forEach((b) =>

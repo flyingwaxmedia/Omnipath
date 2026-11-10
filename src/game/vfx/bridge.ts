@@ -20,17 +20,31 @@
 //                    + the hit feel through the juice rig (host.juice): coalesced victim-local hit-stop scaled by the damage,
 //                    a 1-frame white impact frame on the cast's first hit per monster (the rig's flash gate: later
 //                    ticks spark-only, <= 1 flash per 220 ms / 8 frames), squash, recoil, a camera kick on heavy casts
+// v4 kinds and class mechanics (docs/VFX.md §6.9, §6.10; payloads: src/game/events.ts "v4 Phase 1 payloads"):
+//   objectSpawn      a zone is placed: the field opens (area) and stands (aura: exact rim, tint, living units) at the
+//                    LIVE object (follow zones move with it) until objectEnd or its time runs out
+//   objectTick       each tick re-lights the field (riders.zone.tick; first / later tick pieces by index)
+//   objectEnd        the field lets go (riders.zone.end; nothing on a map clear)
+//   blink            vanish where the caster stood (their own frame slices away), streaks to where they land, arrive
+//   mend             the bloom on the first pulse, the trickle loop and resting circle for a heal over time, a small
+//                    lift on each later pulse
+//   shieldUp / shieldHit / shieldEnd   the shell forms and holds; each soaked blow flashes it; it breaks (and bursts)
+//   mechanic         the worn class's mechanic: meter full, finisher, combo step, stance swap on the player; mark
+//                    pips, cash-in and stored-damage pops on the marked foes; class objects placed / grown / used.
+//                    Under 'Reduce shake & flashes' only the readable mark plays (no rings, no motes).
+// A mechanic boost may scale a skill's shape without changing its id: recipes are derived from the skill AS CAST.
 // Monster techniques, auto-attacks, telegraphs, player statuses, deaths, spawns and world moments are world.ts's.
 import type { ComboId } from '../../core/combat';
 import { hashSeed } from '../../core/rng';
-import type { SkillDef, StatusKind } from '../../core/types';
+import type { SkillDef, SkillShape, StatusKind } from '../../core/types';
+import { GAME_DATA } from '../../data';
 import type { Monster } from '../entities/Monster';
 import type { EventBus, GameEvents, Pt, Scope } from '../events';
 import { holdFor } from './juice';
 import type { GhostSource, JuiceHooks, LivePt, PlayCtx, VfxGroup, VfxStage } from './play';
 import { piece, recipePieces } from './pieces';
 import { RAMPS } from './ramps';
-import { comboPieces, deriveVfx, extraPieces, impactPieces, statusPieces, statusPip } from './recipe';
+import { comboPieces, deriveVfx, deriveVfxAsCast, extraPieces, impactPieces, mechanicPieces, statusPieces, statusPip, type MechanicFx } from './recipe';
 import { ANCHOR_DY, VFX_BUDGET, type BodySize, type FamilyId, type HitOutcome, type HitRelation, type VfxPiece, type VfxRecipe } from './types';
 
 /** The live player view the bridge needs (entities/Player satisfies it). */
@@ -64,11 +78,35 @@ interface CastState {
 }
 
 /** Status loop priority (docs/VFX.md §6.4): at most two loops per target, highest first. */
-const STATUS_PRIORITY: readonly StatusKind[] = ['freeze', 'stun', 'shock', 'burn', 'poison', 'bleed', 'soak', 'slow'];
+const STATUS_PRIORITY: readonly StatusKind[] = ['freeze', 'stun', 'launch', 'root', 'shock', 'burn', 'poison', 'bleed', 'expose', 'lure', 'soak', 'slow'];
 const ONE_SHOT: ReadonlySet<StatusKind> = new Set<StatusKind>(['knockback', 'smite', 'pull']);
 const COMBOS: Readonly<Partial<Record<StatusKind, ComboId>>> = { freeze: 'shatter', soak: 'conduct', burn: 'fan' };
 
 const has = (p: VfxPiece, t: string): boolean => (p.tags ?? []).includes(t as never);
+
+const CLASSES = new Map(GAME_DATA.classes.map((c) => [c.id, c]));
+const ELEMENT_FAMILIES: readonly FamilyId[] = GAME_DATA.elements.map((el) => el.id);
+
+/**
+ * The family a class's mechanic feedback is drawn in: its element; an element-less class reads by its weapon (bare
+ * hands warm spirit, a rod arcane, steel otherwise).
+ */
+export function classFamily(classId: string): FamilyId {
+  const c = CLASSES.get(classId);
+  if (!c) return 'steel';
+  // Off-grid sources (none, prism) read by the weapon like the physical classes.
+  if (c.source && (ELEMENT_FAMILIES as readonly string[]).includes(c.source)) return c.source as FamilyId;
+  return c.weapon === 'fists' ? 'spirit' : c.weapon === 'staff' ? 'arcane' : 'steel';
+}
+
+/** A shell flashes for a soaked blow at most this often (a swarm's hits would strobe it otherwise). */
+const ABSORB_GAP_MS = 120;
+
+interface ZoneState {
+  group: VfxGroup;
+  recipe: VfxRecipe;
+  ctx: PlayCtx;
+}
 
 /** Body bucket of a monster from its sprite height. */
 export function bodyOf(m: Monster): BodySize {
@@ -112,7 +150,13 @@ export class VfxBridge {
   private auras = new Map<string, VfxGroup>();
   private statuses = new Map<Monster, Map<StatusKind, VfxGroup>>();
   private leech: { from: Pt; at: number } | null = null;
-  private recipes = new Map<string, VfxRecipe | null>();
+  private recipes = new Map<string, { shape: SkillShape; recipe: VfxRecipe | null }>();
+  /** Recipes of boosted casts (same id, a scaled shape), by the shape object the cast carries. */
+  private asCast = new WeakMap<SkillShape, VfxRecipe | null>();
+  private zones = new Map<number, ZoneState>();
+  private mends = new Map<string, VfxGroup>();
+  private shield: { group: VfxGroup; recipe: VfxRecipe; up: boolean; lastAbsorb: number } | null = null;
+  private marks = new Map<Monster, VfxGroup>();
 
   constructor(
     private readonly stage: VfxStage,
@@ -137,7 +181,16 @@ export class VfxBridge {
       .on('statusApplied', (e) => this.statusApplied(e))
       .on('combo', (e) => this.combo(e))
       .on('spark', (e) => this.spark(e))
-      .on('levelUp', (e) => this.levelUp(e));
+      .on('levelUp', (e) => this.levelUp(e))
+      .on('objectSpawn', (e) => this.objectSpawn(e))
+      .on('objectTick', (e) => this.objectTick(e))
+      .on('objectEnd', (e) => this.objectEnd(e))
+      .on('blink', (e) => this.blink(e))
+      .on('mend', (e) => this.mend(e))
+      .on('shieldUp', (e) => this.shieldUp(e))
+      .on('shieldHit', (e) => this.shieldHit(e))
+      .on('shieldEnd', (e) => this.shieldEnd(e))
+      .on('mechanic', (e) => this.mechanic(e));
     return this;
   }
 
@@ -160,6 +213,15 @@ export class VfxBridge {
       bus.on('combo', (e) => this.combo(e)),
       bus.on('spark', (e) => this.spark(e)),
       bus.on('levelUp', (e) => this.levelUp(e)),
+      bus.on('objectSpawn', (e) => this.objectSpawn(e)),
+      bus.on('objectTick', (e) => this.objectTick(e)),
+      bus.on('objectEnd', (e) => this.objectEnd(e)),
+      bus.on('blink', (e) => this.blink(e)),
+      bus.on('mend', (e) => this.mend(e)),
+      bus.on('shieldUp', (e) => this.shieldUp(e)),
+      bus.on('shieldHit', (e) => this.shieldHit(e)),
+      bus.on('shieldEnd', (e) => this.shieldEnd(e)),
+      bus.on('mechanic', (e) => this.mechanic(e)),
     ];
     return () => offs.forEach((o) => o());
   }
@@ -190,16 +252,32 @@ export class VfxBridge {
 
   // ---------------------------------------------------------------- helpers
 
+  /**
+   * The recipe of a skill as it is cast. The first shape seen for an id is its plain recipe (cached by id); a cast
+   * whose shape object differs was scaled by a class mechanic (systems/boost.ts keeps the id) and gets its own recipe,
+   * derived once per cast: every effect is as big as its hit test.
+   */
   private recipe(skill: SkillDef): VfxRecipe | null {
-    let r = this.recipes.get(skill.id);
-    if (r === undefined) {
+    const derive = (asCast: boolean): VfxRecipe | null => {
       try {
-        r = deriveVfx(skill, 'player');
+        return asCast ? deriveVfxAsCast(skill, 'player') : deriveVfx(skill, 'player');
       } catch (err) {
         console.error('[omnipath] vfx recipe failed', skill.id, err);
-        r = null;
+        return null;
       }
-      this.recipes.set(skill.id, r);
+    };
+    const known = this.recipes.get(skill.id);
+    if (!known) {
+      const recipe = derive(false);
+      this.recipes.set(skill.id, { shape: skill.shape, recipe });
+      return recipe;
+    }
+    if (known.shape === skill.shape) return known.recipe;
+    let r = this.asCast.get(skill.shape);
+    if (r === undefined) {
+      // Equal numbers under a new object (a re-composed skill) share the plain recipe.
+      r = JSON.stringify(known.shape) === JSON.stringify(skill.shape) ? known.recipe : derive(true);
+      this.asCast.set(skill.shape, r);
     }
     return r;
   }
@@ -303,7 +381,8 @@ export class VfxBridge {
     c.charge?.end();
     c.charge = null;
     const p = this.host.player();
-    if (e.shape !== 'chain' || !p) return;
+    // Chains play their muzzle here; a zone thrown to a spot flicks from the hand (its field is objectSpawn's).
+    if ((e.shape !== 'chain' && e.shape !== 'zone') || !p) return;
     const ang = Math.atan2(e.aim.y - e.y, e.aim.x - e.x);
     this.stage.play(c.recipe.phases.cast ?? [], { owner: 'player', caster: { x: e.x, y: e.y }, ang, seed: this.seed(c.recipe, e.castId, 'cast') });
   }
@@ -651,5 +730,215 @@ export class VfxBridge {
   levelUp(_e: GameEvents['levelUp']): void {
     const p = this.host.player();
     if (p) this.stage.play(extraPieces('levelUp'), { owner: 'player', body: p, ang: 0, seed: hashSeed('level', Math.round(this.stage.now())) });
+  }
+
+  // ---------------------------------------------------------------- v4: zones, blinks, mends, shields
+
+  objectSpawn(e: GameEvents['objectSpawn']): void {
+    if (e.owner !== 'player' || e.kind !== 'zone') return;
+    const c = this.cast(e.castId, e.skill);
+    if (!c || c.recipe.carrier.kind !== 'zone') return;
+    const r = c.recipe;
+    const obj = e.obj;
+    this.zones.get(e.id)?.group.end();
+    // The live record: a follow zone moves with its owner, a class object stands until it is used up.
+    const centre: LivePt = {
+      get x() {
+        return obj.x;
+      },
+      get y() {
+        return obj.y;
+      },
+    };
+    const line = e.line;
+    const p = this.host.player();
+    const from: LivePt = line ? { x: line.x0, y: line.y0 } : centre;
+    const ang = line ? Math.atan2(line.y1 - line.y0, line.x1 - line.x0) : p ? Math.atan2(e.y - p.y, e.x - p.x) : 0;
+    const timed = Number.isFinite(e.untilMs);
+    const end = timed ? this.deadline(e.untilMs) : Infinity;
+    const ctx: PlayCtx = { owner: 'player', caster: from, aim: centre, target: centre, ang, seed: this.seed(r, e.castId, `z${e.id}`), r: e.radius, shift: !!e.reprise };
+    this.stage.play(r.phases.area ?? [], ctx);
+    // Standing pieces carry the zone's own duration; the event's is the truth (a class object stands until removed).
+    const life = timed ? Math.max(1, Math.round(e.durationMs)) : undefined;
+    const standing = (r.phases.aura ?? []).map((q) => (q.lifeMs === undefined ? q : ({ ...q, lifeMs: life } as VfxPiece)));
+    const group = this.stage.play(standing, { ...ctx, alive: () => obj.alive && this.stage.now() < end });
+    this.zones.set(e.id, { group, recipe: r, ctx });
+  }
+
+  objectTick(e: GameEvents['objectTick']): void {
+    const z = this.zones.get(e.id);
+    const tick = z?.recipe.riders.zone?.tick;
+    if (!z || !tick) return;
+    const pieces = tick.filter((q) => !(has(q, 'firstHitOnly') && e.index !== 0) && !(has(q, 'laterHits') && e.index === 0));
+    this.stage.play(pieces, { ...z.ctx, r: e.radius, seed: hashSeed(z.ctx.seed, e.index) });
+  }
+
+  objectEnd(e: GameEvents['objectEnd']): void {
+    const z = this.zones.get(e.id);
+    if (!z) return;
+    this.zones.delete(e.id);
+    z.group.end();
+    // A map change clears every object at once: nothing to show.
+    if (e.reason === 'clear') return;
+    const end = z.recipe.riders.zone?.end;
+    // The live record is gone after this event: the goodbye plays at fixed points.
+    const at = { x: e.x, y: e.y };
+    const from = z.ctx.caster ? { x: z.ctx.caster.x, y: z.ctx.caster.y } : at;
+    if (end) this.stage.play(end, { ...z.ctx, caster: from, aim: at, target: at, seed: hashSeed(z.ctx.seed, 'end') });
+  }
+
+  blink(e: GameEvents['blink']): void {
+    if (e.owner !== 'player') return;
+    const c = this.cast(e.castId, e.skill);
+    const p = this.host.player();
+    if (!c || !p) return;
+    this.reprise(c, e.reprise, e.castId);
+    const r = c.recipe;
+    const from = { x: e.from.x, y: e.from.y };
+    const to = { x: e.to.x, y: e.to.y };
+    const dist = Math.hypot(to.x - from.x, to.y - from.y);
+    const ang = dist > 1 ? Math.atan2(to.y - from.y, to.x - from.x) : 0;
+    const seed = this.seed(r, e.castId, 'blink');
+    // The player already stands at `to`: the vanish snapshots their frame where they WERE.
+    const ghostOf: GhostSource = { x: from.x, y: from.y, sprite: p.sprite };
+    const base: PlayCtx = { owner: 'player', ang, seed, shift: !!e.reprise };
+    this.stage.play(r.phases.cast ?? [], { ...base, caster: from, ghostOf });
+    // The streaks between the two ends span the real jump (a blink to a near target is shorter than its reach).
+    if (dist >= 24) {
+      const trail = (r.phases.trail ?? []).map((q) => (q.place?.pattern === 'line' ? ({ ...q, place: { ...q.place, radius: Math.round(dist) } } as VfxPiece) : q));
+      this.stage.play(trail, { ...base, caster: from, aim: to });
+    }
+    this.stage.play(r.phases.area ?? [], { ...base, caster: p, aim: to, target: to, r: e.radius });
+  }
+
+  mend(e: GameEvents['mend']): void {
+    const r = this.recipe(e.skill);
+    const p = this.host.player();
+    if (!r || !p) return;
+    const base: PlayCtx = { owner: 'player', caster: p, ang: 0, seed: this.seed(r, e.castId, e.first ? 'mend' : `m${Math.round(this.stage.now())}`) };
+    if (!e.first) {
+      this.stage.play(r.phases.trail ?? [], base);
+      return;
+    }
+    const at = { x: e.x, y: e.y };
+    this.stage.play(r.phases.cast ?? [], base);
+    this.stage.play(r.phases.area ?? [], { ...base, aim: at, target: at, r: e.radius });
+    this.mends.get(e.skillId)?.end();
+    this.mends.delete(e.skillId);
+    for (const [k, g] of this.mends) if (g.done) this.mends.delete(k);
+    const aura = r.phases.aura ?? [];
+    if (!aura.length || !e.overMs) return;
+    const end = this.stage.now() + e.overMs;
+    this.mends.set(e.skillId, this.stage.play(aura, { ...base, aim: at, target: at, r: e.radius, alive: () => this.stage.now() < end }));
+  }
+
+  shieldUp(e: GameEvents['shieldUp']): void {
+    const r = this.recipe(e.skill);
+    const p = this.host.player();
+    if (!r || !p) return;
+    if (this.shield) {
+      this.shield.up = false;
+      this.shield.group.end();
+    }
+    const end = this.deadline(e.untilMs);
+    const ctx: PlayCtx = { owner: 'player', caster: p, ang: 0, seed: this.seed(r, e.castId, 'shield') };
+    this.stage.play(r.phases.cast ?? [], ctx);
+    const st = { group: null as unknown as VfxGroup, recipe: r, up: true, lastAbsorb: -1e9 };
+    // The loop's own life is the authored duration; the event's end is the truth.
+    const left = Math.max(1, Math.round(e.untilMs - this.host.sceneNow()));
+    const aura = (r.phases.aura ?? []).map((q) => (q.lifeMs === undefined ? q : ({ ...q, lifeMs: Math.max(1, left - (q.delayMs ?? 0)) } as VfxPiece)));
+    st.group = this.stage.play(aura, { ...ctx, alive: () => st.up && this.stage.now() < end });
+    this.shield = st;
+  }
+
+  shieldHit(e: GameEvents['shieldHit']): void {
+    const st = this.shield;
+    const p = this.host.player();
+    const absorb = st?.recipe.riders.shield?.absorb;
+    if (!st || !st.up || !p || !absorb) return;
+    const now = this.stage.now();
+    if (now - st.lastAbsorb < ABSORB_GAP_MS) return;
+    st.lastAbsorb = now;
+    const ang = e.origin ? Math.atan2(p.y - e.origin.y, p.x - e.origin.x) : 0;
+    this.stage.play(absorb, { owner: 'player', caster: p, ang, seed: hashSeed('absorb', Math.round(now)) });
+  }
+
+  shieldEnd(e: GameEvents['shieldEnd']): void {
+    const st = this.shield;
+    this.shield = null;
+    if (st) {
+      st.up = false;
+      st.group.end();
+    }
+    const p = this.host.player();
+    const sh = (st?.recipe ?? this.recipe(e.skill))?.riders.shield;
+    if (!p || !sh || (e.reason !== 'broken' && e.reason !== 'expired')) return;
+    const ctx: PlayCtx = { owner: 'player', caster: p, aim: p, ang: 0, seed: hashSeed('shieldEnd', Math.round(this.stage.now())) };
+    this.stage.play(sh.break, ctx);
+    if (e.burst) this.stage.play(sh.burst, { ...ctx, r: e.burst });
+  }
+
+  // ---------------------------------------------------------------- v4: class mechanic feedback
+
+  mechanic(e: GameEvents['mechanic']): void {
+    const p = this.host.player();
+    if (!p) return;
+    const fam = classFamily(e.classId);
+    const calm = this.stage.reduceFlash;
+    const type = e.type as MechanicFx;
+    const seed = hashSeed('mech', type, Math.round(this.stage.now()));
+    const onPlayer: PlayCtx = { owner: 'player', caster: p, ang: 0, seed };
+    const fx = e.effect;
+    switch (fx.type) {
+      case 'full':
+      case 'spent':
+      case 'comboBreak':
+      case 'finisher':
+        this.stage.play(mechanicPieces(type, fam, { calm }), onPlayer);
+        return;
+      case 'comboStep':
+        this.stage.play(mechanicPieces(type, fam, { calm, n: fx.step, of: fx.length }), onPlayer);
+        return;
+      case 'stance':
+        this.stage.play(mechanicPieces(type, fam, { calm, n: fx.stance + 1 }), onPlayer);
+        return;
+      case 'marked': {
+        const m = e.target;
+        if (!m) return;
+        // One pip per foe, replaced as its marks grow; it goes with the foe, the cash-in or the marks running out.
+        this.endMark(m);
+        for (const [t, g] of this.marks) if (g.done || !t.alive) this.marks.delete(t);
+        this.marks.set(m, this.stage.play(mechanicPieces(type, fam, { n: fx.marks, body: bodyOf(m) }), { owner: 'player', target: m, caster: p, ang: 0, seed, alive: () => m.alive, low: true }));
+        return;
+      }
+      case 'cashIn':
+        for (const t of e.targets ?? []) {
+          this.endMark(t.target);
+          const at = { x: t.target.x, y: t.target.y };
+          this.stage.play(mechanicPieces(type, fam, { calm, body: bodyOf(t.target) }), { owner: 'player', target: at, caster: p, ang: 0, seed: seed + Math.round(at.x) });
+        }
+        return;
+      case 'markEnd': {
+        const m = e.target;
+        if (!m) return;
+        this.endMark(m);
+        const at = { x: m.x, y: m.y };
+        this.stage.play(mechanicPieces(type, fam, { calm, body: bodyOf(m) }), { owner: 'player', target: at, caster: p, ang: 0, seed });
+        return;
+      }
+      case 'placed':
+      case 'expired':
+      case 'levelUp':
+      case 'consumed': {
+        const at = e.at ? { x: e.at.x, y: e.at.y } : { x: p.x, y: p.y };
+        this.stage.play(mechanicPieces(type, fam, { calm }), { owner: 'player', target: at, caster: p, ang: 0, seed });
+        return;
+      }
+    }
+  }
+
+  private endMark(m: Monster): void {
+    this.marks.get(m)?.end();
+    this.marks.delete(m);
   }
 }

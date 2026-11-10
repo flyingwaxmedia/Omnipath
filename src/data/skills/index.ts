@@ -1,7 +1,9 @@
 import type { SkillDef } from '../../core/types';
+import { CLASS_SKILLS } from './classes';
 import { CROSS_SKILLS } from './cross';
 import { DAGGER_SKILLS } from './dagger';
 import { ECHO_SKILLS } from './echoes';
+import { FIST_SKILLS } from './fists';
 import { MONSTER_SKILLS } from './monster';
 import { SIGNATURE_SKILLS } from './signatures';
 import { STAFF_SKILLS } from './staff';
@@ -13,10 +15,12 @@ export const SKILLS: SkillDef[] = [
   ...SWORD_SKILLS,
   ...DAGGER_SKILLS,
   ...STAFF_SKILLS,
+  ...FIST_SKILLS,
   ...CROSS_SKILLS,
   ...UNIVERSAL_SKILLS,
   ...TECHNIQUE_SKILLS,
   ...ECHO_SKILLS,
   ...MONSTER_SKILLS,
   ...SIGNATURE_SKILLS,
+  ...CLASS_SKILLS,
 ];

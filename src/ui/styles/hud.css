@@ -79,7 +79,7 @@
   z-index: 0;
   isolation: isolate;
   pointer-events: none;
-  font-family: var(--font-ui);
+  font-family: var(--font-body);
   font-size: var(--fs);
   color: var(--h-ink);
   line-height: 1.2;
@@ -161,7 +161,7 @@
 }
 
 .hud-layer .num {
-  font-family: var(--font-small);
+  font-family: var(--font-body);
   font-weight: 400;
 }
 
@@ -170,32 +170,44 @@
   -webkit-user-drag: none;
 }
 
-/* ------------------------------------------------------------------ frames (art) */
+/* ------------------------------------------------------------------ frames (art)
+   v4 (docs/SPEC-v4.md §11.7): three weights. HEAVY = the portrait medallion and the attack button (their own round
+   art). LIGHT = things you tap in rows: skill slots, menu buttons, the auto-travel pill (a quiet 1 px line).
+   NONE = things you only read: name + HP / SP, zone plate, target, toasts, tracker, cast bar — text on a soft dark
+   strip. Gold stays on what you can tap. .v4-art = the render lane's v4 frames exist (--ui-frame-light, --ui-strip);
+   without them the older slot frame stands in for LIGHT and a plain dark fill for the strip. */
 
 .hud-layer.ui-art .me-plate,
 .hud-layer.ui-art .zone-plate,
 .hud-layer.ui-art .target,
-.hud-layer.ui-art .navpill {
-  border-style: solid;
-  border-color: transparent;
-  border-width: calc(6 * var(--px));
-  border-image: var(--ui-frame-plate) 6 fill / calc(6 * var(--px)) stretch;
-  background: none;
-}
-
 .hud-layer.ui-art .toast,
 .hud-layer.ui-art .pz-row,
 .hud-layer.ui-art .castbar,
-.hud-layer.ui-art .channel {
+.hud-layer.ui-art .channel,
+.hud-layer.ui-art .mech {
   border-style: solid;
   border-color: transparent;
-  border-width: calc(5 * var(--px));
-  border-image: var(--ui-frame-card) 5 fill / calc(5 * var(--px)) stretch;
-  background-color: rgba(20, 14, 10, 0.35);
-  background-clip: padding-box;
+  border-width: calc(4 * var(--px));
+  border-image: none;
+  background: rgba(18, 12, 10, 0.56);
+  background-clip: border-box;
 }
 
-.hud-layer.ui-art .slot {
+.hud-layer.ui-art.v4-art .me-plate,
+.hud-layer.ui-art.v4-art .zone-plate,
+.hud-layer.ui-art.v4-art .target,
+.hud-layer.ui-art.v4-art .toast,
+.hud-layer.ui-art.v4-art .pz-row,
+.hud-layer.ui-art.v4-art .castbar,
+.hud-layer.ui-art.v4-art .channel,
+.hud-layer.ui-art.v4-art .mech {
+  border-image: var(--ui-strip) 4 fill / calc(4 * var(--px)) stretch;
+  background: none;
+}
+
+.hud-layer.ui-art .slot,
+.hud-layer.ui-art .menu button,
+.hud-layer.ui-art .navpill {
   border-style: solid;
   border-color: transparent;
   border-width: calc(7 * var(--px));
@@ -203,19 +215,16 @@
   background: none;
 }
 
-.hud-layer.ui-art .menu button,
-.hud-layer.ui-art .pz-tab {
-  border-style: solid;
-  border-color: transparent;
-  border-width: calc(7 * var(--px));
-  border-image: var(--ui-frame-button) 7 fill / calc(7 * var(--px)) stretch;
-  background: none;
+.hud-layer.ui-art.v4-art .slot,
+.hud-layer.ui-art.v4-art .menu button,
+.hud-layer.ui-art.v4-art .navpill {
+  border-width: calc(3 * var(--px));
+  border-image: var(--ui-frame-light) 3 fill / calc(3 * var(--px)) stretch;
 }
 
-.hud-layer.ui-art .menu button:active,
-.hud-layer.ui-art .pz-tab:active,
-.hud-layer.ui-art .pursuits.open .pz-tab {
-  border-image-source: var(--ui-frame-button-down);
+.hud-layer.ui-art.v4-art .menu button:active,
+.hud-layer.ui-art.v4-art .slot.pressed {
+  border-image-source: var(--ui-frame-light-on);
 }
 
 .hud-layer.ui-art .vb,
@@ -284,12 +293,10 @@
 .hud-layer:not(.ui-art) .target,
 .hud-layer:not(.ui-art) .navpill,
 .hud-layer:not(.ui-art) .toast,
-.hud-layer:not(.ui-art) .pz-row,
 .hud-layer:not(.ui-art) .castbar,
 .hud-layer:not(.ui-art) .channel,
 .hud-layer:not(.ui-art) .slot,
 .hud-layer:not(.ui-art) .menu button,
-.hud-layer:not(.ui-art) .pz-tab,
 .hud-layer:not(.ui-art) .spark-banner {
   border: calc(2 * var(--px)) solid var(--h-bronze);
   border-radius: calc(3 * var(--px));
@@ -299,8 +306,7 @@
     inset 0 0 0 calc(1 * var(--px)) var(--h-out);
 }
 
-.hud-layer:not(.ui-art) .menu button,
-.hud-layer:not(.ui-art) .pz-tab {
+.hud-layer:not(.ui-art) .menu button {
   background: #4a3220;
 }
 
@@ -483,7 +489,7 @@
   padding: 0 calc(4 * var(--px));
   display: grid;
   place-items: center;
-  font-family: var(--font-small);
+  font-family: var(--font-body);
   font-size: var(--fs-num);
   font-weight: 400;
   color: var(--h-gold);
@@ -598,7 +604,7 @@
   inset: 0;
   display: grid;
   place-items: center;
-  font-family: var(--font-small);
+  font-family: var(--font-body);
   font-size: var(--fs-num);
   font-weight: 400;
   line-height: 1;
@@ -615,76 +621,6 @@
   50% {
     filter: brightness(1.6);
   }
-}
-
-.hud-me .me-stats {
-  grid-row: 2;
-  grid-column: 2;
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: calc(2 * var(--px)) calc(8 * var(--px));
-  margin: calc(2 * var(--px)) 0 0 calc(var(--medal) * -0.06);
-  padding: calc(2 * var(--px)) calc(10 * var(--px)) calc(2 * var(--px)) calc(8 * var(--px));
-  /* --stats-room (layout()): never under the top-right buttons when they stack into two rows. */
-  max-width: min(calc(var(--plate-w) + var(--medal) * 0.4), var(--stats-room, calc(9999 * var(--px))));
-  font-size: var(--fs-s);
-  white-space: nowrap;
-  text-shadow: var(--h-line);
-  background: linear-gradient(90deg, rgba(20, 14, 10, 0.82), rgba(20, 14, 10, 0.6) 75%, rgba(20, 14, 10, 0));
-  border-top: calc(1 * var(--px)) solid rgba(176, 128, 58, 0.55);
-  pointer-events: none;
-}
-
-.me-stats .st small {
-  color: var(--h-mute);
-  margin-right: calc(3 * var(--px));
-  font-size: inherit;
-}
-
-.me-stats .st b {
-  color: var(--h-ink);
-  font-family: var(--font-small);
-  font-weight: 400;
-}
-
-.me-stats .cl {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  gap: calc(4 * var(--px));
-  padding-bottom: calc(2 * var(--px));
-  color: color-mix(in srgb, var(--cc) 55%, #fff);
-  font-weight: 700;
-}
-
-.me-stats .cl img {
-  width: calc(16 * var(--px));
-  height: calc(16 * var(--px));
-}
-
-.me-stats .cl b {
-  color: var(--h-gold);
-}
-
-.me-stats .cl u {
-  position: absolute;
-  left: calc(20 * var(--px));
-  right: 0;
-  bottom: 0;
-  height: calc(2 * var(--px));
-  background: rgba(0, 0, 0, 0.55);
-}
-
-.me-stats .cl u i {
-  display: block;
-  height: 100%;
-  background: var(--cc);
-}
-
-.me-stats .cl.none {
-  color: var(--h-mute);
-  font-weight: 400;
 }
 
 /* ------------------------------------------------------------------ top-centre: zone plate, target, toasts */
@@ -735,10 +671,6 @@
   display: none;
 }
 
-:where(.hud-port) .hud-layer .zone-banner .zone-strip {
-  display: none;
-}
-
 .zone-banner .zone-plate {
   display: flex;
   align-items: center;
@@ -765,7 +697,7 @@
 
 .hud-layer .zt {
   font-style: normal;
-  font-family: var(--font-small);
+  font-family: var(--font-body);
   font-size: var(--fs-tiny);
   font-weight: 400;
   line-height: 1;
@@ -775,52 +707,11 @@
   letter-spacing: 0.04em;
 }
 
-.zone-banner .zone-strip {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  line-height: calc(14 * var(--px));
-  gap: calc(5 * var(--px));
-  margin-top: calc(-1 * var(--px));
-  padding: calc(1 * var(--px)) calc(10 * var(--px)) calc(2 * var(--px));
-  font-size: var(--fs-s);
-  white-space: nowrap;
-  color: var(--h-mute);
-  text-shadow: var(--h-line);
-  background: linear-gradient(90deg, transparent, rgba(20, 14, 10, 0.78) 14%, rgba(20, 14, 10, 0.78) 86%, transparent);
-  border-bottom: calc(1 * var(--px)) solid rgba(176, 128, 58, 0.5);
-}
-
-.zone-strip .dot {
-  width: calc(3 * var(--px));
-  height: calc(3 * var(--px));
-  background: var(--h-bronze);
-  box-shadow: 0 0 0 calc(1 * var(--px)) var(--h-out);
-}
-
 .zone-plate .zb {
   color: var(--h-gold);
   font-size: var(--fs-s);
   text-shadow: var(--h-line);
   white-space: nowrap;
-}
-
-.zone-strip .zs {
-  display: inline-flex;
-  gap: calc(2 * var(--px));
-}
-
-.zone-strip .zs img {
-  width: calc(16 * var(--px));
-  height: calc(16 * var(--px));
-}
-
-.zone-strip .zw.alive {
-  color: #ff8a80;
-}
-
-.zone-strip .zw.defeated {
-  color: #9fd28a;
 }
 
 .zone-banner:active .zone-plate {
@@ -896,8 +787,8 @@
 }
 
 .target .tg-lv {
-  font-family: var(--font-ui);
-  font-size: calc(11 * var(--px));
+  font-family: var(--font-body);
+  font-size: var(--fs-s);
   font-weight: 400;
 }
 
@@ -919,7 +810,7 @@
 
 .hud-layer .tg-tag {
   font-style: normal;
-  font-family: var(--font-small);
+  font-family: var(--font-body);
   font-size: var(--fs-tiny);
   font-weight: 400;
   line-height: 1;
@@ -1143,8 +1034,8 @@
   right: calc(-4 * var(--px));
   bottom: calc(-5 * var(--px));
   text-align: center;
-  font-family: var(--font-ui);
-  font-size: calc(11 * var(--px));
+  font-family: var(--font-body);
+  font-size: var(--fs-s);
   font-weight: 700;
   line-height: 1;
   color: var(--h-ink);
@@ -1167,8 +1058,8 @@
   width: calc(9 * var(--px));
   height: calc(11 * var(--px));
   place-items: center;
-  font-family: var(--font-small);
-  font-size: calc(8 * var(--px));
+  font-family: var(--font-body);
+  font-size: var(--fs-s);
   font-style: normal;
   line-height: 1;
   color: #fff4d8;
@@ -1237,7 +1128,7 @@
 }
 
 .hud-layer .minimap .mm-n {
-  font-family: var(--font-small);
+  font-family: var(--font-body);
   color: var(--h-gold);
 }
 
@@ -1279,248 +1170,12 @@
   color: var(--h-gold);
 }
 
-/* Pursuits: rows to the left of a 44 px tab (the tab folds the list away; portrait phones start folded) */
-.hud-layer .pursuits {
-  display: flex;
-  align-items: flex-start;
-  gap: calc(4 * var(--px));
-  pointer-events: none;
-}
-
-.pursuits .pz-list {
-  display: flex;
-  flex-direction: column;
-  gap: calc(4 * var(--px));
-  width: var(--pz-w);
-}
-
-.pursuits:not(.open) .pz-list {
-  display: none;
-}
-
-/* The tab, and under it (open list only) "+N": the rows that did not fit; tap → the quest log. */
-.pursuits .pz-side {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: calc(4 * var(--px));
-  flex: none;
-}
-
-.hud-layer .pz-more {
-  width: calc(44 * var(--px));
-  height: calc(44 * var(--px));
-  display: grid;
-  place-items: center;
-  font-family: var(--font-ui);
-  font-size: var(--fs-zone);
-  font-weight: 700;
-  line-height: 1;
-  color: var(--h-gold);
-  text-shadow: var(--h-line);
-  background: rgba(20, 14, 10, 0.6);
-  border: calc(1 * var(--px)) solid rgba(176, 128, 58, 0.7);
-}
-
-.pursuits:not(.open) .pz-more,
-.hud-layer .pz-more.hidden {
-  display: none;
-}
-
-/* Rows: the card frame without its opaque centre, over a see-through fill (the field stays visible behind). */
-.hud-layer.ui-art .pursuits .pz-row {
-  border-image: var(--ui-frame-card) 5 / calc(5 * var(--px)) stretch;
-  background-color: rgba(20, 14, 10, 0.6);
-}
-
-.hud-layer:not(.ui-art) .pursuits .pz-row {
-  background: rgba(20, 14, 10, 0.6);
-}
-
-.hud-layer .pz-tab {
-  position: relative;
-  width: calc(44 * var(--px));
-  height: calc(44 * var(--px));
-  display: grid;
-  place-items: center;
-  flex: none;
-}
-
-.pz-tab .g {
-  width: calc(24 * var(--px));
-  height: calc(24 * var(--px));
-}
-
-.pz-tab .pz-n {
-  position: absolute;
-  right: calc(-6 * var(--px));
-  bottom: calc(-6 * var(--px));
-  min-width: calc(16 * var(--px));
-  height: calc(16 * var(--px));
-  padding: 0 calc(3 * var(--px));
-  display: grid;
-  place-items: center;
-  font-family: var(--font-small);
-  font-size: var(--fs-tiny);
-  line-height: 1;
-  color: var(--h-ink);
-  text-shadow: var(--h-line);
-  background: #2a1c12;
-  border: calc(1 * var(--px)) solid var(--h-bronze);
-}
-
-.pz-tab .pz-n:empty {
-  display: none;
-}
-
-.pz-tab small {
-  position: absolute;
-  width: calc(1 * var(--px));
-  height: calc(1 * var(--px));
-  overflow: hidden;
-  clip-path: inset(50%);
-}
-
-.pursuits.has-ready .pz-tab .pz-n {
-  background: var(--h-gold);
-  color: #2a1c12;
-  text-shadow: none;
-}
-
-.pz-tab.nudge {
-  animation: nudge 1.4s ease-out;
-}
-
 @keyframes nudge {
   0%,
   40% {
     filter: drop-shadow(0 0 calc(8 * var(--px)) rgba(233, 196, 106, 0.95)) brightness(1.3);
     transform: scale(1.12);
   }
-}
-
-.hud-layer .pz-row {
-  position: relative;
-  display: flex;
-  align-items: center;
-  gap: calc(6 * var(--px));
-  width: 100%;
-  min-height: calc(44 * var(--px));
-  padding: calc(1 * var(--px)) calc(6 * var(--px)) calc(3 * var(--px)) calc(3 * var(--px));
-  text-align: left;
-}
-
-.pz-row.cut {
-  display: none;
-}
-
-.pz-row .pz-ico {
-  position: relative;
-  flex: none;
-  width: calc(24 * var(--px));
-  height: calc(24 * var(--px));
-  display: grid;
-  place-items: center;
-}
-
-.pz-row .pz-ico img {
-  width: calc(24 * var(--px));
-  height: calc(24 * var(--px));
-}
-
-.pz-row .pz-txt {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  flex: 1;
-  text-shadow: var(--h-line);
-}
-
-.pz-row .pz-txt b {
-  font-size: var(--fs-s);
-  color: var(--h-gold);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.pz-row .pz-line {
-  display: flex;
-  align-items: flex-end;
-  gap: calc(6 * var(--px));
-  font-size: var(--fs);
-}
-
-/* One step, never cut mid-word: a long line wraps onto a second line instead of ending in "…". */
-.pz-row .pz-line > span {
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  line-clamp: 2;
-  overflow: hidden;
-  flex: 1;
-}
-
-.pz-row .pz-line em {
-  white-space: nowrap;
-  font-style: normal;
-  font-weight: 700;
-  color: var(--h-gold);
-}
-
-.pz-row .pz-bar {
-  position: absolute;
-  left: calc(32 * var(--px));
-  right: calc(6 * var(--px));
-  bottom: calc(1 * var(--px));
-  height: calc(2 * var(--px));
-  background: rgba(0, 0, 0, 0.55);
-}
-
-.pz-row .pz-bar i {
-  display: block;
-  height: 100%;
-  background: var(--h-gold);
-}
-
-.pz-row.goal .pz-txt b {
-  color: #a8dcc8;
-}
-
-.pz-row.goal .pz-bar i {
-  background: #6cc4a8;
-}
-
-.pz-row.ready {
-  box-shadow: 0 0 calc(10 * var(--px)) rgba(233, 196, 106, 0.5);
-}
-
-.pz-row.ready .pz-line {
-  color: #fff3c0;
-}
-
-/* Quest rows wear the NPC's own marker (the same art as over their heads): grey '…' while in progress, gold '?' when
-   ready to turn in ('!' only ever means "a new quest here"). One art px per HUD art px, like the world. */
-.pz-row .pz-ico img.qm {
-  width: calc(var(--w) * var(--px));
-  height: calc(var(--h) * var(--px));
-}
-
-.pz-row .pz-ico .qm-t {
-  font-family: var(--font-small);
-  font-size: calc(16 * var(--px));
-  font-weight: 400;
-  line-height: 1;
-  color: #d6d1c8;
-  text-shadow: var(--h-line);
-}
-
-.pz-row.ready .pz-ico .qm-t {
-  color: var(--h-gold);
-}
-
-.pz-row:active {
-  filter: brightness(1.2);
 }
 
 /* ------------------------------------------------------------------ left edge: quick buttons */
@@ -1584,7 +1239,7 @@
   padding: 0 calc(3 * var(--px));
   display: grid;
   place-items: center;
-  font-family: var(--font-small);
+  font-family: var(--font-body);
   font-size: var(--fs-tiny);
   font-weight: 400;
   line-height: 1;
@@ -1596,8 +1251,8 @@
 
 .hud-layer .qk small {
   margin-top: calc(-3 * var(--px));
-  font-family: var(--font-ui);
-  font-size: calc(11 * var(--px));
+  font-family: var(--font-body);
+  font-size: var(--fs-s);
   font-weight: 400;
   line-height: 1;
   text-shadow: var(--h-line);
@@ -1708,59 +1363,6 @@
   pointer-events: none;
 }
 
-.hotbar .grps {
-  display: flex;
-  gap: var(--sgap);
-  margin-bottom: calc(1 * var(--px));
-}
-
-.hotbar .grps:empty {
-  display: none;
-}
-
-.hotbar .grp {
-  width: calc(var(--n) * var(--slot) + (var(--n) - 1) * var(--sgap));
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: calc(4 * var(--px));
-  font-family: var(--font-ui);
-  font-size: calc(11 * var(--px));
-  font-weight: 400;
-  line-height: calc(14 * var(--px));
-  text-shadow: var(--h-line);
-  white-space: nowrap;
-  overflow: hidden;
-}
-
-.hotbar .grp::before,
-.hotbar .grp::after {
-  content: '';
-  flex: 1;
-  height: calc(1 * var(--px));
-  background: currentColor;
-  opacity: 0.55;
-}
-
-.hotbar .grp.by-class {
-  color: color-mix(in srgb, var(--cc) 60%, #fff);
-}
-
-.hotbar .grp.by-class img {
-  width: calc(14 * var(--px));
-  height: calc(14 * var(--px));
-  order: 0;
-}
-
-.hotbar .grp.own {
-  color: var(--h-mute);
-}
-
-/* .hud-port: was @media (orientation: portrait) and (max-width: 599px); now measured in art px (src/ui/hud/layout.ts hudLayoutClasses) */
-:where(.hud-port) .hotbar .grps {
-  display: none;
-}
-
 .hotbar .slots {
   display: grid;
   grid-template-columns: repeat(var(--per-row, 8), var(--slot));
@@ -1829,30 +1431,6 @@
   --sb: calc(2 * var(--px));
 }
 
-.hud-layer .slot.by-class::before {
-  content: '';
-  position: absolute;
-  left: calc(-1 * var(--sb) - var(--sgap));
-  right: calc(-1 * var(--sb));
-  top: calc(100% + var(--sb) + 2 * var(--px));
-  height: calc(2 * var(--px));
-  background: color-mix(in srgb, var(--cc) 70%, #b0803a);
-  box-shadow:
-    0 calc(1 * var(--px)) 0 var(--h-out),
-    0 calc(-1 * var(--px)) 0 var(--h-out);
-  pointer-events: none;
-}
-
-.hud-layer .slot.by-class:first-child::before {
-  left: calc(-1 * var(--sb));
-}
-
-/* Two even rows (very narrow phones: the class row does not fit): no bracket (it would bend into an L); each class
-   slot keeps its emblem. */
-.hotbar.two:not(.split) .slot.by-class::before {
-  display: none;
-}
-
 .slot .emb {
   position: absolute;
   right: calc(-6 * var(--px));
@@ -1904,7 +1482,7 @@
   padding: 0 calc(2 * var(--px));
   display: grid;
   place-items: center;
-  font-family: var(--font-small);
+  font-family: var(--font-body);
   font-size: var(--fs-tiny);
   font-weight: 400;
   line-height: 1;
@@ -1929,7 +1507,7 @@
   position: absolute;
   left: calc(-4 * var(--px));
   bottom: calc(-5 * var(--px));
-  font-family: var(--font-small);
+  font-family: var(--font-body);
   font-size: var(--fs-tiny);
   line-height: 1;
   color: var(--h-mute);
@@ -1961,8 +1539,8 @@
   position: absolute;
   left: calc(1 * var(--px));
   bottom: calc(2 * var(--px));
-  font-family: var(--font-small);
-  font-size: calc(8 * var(--px));
+  font-family: var(--font-body);
+  font-size: var(--fs-s);
   font-weight: 400;
   line-height: 1;
   color: #fff;
@@ -2206,7 +1784,7 @@
   padding: 0 calc(3 * var(--px));
   display: grid;
   place-items: center;
-  font-family: var(--font-small);
+  font-family: var(--font-body);
   font-size: var(--fs-tiny);
   font-weight: 400;
   line-height: 1;
@@ -2295,8 +1873,8 @@
   right: calc(-6 * var(--px));
   bottom: calc(-6 * var(--px));
   text-align: center;
-  font-family: var(--font-ui);
-  font-size: calc(11 * var(--px));
+  font-family: var(--font-body);
+  font-size: var(--fs-s);
   font-weight: 700;
   line-height: 1;
   text-shadow: var(--h-line);
@@ -2309,7 +1887,7 @@
   bottom: calc(-9 * var(--px));
   transform: translateX(-50%);
   font-style: normal;
-  font-family: var(--font-small);
+  font-family: var(--font-body);
   font-size: var(--fs-tiny);
   font-weight: 400;
   line-height: 1;
@@ -2377,7 +1955,7 @@
   inset: calc(-3 * var(--px)) 0;
   display: grid;
   place-items: center;
-  font-family: var(--font-small);
+  font-family: var(--font-body);
   font-size: var(--fs-tiny);
   font-weight: 400;
   line-height: 1;
@@ -2522,7 +2100,7 @@
 }
 
 .headline .hl-txt b {
-  font-size: clamp(calc(18 * var(--px)), 4.4vw, calc(26 * var(--px)));
+  font-size: var(--fs-m);
   font-weight: 700;
   letter-spacing: 0.02em;
 }
@@ -2558,7 +2136,7 @@
   display: inline-flex;
   align-items: center;
   gap: calc(8 * var(--px));
-  font-size: clamp(calc(16 * var(--px)), 3.6vw, calc(22 * var(--px)));
+  font-size: var(--fs-m);
   color: var(--h-gold);
   text-shadow: var(--h-line);
   white-space: nowrap;
@@ -2621,6 +2199,624 @@
     opacity: 0;
     transform: translateX(-50%) translateY(calc(-10 * var(--px)));
   }
+}
+
+/* ================================================================== v4 HUD diet (docs/SPEC-v4.md §11.7)
+   Type: ONE plain even-stroke pixel face for body text and numbers (--font-body: the render lane's --ui-font-body),
+   the drawn display face (an image painted by the render lane) for the zone name. Three sizes: --fs-s (labels, body,
+   numbers), --fs-m (banner titles) and the display art. --tx = CSS px per pixel of the body face (Hud.applyScale:
+   the HUD's art pixel, or the next whole device pixel up on small phones), so text always sits on whole pixels.
+   The face has one weight: emphasis is colour, never a synthetic bold. */
+
+.hud-layer {
+  --tx: var(--px);
+  --font-body: var(--ui-font-body, var(--font-small));
+  --fs-s: calc(8 * var(--tx));
+  --fs-m: calc(16 * var(--tx));
+  --fs: var(--fs-s);
+  --fs-zone: var(--fs-s);
+  --fs-tiny: var(--fs-s);
+  --fs-num: var(--fs-s);
+  --fs-big: var(--fs-m);
+  --vb-h: calc(14 * var(--px));
+  font-family: var(--font-body);
+  font-size: var(--fs-s);
+  font-synthesis: none;
+  line-height: calc(12 * var(--tx));
+}
+
+.hud-layer .num {
+  font-family: inherit;
+}
+
+.hud-layer b,
+.hud-layer strong {
+  font-weight: 400;
+  color: var(--h-gold);
+}
+
+/* ---- top-left: name + bars on a soft strip (no frame) */
+
+.me-plate .me-name {
+  line-height: calc(12 * var(--tx));
+  color: var(--h-ink);
+}
+
+.me-plate .me-name .pname {
+  color: var(--h-ink);
+}
+
+/* ---- zone plate: the display face on arrival, then a small tag */
+
+.zone-banner .zone-plate {
+  line-height: calc(12 * var(--tx));
+  padding: 0 calc(4 * var(--px));
+}
+
+.zone-banner .zn-d {
+  width: calc(var(--w) * var(--px));
+  height: calc(var(--h) * var(--px));
+  flex: none;
+  margin: calc(1 * var(--px)) 0;
+}
+
+.zone-banner .zn-d + .zn {
+  display: none;
+}
+
+.zone-banner .zn {
+  font-size: var(--fs-s);
+  line-height: calc(12 * var(--tx));
+  letter-spacing: 0;
+  color: var(--h-ink);
+}
+
+.zone-banner.tag {
+  justify-content: flex-start;
+}
+
+.zone-banner.tag .zn-d,
+.zone-banner.tag .zb {
+  display: none;
+}
+
+.zone-banner.tag .zn-d + .zn {
+  display: block;
+}
+
+.zone-banner.tag .zone-plate {
+  animation: zonetag 0.3s steps(3, end);
+}
+
+@keyframes zonetag {
+  from {
+    opacity: 0;
+  }
+}
+
+/* ---- target: text on the strip */
+
+.hud-layer .target {
+  line-height: calc(12 * var(--tx));
+  padding: 0 calc(2 * var(--px)) calc(1 * var(--px));
+}
+
+.target .tg-name {
+  color: var(--h-ink);
+}
+
+.hud-layer .tbar {
+  height: calc(10 * var(--px));
+}
+
+/* ---- toasts: one line of text on the strip */
+
+.hud-layer .toast {
+  padding: 0 calc(6 * var(--px));
+  line-height: calc(12 * var(--tx));
+}
+
+/* ---- menu: light frames, labels kept (the only labels left on buttons) */
+
+.hud-right .menu button small {
+  bottom: calc(-2 * var(--px));
+  color: var(--h-ink);
+}
+
+/* ---- minimap: its N and its fold button speak the HUD's face and size */
+
+.hud-layer .minimap .mm-n,
+.hud-layer .minimap .mm-toggle i {
+  font-family: var(--font-body);
+  font-size: var(--fs-s);
+  line-height: 1;
+}
+
+/* ---- fewer floating labels: the round buttons speak by their icons (names stay for screen readers) */
+
+.hud-layer .qk small,
+.cluster .rb small {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+
+/* ---- tracker: ONE line, collapsed; tap to open its rows */
+
+.hud-layer .pursuits {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: calc(2 * var(--px));
+  pointer-events: none;
+}
+
+.hud-layer .pz-tab {
+  display: flex;
+  align-items: center;
+  gap: calc(4 * var(--px));
+  max-width: var(--pz-w);
+  min-width: calc(44 * var(--px));
+  /* a 44 art px touch target; only the 18 px strip in its middle is drawn */
+  height: calc(44 * var(--px));
+  margin: calc(-10 * var(--px)) 0;
+  padding: 0 calc(6 * var(--px)) 0 calc(10 * var(--px));
+  line-height: calc(12 * var(--tx));
+  text-shadow: var(--h-line);
+  text-align: left;
+  background: linear-gradient(90deg, rgba(18, 12, 10, 0), rgba(18, 12, 10, 0.6) calc(10 * var(--px))) center / 100% calc(18 * var(--px)) no-repeat;
+}
+
+.pz-tab .pz-ico {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: calc(12 * var(--px));
+  height: calc(16 * var(--px));
+}
+
+.pz-tab .pz-ico .g {
+  width: calc(12 * var(--px));
+  height: calc(12 * var(--px));
+}
+
+.pz-tab .pz-ico img.qm {
+  width: calc(var(--w) * var(--px));
+  height: calc(var(--h) * var(--px));
+}
+
+.pz-tab .qm-t {
+  color: var(--h-gold);
+}
+
+.pz-tab .pz-one {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--h-ink);
+}
+
+.pz-tab .pz-one.ready,
+.pz-tab .pz-one em,
+.pz-tab .pz-rest {
+  font-style: normal;
+  color: var(--h-gold);
+}
+
+.pursuits.open .pz-tab .pz-one,
+.pursuits.open .pz-tab .pz-rest {
+  display: none;
+}
+
+.pursuits.open .pz-tab::after {
+  content: 'Pursuits';
+  color: var(--h-mute);
+}
+
+.pz-tab:active {
+  filter: brightness(1.3);
+}
+
+.pz-tab.nudge {
+  animation: nudge 1.4s ease-out;
+}
+
+@keyframes nudge {
+  0%,
+  40% {
+    filter: brightness(1.6);
+  }
+}
+
+.pursuits .pz-list {
+  display: flex;
+  flex-direction: column;
+  gap: calc(2 * var(--px));
+  width: var(--pz-w);
+}
+
+.pursuits:not(.open) .pz-list,
+.pursuits:not(.open) .pz-more,
+.hud-layer .pz-more.hidden {
+  display: none;
+}
+
+.hud-layer .pz-more {
+  min-width: calc(44 * var(--px));
+  height: calc(44 * var(--px));
+  margin: calc(-10 * var(--px)) 0;
+  color: var(--h-gold);
+  text-shadow: var(--h-line);
+  background: linear-gradient(rgba(18, 12, 10, 0.6), rgba(18, 12, 10, 0.6)) center / 100% calc(18 * var(--px)) no-repeat;
+}
+
+.hud-layer .pz-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: calc(4 * var(--px));
+  width: 100%;
+  min-height: calc(44 * var(--px));
+  padding: 0 calc(2 * var(--px));
+  text-align: left;
+  line-height: calc(12 * var(--tx));
+}
+
+.pz-row.cut {
+  display: none;
+}
+
+.pz-row .pz-ico {
+  position: relative;
+  flex: none;
+  width: calc(24 * var(--px));
+  height: calc(24 * var(--px));
+  display: grid;
+  place-items: center;
+}
+
+.pz-row .pz-ico img {
+  width: calc(24 * var(--px));
+  height: calc(24 * var(--px));
+}
+
+.pz-row .pz-ico img.qm {
+  width: calc(var(--w) * var(--px));
+  height: calc(var(--h) * var(--px));
+}
+
+.pz-row .pz-ico .qm-t {
+  color: #d6d1c8;
+}
+
+.pz-row.ready .pz-ico .qm-t {
+  color: var(--h-gold);
+}
+
+.pz-row .pz-txt {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+  text-shadow: var(--h-line);
+}
+
+.pz-row .pz-txt b {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pz-row .pz-line {
+  display: flex;
+  align-items: flex-end;
+  gap: calc(6 * var(--px));
+  color: var(--h-ink);
+}
+
+.pz-row .pz-line > span {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+  flex: 1;
+}
+
+.pz-row .pz-line em {
+  white-space: nowrap;
+  font-style: normal;
+  color: var(--h-gold);
+}
+
+.pz-row .pz-bar {
+  position: absolute;
+  left: calc(30 * var(--px));
+  right: calc(2 * var(--px));
+  bottom: calc(-2 * var(--px));
+  height: calc(2 * var(--px));
+  background: rgba(0, 0, 0, 0.55);
+}
+
+.pz-row .pz-bar i {
+  display: block;
+  height: 100%;
+  background: var(--h-gold);
+}
+
+.pz-row.goal .pz-txt b {
+  color: #a8dcc8;
+}
+
+.pz-row.goal .pz-bar i {
+  background: #6cc4a8;
+}
+
+.pz-row.ready .pz-line {
+  color: #fff3c0;
+}
+
+.pz-row:active {
+  filter: brightness(1.2);
+}
+
+/* ---- log: plain lines; the whole log fades 4 s after its last line (Hud.log) */
+
+.hud-layer .log {
+  transition: opacity 0.6s steps(4, end);
+}
+
+.hud-layer .log.quiet {
+  opacity: 0;
+}
+
+.log .line {
+  line-height: calc(12 * var(--tx));
+}
+
+/* ---- skill bar: light frames; the icon's ground tinted by element; class slots framed in the class colour */
+
+.hud-layer .slot {
+  --sb: calc(3 * var(--px));
+}
+
+.hud-layer .slot.tint::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: color-mix(in srgb, var(--el) 34%, #1a120c);
+  pointer-events: none;
+}
+
+.hud-layer .slot {
+  isolation: isolate;
+}
+
+.hud-layer .slot.by-class {
+  box-shadow:
+    0 0 0 calc(1 * var(--px)) color-mix(in srgb, var(--cc) 78%, #fff),
+    0 0 0 calc(2 * var(--px)) var(--h-out);
+}
+
+/* one emblem for the group (its first slot), not one per slot */
+.slot.by-class:not(:first-child) .emb {
+  display: none;
+}
+
+.hotbar.split .slots {
+  row-gap: calc(var(--sgap) + 4 * var(--px));
+}
+
+/* A skill that needs another weapon ("Needs a sword — Equip"): dimmed, wearing that weapon. Tap = equip it. */
+.slot.wlocked .ico {
+  filter: grayscale(1) brightness(0.42);
+}
+
+.slot .wlock {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: calc(18 * var(--px));
+  height: calc(18 * var(--px));
+  transform: translate(-50%, -50%);
+  color: var(--h-mute);
+  filter: drop-shadow(calc(1 * var(--px)) 0 0 var(--h-out)) drop-shadow(calc(-1 * var(--px)) 0 0 var(--h-out)) drop-shadow(0 calc(1 * var(--px)) 0 var(--h-out))
+    drop-shadow(0 calc(-1 * var(--px)) 0 var(--h-out));
+  pointer-events: none;
+}
+
+.slot .wlock.can {
+  color: var(--h-gold);
+}
+
+.slot .wlock .wi {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.slot.wlocked .cd,
+.slot.wlocked .rk,
+.slot.wlocked .spk {
+  display: none;
+}
+
+/* A class skill its meter has not opened yet: dimmed. One the meter would power right now: a steady gold edge. */
+.slot.waiting .ico {
+  filter: grayscale(0.8) brightness(0.5);
+}
+
+.hud-layer .slot.boost {
+  box-shadow:
+    0 0 0 calc(1 * var(--px)) var(--h-gold),
+    0 0 0 calc(2 * var(--px)) var(--h-out),
+    0 0 calc(6 * var(--px)) calc(1 * var(--px)) rgba(233, 196, 106, 0.7);
+}
+
+/* ---- the class mechanic widget: ONE small widget above the class slots; its only label is the mechanic's name */
+
+.hotbar .mech-dock {
+  display: flex;
+  min-height: 0;
+  margin-bottom: calc(4 * var(--px));
+}
+
+.hotbar .mech-dock:empty {
+  display: none;
+}
+
+.hud-layer .mech {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: calc(5 * var(--px));
+  height: calc(18 * var(--px));
+  padding: 0 calc(3 * var(--px));
+  line-height: calc(10 * var(--px));
+  white-space: nowrap;
+  text-shadow: var(--h-line);
+  pointer-events: none;
+}
+
+.mech .mech-n {
+  color: color-mix(in srgb, var(--cc) 55%, #fff);
+}
+
+.mech em {
+  font-style: normal;
+  color: var(--h-ink);
+  min-width: calc(10 * var(--tx));
+  text-align: right;
+}
+
+/* gauge: a bar */
+.mech .mech-bar {
+  position: relative;
+  width: calc(72 * var(--px));
+  height: calc(6 * var(--px));
+  background: #120c08;
+  box-shadow: 0 0 0 calc(1 * var(--px)) var(--h-out);
+}
+
+.mech .mech-bar i {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  background: var(--cc);
+  box-shadow: inset 0 calc(2 * var(--px)) 0 rgba(255, 255, 255, 0.35);
+  transition: width 0.12s steps(3, end);
+}
+
+.mech.ready .mech-bar i {
+  background: var(--h-gold);
+}
+
+.mech.ready .mech-n {
+  color: #fff3c0;
+  animation: mechready 0.8s steps(2, end) infinite;
+}
+
+@keyframes mechready {
+  50% {
+    color: var(--h-gold);
+  }
+}
+
+/* combo: round pips; marks: diamonds; zone: squares */
+.mech .mech-pips,
+.mech .mech-cells {
+  display: inline-flex;
+  gap: calc(2 * var(--px));
+}
+
+.mech .mech-pips i,
+.mech .mech-cells i {
+  width: calc(6 * var(--px));
+  height: calc(6 * var(--px));
+  background: #120c08;
+  box-shadow: 0 0 0 calc(1 * var(--px)) var(--h-out);
+}
+
+.mech .mech-pips i {
+  clip-path: polygon(33.4% 0, 66.6% 0, 100% 33.4%, 100% 66.6%, 66.6% 100%, 33.4% 100%, 0 66.6%, 0 33.4%);
+  background: #3a2a1c;
+}
+
+.mech .mech-pips.marks i {
+  width: calc(7 * var(--px));
+  height: calc(7 * var(--px));
+  clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%);
+}
+
+.mech .mech-cells i {
+  box-shadow: inset 0 0 0 calc(1 * var(--px)) #5a4630;
+}
+
+.mech .mech-pips i.on,
+.mech .mech-cells i.on {
+  background: var(--cc);
+}
+
+.mech .mech-cells i.on {
+  box-shadow: inset 0 0 0 calc(1 * var(--px)) color-mix(in srgb, var(--cc) 50%, #fff);
+}
+
+.mech.ready .mech-pips i.on {
+  background: var(--h-gold);
+}
+
+/* stance: a two-sided toggle (a button when a tap swaps it) */
+.mech .mech-sides {
+  display: inline-flex;
+  gap: calc(1 * var(--px));
+}
+
+.mech .mech-sides i {
+  min-width: calc(14 * var(--px));
+  height: calc(10 * var(--px));
+  padding: 0 calc(3 * var(--px));
+  font-style: normal;
+  line-height: calc(10 * var(--px));
+  color: var(--h-mute);
+  background: #120c08;
+  box-shadow: 0 0 0 calc(1 * var(--px)) var(--h-out);
+}
+
+.mech .mech-sides i.on {
+  background: var(--cc);
+  box-shadow:
+    0 0 0 calc(1 * var(--px)) var(--h-out),
+    inset 0 calc(2 * var(--px)) 0 rgba(255, 255, 255, 0.35);
+}
+
+.hud-layer .mech.tap {
+  pointer-events: auto;
+}
+
+/* the toggle is a 44 art px touch target; only the 18 px strip in its middle is drawn */
+.hud-layer.ui-art .mech.tap,
+.hud-layer.ui-art.v4-art .mech.tap,
+.hud-layer .mech.tap {
+  height: calc(44 * var(--px));
+  min-width: calc(44 * var(--px));
+  margin: calc(-13 * var(--px)) 0;
+  border: 0;
+  border-image: none;
+  padding: 0 calc(7 * var(--px));
+  background: linear-gradient(rgba(18, 12, 10, 0.6), rgba(18, 12, 10, 0.6)) center / 100% calc(18 * var(--px)) no-repeat;
+}
+
+.hud-layer .mech.tap:active {
+  filter: brightness(1.3);
+}
+
+#hud-root.reduce-flash .mech.ready .mech-n {
+  animation: none;
 }
 
 /* ------------------------------------------------------------------ HUD sheets: the skill picker and the ☰ menu */

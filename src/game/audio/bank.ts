@@ -234,17 +234,44 @@ const TIMBRE: Readonly<Record<ElementKey, Timbre>> = {
 const tz = (t: Timbre, o: Z): Z => ({ sh: t.sh, noise: t.noise, filt: t.filt, mod: t.mod, crush: t.crush, rep: t.rep, trem: t.trem, rnd: 0.04, ...o, f: o.f ?? t.f });
 
 export type CastShape = ShapeKind | 'ward';
-export const CAST_SHAPES: readonly CastShape[] = ['strike', 'spin', 'projectile', 'nova', 'chain', 'dash', 'buff', 'ward'];
+export const CAST_SHAPES: readonly CastShape[] = ['strike', 'spin', 'projectile', 'nova', 'chain', 'dash', 'buff', 'ward', 'zone', 'blink', 'mend', 'shield'];
 
 /** Spell casts by shape × element: one shape template (envelope, motion) voiced by the element's timbre. */
 function castDef(shape: CastShape, el: ElementKey): SoundDef {
   const t = TIMBRE[el];
   const tonal = t.noise < 0.6;
-  // v4 kinds borrow the nearest v2 template until the audio lane voices them.
-  if (shape === 'zone') return castDef('nova', el);
-  if (shape === 'blink') return castDef('dash', el);
-  if (shape === 'mend' || shape === 'shield') return castDef('buff', el);
   switch (shape) {
+    // ---- v4 kinds (docs/SPEC-v4.md §6.1): each its own template, voiced by the element like the rest.
+    case 'zone': // a field settling on the ground: the element swells low and slow over a held root
+      return {
+        group: 'cast',
+        layers: [L(tz(t, { f: Math.max(300, t.f * 0.7), a: 0.05, s: 0.1, r: 0.2, rep: t.rep ?? 0.06, trem: 0.4, slide: -0.4, v: 0.55 })), L({ f: t.root, sh: 1, a: 0.05, s: 0.1, r: 0.2, rep: 0.07, trem: 0.3, v: 0.16 }), L({ f: 420, noise: 3, a: 0.04, s: 0.05, r: 0.16, filt: -900, v: 0.22 })],
+      };
+    case 'blink': // gone, then there: a fast falling "vwip", a beat of nothing, a rising pop
+      return {
+        group: 'cast',
+        layers: [L(tz(t, { f: t.f * 1.7, a: 0.004, s: 0.01, r: 0.06, slide: -9, v: 0.55 })), L({ f: t.root * 2, sh: 1, a: 0.003, r: 0.09, slide: 7, v: 0.3 }, 0.1), L(tz(t, { f: t.f, a: 0.003, r: 0.07, slide: 5, v: 0.3 }), 0.1)],
+      };
+    case 'mend': {
+      // a breath in and a warm fifth opening upward, the element only as a soft bed
+      const r = t.root;
+      return {
+        group: 'cast',
+        pitchVar: 0,
+        variations: 1,
+        layers: [...note(r, 0, 0.22, 0.34, 0.04), ...note(r * 1.5, 0.1, 0.3, 0.32, 0.05), L({ f: r * 3, a: 0.01, r: 0.26, v: 0.07, rep: 0.05, trem: 0.5 }, 0.14), L(tz(t, { f: t.f * 0.8, a: 0.06, s: 0.04, r: 0.14, slide: 1, v: 0.12 }))],
+      };
+    }
+    case 'shield': {
+      // a shell snapping shut: a low knock, a hard root with a detuned twin (a beat, like struck glass)
+      const r = t.root;
+      return {
+        group: 'cast',
+        pitchVar: 0,
+        variations: 1,
+        layers: [thump(250, 0, 0.45, 0.08), L({ f: r, sh: 1, a: 0.004, s: 0.06, r: 0.2, v: 0.32 }), L({ f: r * 2.02, sh: 1, a: 0.004, s: 0.04, r: 0.16, v: 0.13 }, 0.01), L(tz(t, { a: 0.01, s: 0.03, r: 0.1, v: 0.2 }))],
+      };
+    }
     case 'strike': // the element's sheen on a weapon swing
       return { group: 'cast', trim: -5, layers: [L(tz(t, { f: t.f * 1.1, a: 0.005, s: 0.02, r: 0.09, slide: 1, v: 0.55 }))] };
     case 'spin': // a whirl: gated in a rotating rhythm
@@ -332,11 +359,38 @@ const S: Record<string, SoundDef> = {
   swing_staff_light: { group: 'swing', trim: -1, variations: 3, pitchVar: 0.06, layers: [L({ f: 470, noise: 2, a: 0.025, s: 0.02, r: 0.1, slide: -0.8, filt: 150, v: 0.7, rnd: 0.08 })] },
   swing_staff_heavy: { group: 'swing', trim: 1.5, variations: 3, pitchVar: 0.05, layers: [L({ f: 390, noise: 2.4, a: 0.04, s: 0.04, r: 0.16, slide: -0.8, filt: 150, v: 0.8, rnd: 0.08 }), L({ f: 260, sh: 1, a: 0.04, r: 0.14, v: 0.2 })] },
   swing_spin: { group: 'swing', trim: -1.5, variations: 2, layers: [L({ f: 600, noise: 2.4, a: 0.03, s: 0.08, r: 0.1, rep: 0.045, trem: 0.55, slide: 1, filt: 250, v: 0.7, rnd: 0.08 })] },
+  // Bare hands (v4): a punch is a short dry puff of air, a heavy one a longer body turn.
+  swing_fists_light: { group: 'swing', trim: -2, variations: 3, pitchVar: 0.07, layers: [L({ f: 820, noise: 2, a: 0.012, s: 0.006, r: 0.07, slide: 3, filt: 380, v: 0.6, rnd: 0.1 })] },
+  swing_fists_heavy: { group: 'swing', trim: 0.5, variations: 3, pitchVar: 0.05, layers: [L({ f: 520, noise: 2.5, a: 0.03, s: 0.02, r: 0.11, slide: -1.2, filt: 200, v: 0.75, rnd: 0.08 }), L({ f: 250, sh: 1, a: 0.025, r: 0.09, slide: -1, v: 0.2 })] },
   mon_swing: { group: 'monster', variations: 3, layers: [L({ f: 420, noise: 2.6, a: 0.03, s: 0.02, r: 0.12, slide: -1.2, filt: 150, v: 0.6, rnd: 0.1 })] },
 
   // ---------------------------------------------------------------- hits (+ the crit layer and a resisted tunk)
   crit: { group: 'crit', variations: 2, layers: [L({ f: Hz.A6, sh: 1, a: 0.001, r: 0.12, jump: 440, jumpT: 0.03, v: 0.33 }), L({ f: Hz.E7, a: 0.001, r: 0.1, v: 0.16 }), thump(300, 0, 0.5, 0.07), crack(2200, 0, 0.28)] },
   hit_resist: { group: 'hit', trim: -4, layers: [L({ f: 900, sh: 1, a: 0.001, r: 0.05, slide: -2, v: 0.35 }), thump(260, 0, 0.35, 0.04)] },
+
+  // ---------------------------------------------------------------- the fist impact set (v4): a layer over the hit
+  fist_jab: { group: 'impact', trim: 1, variations: 3, pitchVar: 0.07, layers: [L({ f: 420, sh: 1, a: 0.002, s: 0.01, r: 0.07, slide: -3, v: 0.7, rnd: 0.03 }), L({ f: 1500, noise: 3, a: 0.002, s: 0.01, r: 0.06, filt: -2400, v: 0.4, rnd: 0.04 })] },
+  fist_hook: { group: 'impact', trim: 2.5, variations: 3, pitchVar: 0.05, layers: [L({ f: 300, sh: 1, a: 0.002, r: 0.09, slide: -2.2, v: 0.8, rnd: 0.06 }), L({ f: 1100, noise: 3, a: 0.002, r: 0.07, filt: -2000, v: 0.45, rnd: 0.1 }), crack(1500, 0.005, 0.25, 0.035)] },
+  fist_palm: { group: 'impact', trim: 1.5, variations: 3, pitchVar: 0.05, layers: [L({ f: 620, noise: 3.2, a: 0.004, s: 0.01, r: 0.09, slide: -3, filt: 260, v: 0.6, rnd: 0.08 }), L({ f: 360, sh: 1, a: 0.002, r: 0.07, slide: 2, v: 0.4 }), L({ f: 720, a: 0.004, r: 0.1, v: 0.14 }, 0.02)] },
+  fist_kick: { group: 'impact', trim: 2, variations: 3, pitchVar: 0.06, layers: [L({ f: 1000, noise: 2.6, a: 0.008, r: 0.05, slide: 5, filt: 420, v: 0.5, rnd: 0.1 }), L({ f: 280, sh: 1, a: 0.002, r: 0.08, slide: -2.5, v: 0.8, rnd: 0.06 }, 0.03), crack(1300, 0.03, 0.22, 0.03)] },
+  fist_slam: { group: 'impact', trim: 4, variations: 2, pitchVar: 0.04, layers: [L({ f: 250, sh: 1, a: 0.002, r: 0.14, slide: -1.4, v: 0.9, rnd: 0.05 }), L({ f: 700, noise: 3, a: 0.003, s: 0.03, r: 0.12, crush: 0.03, filt: -1500, v: 0.5, rnd: 0.08 }), crack(1100, 0.06, 0.2, 0.05), crack(1400, 0.11, 0.14, 0.04)] },
+
+  // ---------------------------------------------------------------- zones, mends, shields (v4)
+  zone_tick: { group: 'tick', trim: 1.5, variations: 3, layers: [L({ f: 480, noise: 2.6, a: 0.01, s: 0.01, r: 0.08, slide: 1.5, filt: -1300, v: 0.5, rnd: 0.1 }), L({ f: 330, sh: 1, a: 0.008, r: 0.07, v: 0.25 })] },
+  zone_end: { group: 'impact', trim: -2, variations: 2, layers: [L({ f: 700, noise: 3.2, a: 0.02, r: 0.16, slide: -2.5, filt: -1500, v: 0.5, rnd: 0.08 }), L({ f: 392, sh: 1, a: 0.01, r: 0.12, slide: -1, v: 0.18 })] },
+  mend_tick: { group: 'tick', trim: 2, pitchVar: 0.02, layers: [L({ f: Hz.E6, sh: 1, a: 0.004, r: 0.1, v: 0.3 }), L({ f: Hz.B6, a: 0.004, r: 0.08, v: 0.12 }, 0.02)] },
+  shield_absorb: { group: 'impact', trim: 3, variations: 3, pitchVar: 0.05, layers: [L({ f: 380, sh: 1, a: 0.001, r: 0.06, slide: -1.5, v: 0.7, rnd: 0.06 }), L({ f: Hz.D6, sh: 1, a: 0.001, r: 0.11, v: 0.22 }), L({ f: Hz.D6 * 1.51, a: 0.001, r: 0.08, v: 0.1 })] },
+  shield_break: { group: 'status', trim: 2, variations: 2, layers: [L({ f: 2000, noise: 2.2, a: 0.001, s: 0.02, r: 0.1, rep: 0.014, trem: 0.6, filt: 800, v: 0.45, rnd: 0.08 }), L({ f: Hz.A5, sh: 1, a: 0.001, r: 0.14, slide: -2.5, v: 0.3 }), thump(240, 0, 0.4, 0.07)] },
+
+  // ---------------------------------------------------------------- class mechanics (v4): short, on the player
+  mech_full: { group: 'cast', pitchVar: 0, variations: 1, layers: [...note(Hz.E5, 0, 0.1, 0.34), ...note(Hz.A5, 0.06, 0.1, 0.34), ...note(Hz.E6, 0.12, 0.22, 0.36), L({ f: Hz.E7, a: 0.004, r: 0.2, v: 0.07, rep: 0.045, trem: 0.5 }, 0.14)] },
+  mech_finisher: { group: 'combo', trim: -3, pitchVar: 0.02, variations: 2, layers: [L({ f: 2300, noise: 1.2, a: 0.004, s: 0.02, r: 0.14, slide: 3, filt: 900, v: 0.3, rnd: 0.05 }), ...note(Hz.A5, 0.01, 0.16, 0.3), ...note(Hz.E6, 0.01, 0.2, 0.26), thump(260, 0, 0.5, 0.08)] },
+  mech_cashin: { group: 'combo', trim: -2.5, pitchVar: 0.02, variations: 2, layers: [L({ f: Hz.B6, sh: 1, a: 0.001, r: 0.07, v: 0.3 }), L({ f: Hz.G6, sh: 1, a: 0.001, r: 0.07, v: 0.28 }, 0.045), L({ f: Hz.E6, sh: 1, a: 0.001, r: 0.12, v: 0.28 }, 0.09), crack(2000, 0, 0.25, 0.03), thump(280, 0.09, 0.4, 0.07)] },
+  mech_stance: { group: 'cast', trim: -1.5, pitchVar: 0.02, variations: 2, layers: [L({ f: 900, noise: 2.6, a: 0.01, r: 0.07, slide: -6, filt: 320, v: 0.5, rnd: 0.08 }), L({ f: 520, noise: 2.6, a: 0.01, r: 0.09, slide: 6, filt: 320, v: 0.5, rnd: 0.08 }, 0.09), L({ f: Hz.D5, sh: 1, a: 0.004, r: 0.08, v: 0.2 }), L({ f: Hz.A5, sh: 1, a: 0.004, r: 0.12, v: 0.2 }, 0.09)] },
+  mech_step: { group: 'ui', trim: 0.3, pitchVar: 0, layers: [L({ f: Hz.A5, sh: 1, a: 0.002, r: 0.07, v: 0.4 }), L({ f: Hz.A6, a: 0.002, r: 0.05, v: 0.14 })] },
+  mech_break: { group: 'ui', trim: -1, pitchVar: 0, layers: [L({ f: Hz.E5, sh: 1, a: 0.003, r: 0.07, slide: -1.5, v: 0.4 }), L({ f: Hz.C5, sh: 1, a: 0.003, r: 0.1, slide: -1.5, v: 0.35 }, 0.06)] },
+  mech_mark: { group: 'status', trim: -0.5, variations: 2, layers: [crack(2100, 0, 0.3, 0.025), L({ f: Hz.Fs5 * 2, sh: 1, a: 0.001, r: 0.1, v: 0.3 }, 0.01)] },
+  mech_grow: { group: 'cast', trim: -3, variations: 2, layers: [L({ f: 500, noise: 2.8, a: 0.05, s: 0.04, r: 0.14, slide: 2.5, rep: 0.014, trem: 0.4, filt: -1900, v: 0.5, rnd: 0.06 }), L({ f: Hz.G5, sh: 1, a: 0.04, r: 0.16, slide: 1, v: 0.2 })] },
 
   // ---------------------------------------------------------------- projectiles, chains, novas
   proj_whoosh: { group: 'proj', variations: 3, layers: [L({ f: 950, noise: 2.5, a: 0.012, s: 0.02, r: 0.11, slide: -2, filt: 400, v: 0.6, rnd: 0.1 })] },
@@ -361,6 +415,11 @@ const S: Record<string, SoundDef> = {
   status_slow: { group: 'status', layers: [L({ f: 500, sh: 1, a: 0.01, s: 0.05, r: 0.15, slide: -2.5, v: 0.3 })] },
   status_knockback: { group: 'status', layers: [thump(220, 0, 0.5, 0.08), L({ f: 800, noise: 3, a: 0.005, r: 0.1, slide: -3, filt: 300, v: 0.4, rnd: 0.08 })] },
   status_poison: { group: 'status', layers: [L({ f: 330, a: 0.003, r: 0.05, slide: 10, v: 0.35 }), L({ f: 420, r: 0.05, slide: 10, v: 0.3 }, 0.07)] },
+  // v4 statuses: a clamp biting shut, a body thrown up, a guard cracking, a call to come closer.
+  status_root: { group: 'status', variations: 2, layers: [L({ f: 300, sh: 1, a: 0.02, s: 0.05, r: 0.06, rep: 0.022, trem: 0.6, slide: -0.6, filt: -1300, v: 0.5, rnd: 0.06 }), crack(1200, 0.1, 0.4, 0.04), thump(240, 0.1, 0.35, 0.05)] },
+  status_launch: { group: 'status', variations: 2, layers: [L({ f: 520, noise: 3, a: 0.02, s: 0.03, r: 0.14, slide: 6, filt: 260, v: 0.6, rnd: 0.08 }), L({ f: 330, sh: 1, a: 0.01, r: 0.14, slide: 5, v: 0.25 })] },
+  status_expose: { group: 'status', variations: 2, layers: [crack(1900, 0, 0.5, 0.04), L({ f: Hz.E6, sh: 1, a: 0.001, r: 0.14, slide: -2, v: 0.3 }, 0.01), thump(270, 0, 0.3, 0.05)] },
+  status_lure: { group: 'status', pitchVar: 0.02, layers: [L({ f: Hz.G5, sh: 1, a: 0.01, s: 0.03, r: 0.1, v: 0.35 }), L({ f: Hz.C6, sh: 1, a: 0.01, s: 0.03, r: 0.16, v: 0.35 }, 0.11), L({ f: Hz.C7, a: 0.01, r: 0.14, v: 0.08 }, 0.12)] },
   status_pull: { group: 'status', layers: [L({ f: 500, noise: 2.5, a: 0.12, r: 0.03, slide: 4, filt: 250, v: 0.6, rnd: 0.08 })] },
   status_blocked: { group: 'status', trim: 1.5, priority: 4, layers: [L({ f: Hz.B6, sh: 1, r: 0.12, v: 0.3 }), thump(300, 0, 0.3, 0.04)] },
   tick_burn: { group: 'tick', variations: 3, layers: [L({ f: 1700, noise: 2.5, s: 0.02, r: 0.05, rep: 0.01, trem: 0.6, filt: 600, v: 0.4, rnd: 0.1 })] },
@@ -555,6 +614,25 @@ export const chargeSound = (el?: ElementId): string => `charge_${elKey(el)}`;
 export const stepSound = (surface: Surface): string => `step_${surface}`;
 export const gatherSound = (node: NodeKind): string => (SOUNDS[`gather_${node}`] ? `gather_${node}` : 'gather_herb');
 
+/** The fist impact layer of a bare-handed blow (the VFX fist set: jab, hook, palm, kick, slam). */
+export type FistBlow = 'jab' | 'hook' | 'palm' | 'kick' | 'slam';
+export const FIST_BLOWS: readonly FistBlow[] = ['jab', 'hook', 'palm', 'kick', 'slam'];
+export const fistSound = (blow: FistBlow): string => `fist_${blow}`;
+
+/** Class mechanic feedback (docs/SPEC-v4.md §3.6): null = the effect is silent (its cast or object already spoke). */
+const MECHANIC_SOUND: Readonly<Record<string, string>> = {
+  full: 'mech_full',
+  finisher: 'mech_finisher',
+  cashIn: 'mech_cashin',
+  stance: 'mech_stance',
+  comboStep: 'mech_step',
+  comboBreak: 'mech_break',
+  marked: 'mech_mark',
+  markEnd: 'mech_mark',
+  levelUp: 'mech_grow',
+};
+export const mechanicSound = (type: string): string | null => MECHANIC_SOUND[type] ?? null;
+
 /** Nova boom by radius (px). */
 export const novaSound = (radius: number): string => (radius >= 100 ? 'nova_l' : radius >= 64 ? 'nova_m' : 'nova_s');
 
@@ -582,6 +660,10 @@ const STATUS_SOUND: Readonly<Partial<Record<StatusKind, string>>> = {
   freeze: 'status_freeze',
   poison: 'status_poison',
   pull: 'status_pull',
+  root: 'status_root',
+  launch: 'status_launch',
+  expose: 'status_expose',
+  lure: 'status_lure',
 };
 export const statusSound = (kind: StatusKind): string | null => STATUS_SOUND[kind] ?? null;
 

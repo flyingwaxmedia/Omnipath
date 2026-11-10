@@ -9,12 +9,13 @@ import { WEAPONS } from '../src/data/weapons';
 import * as families from '../src/game/vfx/families';
 import { AFTERMATH_MAX_R, cellFor, nominalMs, pieceEndMs, pieceProblems, recipePieces } from '../src/game/vfx/pieces';
 import * as recipeApi from '../src/game/vfx/recipe';
-import { arcBucket, deriveAttackVfx, deriveVfx, GROUND_TRUTH, hitGeometry, impactPieces, monsterTellMs, reachBucket, statusPieces } from '../src/game/vfx/recipe';
+import { arcBucket, deriveAttackVfx, deriveVfx, GROUND_TRUTH, hitGeometry, impactPieces, landsHits, MECHANIC_FX, mechanicPieces, monsterTellMs, reachBucket, statusPieces } from '../src/game/vfx/recipe';
 import * as signatureApi from '../src/game/vfx/signatures';
 import { SIGNATURES } from '../src/game/vfx/signatures';
 import {
   COMPONENT_IDS,
   FAMILY_IDS,
+  FIST_CLASSES,
   PHASE_IDS,
   VFX_BUDGET,
   type Carrier,
@@ -116,6 +117,8 @@ describe('vfx recipes: coverage and validity', () => {
     const used = new Set<string>();
     for (const s of [...AUTHORED, ...MERGES.map(([m]) => m)]) for (const p of recipePieces(deriveVfx(s))) used.add(p.component);
     for (const s of TECHNIQUES) for (const p of recipePieces(deriveVfx(s, 'monster'))) used.add(p.component);
+    // The class mechanic feedback (docs/VFX.md §6.10) is the emblem's only user.
+    for (const fx of MECHANIC_FX) for (const p of mechanicPieces(fx, 'fire')) used.add(p.component);
     for (const c of used) expect(COMPONENT_IDS).toContain(c);
     expect([...used].sort()).toEqual([...COMPONENT_IDS].sort());
   });
@@ -139,7 +142,7 @@ describe('vfx recipes: coverage and validity', () => {
     const need: Record<Carrier['kind'], (r: VfxRecipe) => boolean> = {
       strike: (r) =>
         ofPhase(r, 'cast').some(
-          (p) => p.component === 'slash' || p.component === 'thrust' || (p.component === 'burst' && p.params.cls === 'ki') || (p.component === 'ring' && !!p.params.arc), // cone edge
+          (p) => p.component === 'slash' || p.component === 'thrust' || (p.component === 'burst' && (p.params.cls === 'ki' || FIST_CLASSES.includes(p.params.cls))) || (p.component === 'ring' && !!p.params.arc), // cone edge
         ),
       spin: (r) => rings(ofPhase(r, 'cast')).length >= 1 && ofPhase(r, 'area').length >= 1,
       projectile: (r) => comps(ofPhase(r, 'body')).has('orb') || comps(ofPhase(r, 'body')).has('missile'),
@@ -147,13 +150,29 @@ describe('vfx recipes: coverage and validity', () => {
       nova: (r) => ['nova', 'erupt', 'ring'].every((c) => comps(ofPhase(r, 'area')).has(c)),
       chain: (r) => comps(ofPhase(r, 'body')).has('bolt') || comps(ofPhase(r, 'body')).has('missile'),
       buff: (r) => ofPhase(r, 'aura').some((p) => p.component === 'aura' && p.params.phase === 'loop') && comps(ofPhase(r, 'cast')).has('aura'),
+      // v4 kinds (docs/VFX.md §6.9): a standing field with its exact rim and living units, both ends of a blink, the
+      // heal bloom, the shell with its absorb and break.
+      zone: (r) =>
+        comps(ofPhase(r, 'aura')).has('field') &&
+        ofPhase(r, 'aura').some((p) => p.layer === 'preview' && (p.component === 'ring' || p.component === 'tell')) &&
+        ofPhase(r, 'area').length >= 1 &&
+        (r.riders.zone?.tick.length ?? 0) >= 1 &&
+        (r.riders.zone?.end.length ?? 0) >= 1,
+      blink: (r) =>
+        ofPhase(r, 'cast').some((p) => p.component === 'warp' && p.params.phase === 'out') && ofPhase(r, 'area').some((p) => p.component === 'warp' && p.params.phase === 'in') && ofPhase(r, 'trail').length >= 1,
+      mend: (r) => ofPhase(r, 'cast').some((p) => p.component === 'mend' && p.params.phase === 'pulse' && p.ramp === 'heal'),
+      shield: (r) =>
+        ofPhase(r, 'cast').some((p) => p.component === 'shell' && p.params.phase === 'form') &&
+        ofPhase(r, 'aura').some((p) => p.component === 'shell' && p.params.phase === 'loop') &&
+        !!r.riders.shield?.absorb.some((p) => p.component === 'shell' && p.params.phase === 'absorb') &&
+        !!r.riders.shield?.break.some((p) => p.component === 'shell' && p.params.phase === 'break'),
     };
     for (const [s, owner] of [...ALL_PLAYER.map((x) => [x, 'player'] as const), ...TECHNIQUES.map((x) => [x, 'monster'] as const)]) {
       const r = deriveVfx(s, owner);
       expect(r.carrier.kind, r.key).toBe(s.shape.kind);
       expect(need[r.carrier.kind](r), `${r.key} carrier ${JSON.stringify(r.carrier)}`).toBe(true);
       expect(new Set(recipePieces(r).map((p) => p.component)).size, r.key).toBeGreaterThanOrEqual(3);
-      const canHit = s.shape.kind !== 'buff' && s.power > 0 && !(s.shape.kind === 'dash' && s.shape.width <= 0);
+      const canHit = s.shape.kind !== 'buff' && s.power > 0 && landsHits(s.shape) && !(s.shape.kind === 'dash' && s.shape.width <= 0);
       expect(ofPhase(r, 'impact').length > 0, r.key).toBe(canHit);
     }
   });
@@ -167,6 +186,10 @@ describe('vfx recipes: coverage and validity', () => {
       dash: ['cast', 'body', 'trail', 'area'],
       nova: ['telegraph', 'area'],
       buff: ['cast', 'aura'],
+      zone: ['area', 'aura'],
+      blink: ['cast', 'trail', 'area'],
+      mend: ['cast', 'aura', 'area'],
+      shield: ['cast', 'aura'],
     };
     const groups = new Map<string, string[]>();
     for (const s of PLAYER_SKILLS) {
@@ -432,7 +455,8 @@ describe('vfx recipes: variants', () => {
       if (mods.includes('reprise')) expect(b.riders.reprise, v.id).toBeTruthy();
       if (mods.includes('leech')) expect(b.riders.leech, v.id).toBeTruthy();
       if (mods.includes('pierce')) expect(b.riders.pierce, v.id).toBeTruthy();
-      if (mods.includes('arc') && v.shape.kind !== 'chain') expect(b.riders.arc, v.id).toBeTruthy();
+      // (compose's hit clamp may drop the arc rider of a many-hit skill: the recipe follows the composed skill.)
+      if (mods.includes('arc') && v.shape.kind !== 'chain' && v.riders?.arc) expect(b.riders.arc, v.id).toBeTruthy();
       // The heavy essence's knockback arrives as a status (statusApplied), drawn once by the status phase.
       if (mods.includes('heavy') && v.power > 0) {
         expect(['normal', 'heavy', 'ultimate'].includes(b.weight), v.id).toBe(true);
@@ -492,9 +516,9 @@ describe('vfx recipes: variants', () => {
 });
 
 describe('vfx recipes: signatures', () => {
-  it('has 40 signatures keyed by authored root ids, each applied to its root and inherited by variants', () => {
+  it('has 49 signatures keyed by authored root ids, each applied to its root and inherited by variants', () => {
     const ids = Object.keys(SIGNATURES);
-    expect(ids).toHaveLength(40);
+    expect(ids).toHaveLength(49);
     for (const id of ids) {
       expect(SIGNATURES[id].id).toBe(id);
       expect(reg.isAuthored(id), id).toBe(true);
@@ -510,21 +534,36 @@ describe('vfx recipes: signatures', () => {
 
   it('applies the bespoke shapes the doc lists', () => {
     const r = (id: string, owner: VfxOwner = 'player') => deriveVfx(reg.skill(id)!, owner);
-    expect(r('glacial_orb').carrier).toEqual({ kind: 'projectile', body: 'orb', matter: false });
-    expect(ofPhase(r('glacial_orb'), 'body')[0]).toMatchObject({ component: 'orb', params: { orbit: 'shards', cell: 48 } });
+    // v4 re-authored some signature skills as zones (same ids): their patch dresses the zone instead.
+    const zone = (id: string) => r(id).carrier.kind === 'zone';
+    const glacial = r('glacial_orb');
+    if (zone('glacial_orb')) expect(ofPhase(glacial, 'aura').find((p) => p.component === 'orb')).toMatchObject({ params: { orbit: 'shards', cell: 48 }, lifeMs: (reg.skill('glacial_orb')!.shape as { durationMs: number }).durationMs });
+    else {
+      expect(glacial.carrier).toEqual({ kind: 'projectile', body: 'orb', matter: false });
+      expect(ofPhase(glacial, 'body')[0]).toMatchObject({ component: 'orb', params: { orbit: 'shards', cell: 48 } });
+    }
     expect(r('aqua_lance').carrier).toMatchObject({ body: 'lance' });
     expect(r('featherstorm').carrier).toMatchObject({ body: 'feather', matter: true });
     expect(r('spirit_crescent').family).toBe('spirit');
     expect(r('spirit_crescent').carrier).toMatchObject({ body: 'wave' });
     expect(r('boulder_roll').carrier).toEqual({ kind: 'dash', mode: 'roll' });
-    expect(r('gloom_shroud').carrier).toMatchObject({ core: 'cloud', unit: 'smoke-sheet' });
+    if (zone('gloom_shroud')) expect(r('gloom_shroud').riders.zone!.tick.some((p) => p.component === 'erupt' && p.params.unit === 'smoke-sheet')).toBe(true);
+    else expect(r('gloom_shroud').carrier).toMatchObject({ core: 'cloud', unit: 'smoke-sheet' });
     expect(r('jelly_slam').family).toBe('water');
     expect(r('worldbreaker').juice.trauma).toBe(0.3);
     expect(r('tremor_stomp', 'monster').juice.trauma).toBe(0.5);
     expect(rings(ofPhase(r('tornado'), 'cast')).filter((p) => p.params.anim === 'sweep').map((p) => p.anchor.dy)).toEqual([0, -12, -24]);
-    const bolts = ofPhase(r('thunderstorm'), 'area').filter((p) => p.component === 'erupt');
-    expect(bolts.map((p) => p.delayMs)).toEqual([0, 117, 233]);
-    expect(bolts.filter((p) => (p.tags ?? []).includes('hero'))).toHaveLength(1);
+    if (zone('thunderstorm')) {
+      // One sky-bolt per tick; only the first tick's carries white (one flash transition).
+      const bolts = r('thunderstorm').riders.zone!.tick.filter((p) => p.component === 'erupt');
+      expect(bolts.map((p) => p.tags)).toEqual([['hero', 'firstHitOnly'], ['laterHits']]);
+      expect(bolts[1].lut).toBe('reduceFlash');
+      expect(ofPhase(r('thunderstorm'), 'aura').some((p) => p.component === 'puff' && p.params.kind === 'cloud')).toBe(true);
+    } else {
+      const bolts = ofPhase(r('thunderstorm'), 'area').filter((p) => p.component === 'erupt');
+      expect(bolts.map((p) => p.delayMs)).toEqual([0, 117, 233]);
+      expect(bolts.filter((p) => (p.tags ?? []).includes('hero'))).toHaveLength(1);
+    }
     expect(ofPhase(r('meteor'), 'telegraph').some((p) => p.component === 'missile' && p.move?.from.y === -160)).toBe(true);
   });
 });

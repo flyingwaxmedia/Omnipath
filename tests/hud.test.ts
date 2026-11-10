@@ -1,17 +1,24 @@
+// HUD v4 pure helpers (docs/SPEC-v4.md §11.7: HUD diet, one mechanic widget, the weapon lock line) — on top of the
 // HUD v3 pure helpers (HUD lane): layout maths and HTML builders (docs/CLIENT-v3.md §2, docs/UX-SIMPLE.md).
 import { describe, expect, it } from 'vitest';
-import type { BarSlotView, PursuitView, SlotPickerView, WornClassView, ZoneView } from '../src/ui/controller';
+import { becomeSwapLine, classRewards, kitRows, nextRewardLine, weaponLock } from '../src/ui/classinfo';
+import type { BarSlotView, PursuitView, SlotPickerView, ZoneView } from '../src/ui/controller';
+import { GAME_DATA, createRegistry } from '../src/data';
+import { LOG_QUIET_MS, TEXT_MIN_PX, textPixel } from '../src/ui/hud';
+// @ts-expect-error node's own types are not in this project's tsconfig (vitest runs in node: the stylesheet as text)
+import { readFileSync } from 'node:fs';
+import hudSource from '../src/ui/hud.ts?raw';
+import { asMechView, mechanicHint, mechanicHtml, mechanicLabel, type MechWidgetView } from '../src/ui/hud/mechanic';
 import {
   HUD_WORDS,
-  barTabsHtml,
   digits,
   pickerHtml,
   pursuitHtml,
+  pursuitLineHtml,
   slotChooserHtml,
   slotHtml,
-  statsHtml,
+  weaponGlyph,
   zonePlateHtml,
-  zoneStripHtml,
   type HudArt,
 } from '../src/ui/hud/html';
 import {
@@ -185,16 +192,30 @@ describe('skill bar slots', () => {
     expect(v).toContain('data-skill="x&quot;y"');
   });
 
-  it('names the two groups over the bar only when a class is worn and fills part of it', () => {
-    const worn: WornClassView = { id: 'pyroblade', name: 'Pyroblade', level: 3, maxLevel: 10, progress: 0.4, color: '#d8433f' };
-    expect(barTabsHtml(5, 8, worn, 'data:cls')).toContain('Pyroblade');
-    expect(barTabsHtml(5, 8, worn, '')).toContain('Yours');
-    expect(barTabsHtml(0, 8, worn, '')).toBe('');
-    expect(barTabsHtml(5, 8, null, '')).toBe('');
+  it('tints the icon ground by element and never names the groups over the bar (fewer floating labels)', () => {
+    const v = slotHtml(slot({ skillId: 'ember_dart', name: 'Ember Dart', rank: 1, maxRank: 10, element: 'fire' }), art, { auto: false, elementColor: '#e8604e' });
+    expect(v).toContain('--el:#e8604e');
+    expect(v).toContain(' tint');
+    expect(slotHtml(slot({}), art, { auto: false, elementColor: '#e8604e' })).not.toContain('--el'); // empty slots stay plain
+  });
+
+  it('a skill that needs another weapon: dimmed, wearing that weapon, "Needs a sword — Equip" as its name', () => {
+    const v = slotHtml(slot({ skillId: 'whirlwind', name: 'Whirlwind', rank: 3, maxRank: 10 }), art, { auto: false, lock: { need: 'sword', line: 'Needs a sword', owned: true } });
+    expect(v).toContain('wlocked');
+    expect(v).toContain('data-need="sword"');
+    expect(v).toContain('aria-label="Whirlwind: Needs a sword — Equip"');
+    expect(v).toContain('class="wlock can"');
+    expect(v).toContain('<svg class="wi ');
+    // Not owned: the line alone (no Equip to offer).
+    const no = slotHtml(slot({ skillId: 'knife_fan', name: 'Knife Fan' }), art, { auto: false, lock: { need: 'dagger', line: 'Needs a dagger', owned: false } });
+    expect(no).toContain('aria-label="Knife Fan: Needs a dagger"');
+    expect(no).toContain('class="wlock"');
+    for (const w of ['sword', 'dagger', 'staff', 'fists']) expect(weaponGlyph(w)).toContain('<path');
+    expect(weaponGlyph('spoon')).toBe('');
   });
 });
 
-describe('zone plate, stat strip, Pursuits', () => {
+describe('zone plate and the tracker (HUD diet)', () => {
   const zone: ZoneView = { name: 'Greenmeadow', tag: 'Hunting', band: 'Lv 1–3', explored: 42.4, sources: ['earth'], warden: 'alive' };
 
   it('builds the zone plate with the name in <b>, the safety pill and the level band', () => {
@@ -206,25 +227,26 @@ describe('zone plate, stat strip, Pursuits', () => {
     expect(zonePlateHtml({ name: 'Hearthvale', tag: 'Safe', band: '' })).not.toContain('zb');
   });
 
-  it('builds the strip: explored, sources, warden — in plain words', () => {
-    const html = zoneStripHtml(zone, (e) => `data:el/${e}`);
-    expect(html).toContain(`${HUD_WORDS.explored} <span class="num">42%</span>`);
-    expect(html).toContain('data:el/earth');
-    expect(html).toContain(HUD_WORDS.warden);
-    expect(zoneStripHtml({ ...zone, band: '', sources: [], warden: 'defeated' }, () => '')).toContain(HUD_WORDS.wardenDown);
+  it('draws the name in the display face on arrival (an image) and keeps the plain name for the small tag', () => {
+    const html = zonePlateHtml(zone, { url: 'data:title', w: 96, h: 21 });
+    expect(html).toContain('class="zn-d" src="data:title"');
+    expect(html).toContain('--w:96;--h:21');
+    expect(html).toMatch(/<b class="zn">Greenmeadow<\/b>/);
+    // The stat strip and the "Explored %" strip left the HUD (they live in the Class screen and the Map).
+    expect(html).not.toMatch(/Explored|ATK|MATK/);
+    expect(zonePlateHtml(zone, null)).not.toContain('zn-d');
   });
 
-  it('shows ATK · MATK · DEF and the worn class with its Class Level (never "CR")', () => {
-    const worn: WornClassView = { id: 'pyroblade', name: 'Pyroblade', level: 4, maxLevel: 10, progress: 0.5, color: '#d8433f' };
-    const html = statsHtml({ atk: 104.4, matk: 61, def: 48 }, worn, 'data:cls', true);
-    expect(html).toContain('ATK');
-    expect(html).toContain('>104<');
-    expect(html).toContain('Pyroblade');
-    expect(html).toContain('Class Level 4');
-    expect(html).toContain('width:50%');
-    expect(html).not.toMatch(/\bCR\b/);
-    expect(statsHtml({ atk: 1, matk: 1, def: 1 }, null, '', true)).toContain(HUD_WORDS.noClass);
-    expect(statsHtml({ atk: 1, matk: 1, def: 1 }, null, '', false)).not.toContain(HUD_WORDS.noClass);
+  it('collapses the tracker to ONE line: the first next step, its count, and "+N" for the rest', () => {
+    const a: PursuitView = { key: 'quest:jelly', kind: 'quest', title: 'Jelly Trouble', line: 'Defeat Jellops 3/8', open: { panel: 'codex' } };
+    const b: PursuitView = { key: 'goal:x', kind: 'goal', title: 'Pyroblade', line: 'Know Fire.', open: { panel: 'classes' } };
+    const one = pursuitLineHtml([a, b, b]);
+    expect(one).toContain('Defeat Jellops');
+    expect(one).toContain('<em class="num">3/8</em>');
+    expect(one).toContain('+2');
+    expect(one).not.toContain('Jelly Trouble'); // one line: the step, not a card
+    expect(pursuitLineHtml([a])).not.toContain('pz-rest');
+    expect(pursuitLineHtml([])).toBe('');
   });
 
   it('renders a tracked quest with its count right-aligned and a goal as one line', () => {
@@ -407,5 +429,148 @@ describe('HUD placement keeps the field clear', () => {
     expect(crossesMiddle({ pursuits: R(136, 198, 248, 102), zone: R(121, 104, 149, 44) }, 844)).toEqual([]);
     expect(crossesMiddle({ pursuits: R(136, 198, 248, 200), zone: R(88, 402, 213, 49) }, 844)).toEqual(['pursuits', 'zone']);
     expect(PURSUIT_ROWS).toBe(2);
+  });
+});
+
+describe('HUD diet defaults (docs/SPEC-v4.md §11.7)', () => {
+  const src: string = hudSource;
+  const css: string = readFileSync(new URL('../src/ui/styles/hud.css', import.meta.url), 'utf8');
+
+  it('no stat strip, no "Explored" strip, no tip banner and no group labels in the HUD markup', () => {
+    for (const gone of ['me-stats', 'zone-strip', 'class="grps"', 'tip-banner', 'Explored']) expect(src).not.toContain(gone);
+  });
+
+  it('exactly one mechanic widget dock, above the slots', () => {
+    expect(src.match(/class="mech-dock"/g)).toHaveLength(1);
+    expect(src.indexOf('class="mech-dock"')).toBeLessThan(src.indexOf('class="slots"'));
+  });
+
+  it('the tracker starts collapsed and the log fades 4 s after its last line', () => {
+    expect(LOG_QUIET_MS).toBe(4000);
+    expect(src).toMatch(/pursuitsOpen\(\): boolean \{[^}]*return false;/s);
+  });
+
+  it('one body face and three text sizes; frames in three weights', () => {
+    const hud = css.slice(0, css.indexOf('\n.sheet.hud-sheet'));
+    // Every HUD font-size is a token (--fs-s / --fs-m and their aliases), never a loose number.
+    const sizes = [...hud.matchAll(/font-size:\s*([^;]+);/g)].map((m) => m[1].trim()).filter((v) => !/^var\(--fs[\w-]*\)$/.test(v) && v !== 'inherit');
+    expect(sizes.filter((v) => !/var\(--glyph\)/.test(v))).toEqual([]);
+    expect([...hud.matchAll(/font-family:\s*([^;]+);/g)].map((m) => m[1].trim()).filter((v) => v !== 'var(--font-body)' && v !== 'inherit')).toEqual([]);
+    expect(hud).toContain('--ui-frame-light');
+    expect(hud).toContain('--ui-strip');
+    // Read-only plates wear no gold frame.
+    expect(hud).not.toMatch(/\.me-plate[^{]*\{[^}]*--ui-frame-plate/);
+  });
+
+  it('body text sits on whole device pixels and never under TEXT_MIN_PX CSS px per font pixel', () => {
+    expect(textPixel(2, 2)).toBe(2); // the HUD's own pixel where it reads well
+    expect(textPixel(1.5, 2)).toBe(2); // iPad at 3 device px per art px: 4 device px
+    expect(textPixel(1, 3)).toBeCloseTo(5 / 3); // phone: 5 device px
+    for (const [px, dpr] of [[1, 1], [1, 2], [1, 3], [1.5, 2], [2, 2], [3, 1], [2 / 3, 3]] as const) {
+      const t = textPixel(px, dpr);
+      expect(Math.abs(t * dpr - Math.round(t * dpr))).toBeLessThan(1e-9);
+      expect(t).toBeGreaterThanOrEqual(TEXT_MIN_PX - 1e-9);
+    }
+  });
+});
+
+describe('the class mechanic widget', () => {
+  const base: MechWidgetView = { kind: 'gauge', name: 'Heat', widget: 'bar', value: 3, max: 10, ready: false };
+
+  it('one look per kind, labelled only by the mechanic\'s own name', () => {
+    const gauge = mechanicHtml(base, '#d8433f');
+    expect(gauge).toContain('mech mech-gauge');
+    expect(gauge).toContain('width:30%');
+    expect(gauge).toContain('<b class="mech-n">Heat</b>');
+    expect(gauge).toContain('aria-label="Heat 3 of 10"');
+    const combo = mechanicHtml({ kind: 'combo', name: 'Flow', widget: 'pips', value: 2, max: 3, ready: true });
+    expect(combo).toContain('mech-combo ready');
+    expect(combo.match(/<i class="on">/g)).toHaveLength(2);
+    expect(combo.match(/<i class="/g)).toHaveLength(3);
+    const marks = mechanicHtml({ kind: 'marks', name: 'Pinned Shadow', widget: 'pips', value: 1, max: 5, ready: false });
+    expect(marks).toContain('mech-pips marks');
+    expect(marks).toContain('<em class="num">1</em>');
+    const zone = mechanicHtml({ kind: 'zone', name: 'Hearths', widget: 'count', value: 2, max: 3, ready: false });
+    expect(zone).toContain('mech-cells');
+    expect(zone.match(/<i class="on">/g)).toHaveLength(2);
+    const stance = mechanicHtml({ kind: 'stance', name: 'Ebb', widget: 'sides', value: 0, max: 1, ready: false, stance: 0, names: ['Ebb', 'Flow'], tap: true });
+    expect(stance.startsWith('<button class="mech mech-stance tap"')).toBe(true);
+    expect(stance).toContain('Flow'); // the side you would switch to
+    // No other label: no "gauge", "combo", "mechanic", "stacks".
+    for (const h of [gauge, combo, marks, zone, stance]) expect(h).not.toMatch(/gauge<|combo<|mechanic|stacks|meter</i);
+    // Every kind has its own shape.
+    expect(new Set([gauge, combo, marks, zone, stance].map((h) => /mech-(bar|pips marks|pips|cells|sides)/.exec(h)?.[1])).size).toBe(5);
+  });
+
+  it('an open-ended gauge shows its number; values are clamped; names are escaped', () => {
+    expect(mechanicHtml({ ...base, max: null, value: 14 })).toContain('<em class="num">14</em>');
+    expect(mechanicHtml({ ...base, value: 99 })).toContain('width:100%');
+    expect(mechanicHtml({ ...base, name: '<b>x' })).toContain('&lt;b&gt;x');
+    expect(mechanicLabel({ ...base, ready: true })).toBe('Heat 3 of 10, ready');
+  });
+
+  it('hides for anything that is not a mechanic view (older controllers, no class)', () => {
+    expect(asMechView(null)).toBeNull();
+    expect(asMechView({ kind: 'form', name: 'Dragon' })).toBeNull();
+    expect(asMechView({ kind: 'gauge' })).toBeNull();
+    expect(asMechView({ kind: 'gauge', name: 'Heat', widget: 'bar', value: 2, max: 10, ready: true })).toEqual({ ...base, value: 2, ready: true });
+    expect(asMechView({ kind: 'combo', name: 'Flow', value: 1, max: 2 })?.widget).toBe('pips');
+  });
+
+  it('has a one-line first-time hint for every kind', () => {
+    for (const kind of ['gauge', 'combo', 'marks', 'stance', 'zone'] as const) {
+      const hint = mechanicHint({ ...base, kind }).replace(/<[^>]+>/g, '');
+      expect(hint.length).toBeLessThanOrEqual(70);
+      expect(hint).toContain('Heat');
+    }
+    expect(mechanicHint({ ...base, hint: 'Hits build Heat.' })).toBe('Hits build Heat.');
+  });
+});
+
+describe('weapon lock and class rewards (docs/SPEC-v4.md §2.2, §3.4)', () => {
+  const reg = createRegistry();
+  const bound = GAME_DATA.skills.find((s) => s.weapons?.length === 1 && s.weapons[0] === 'sword' && s.tier > 0);
+
+  it('a weapon-bound skill shows "Needs a sword" with another weapon in hand, and nothing with the sword', () => {
+    expect(bound).toBeDefined();
+    const lock = weaponLock(reg, bound!.id, { weapon: 'staff', ownedWeapons: ['staff', 'sword'] });
+    expect(lock).toEqual({ need: 'sword', line: 'Needs a sword', owned: true });
+    expect(weaponLock(reg, bound!.id, { weapon: 'staff', ownedWeapons: ['staff'] })?.owned).toBe(false);
+    expect(weaponLock(reg, bound!.id, { weapon: 'sword', ownedWeapons: ['sword'] })).toBeNull();
+  });
+
+  it('a free skill is never locked; Bare Hands are always owned', () => {
+    const free = GAME_DATA.skills.find((s) => !s.weapons && s.tier > 0)!;
+    expect(weaponLock(reg, free.id, { weapon: 'fists', ownedWeapons: [] })).toBeNull();
+    const fist = GAME_DATA.skills.find((s) => s.weapons?.length === 1 && s.weapons[0] === 'fists');
+    if (fist) expect(weaponLock(reg, fist.id, { weapon: 'sword', ownedWeapons: ['sword'] })).toEqual({ need: 'fists', line: 'Needs bare hands', owned: true });
+  });
+
+  it('Become says in one short line when it also swaps the weapon', () => {
+    const me = { weapon: 'sword' as const, ownedWeapons: ['sword' as const, 'dagger' as const] };
+    expect(becomeSwapLine({ weapon: 'sword' }, me)).toBeNull();
+    expect(becomeSwapLine({ weapon: 'any' }, me)).toBeNull();
+    expect(becomeSwapLine({}, me)).toBeNull();
+    expect(becomeSwapLine({ weapon: 'dagger' }, me)).toEqual({ line: 'Also equips your Rogue Dagger.', missing: false });
+    expect(becomeSwapLine({ weapon: 'fists' }, me)).toEqual({ line: 'Also puts your weapon away.', missing: false });
+    expect(becomeSwapLine({ weapon: 'staff' }, me)?.missing).toBe(true);
+    expect(becomeSwapLine({ weapon: 'staff' }, me)?.line).not.toMatch(/staff/i); // a Rod, never a "staff"
+  });
+
+  it('Class Levels give fixed rewards: one "next" line, and the five class skills with their levels', () => {
+    for (const cls of reg.classes) {
+      const rewards = classRewards(reg, cls);
+      expect(rewards.at(-1)?.level).toBe(10);
+      for (const r of rewards) expect(r.text).not.toMatch(/perk|point|node|tree/i);
+      expect(nextRewardLine(reg, cls, 10)).toBeNull();
+      expect(nextRewardLine(reg, cls, 1)).toMatch(/^Class Level \d+ — /);
+      const kit = kitRows(reg, cls, 1);
+      if (cls.kit) {
+        expect(kit.map((k) => k.at)).toEqual([1, 1, 2, 4, 6]);
+        expect(kit.filter((k) => k.open)).toHaveLength(2);
+        expect(kitRows(reg, cls, 6).every((k) => k.open)).toBe(true);
+        expect(kit.every((k) => k.name)).toBe(true);
+      } else expect(kit).toEqual([]);
+    }
   });
 });

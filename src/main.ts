@@ -1,5 +1,6 @@
+import { CLASS, kitSkillsAt } from './core/classes';
 import { MASTERY } from './core/mastery';
-import type { ElementId } from './core/types';
+import type { ClassDef, ElementId, SkillDef, SkillShape, StatusKind, WeaponType } from './core/types';
 import { createRegistry } from './data';
 import { mapById } from './data/world';
 import { gameBus } from './game/events';
@@ -11,7 +12,8 @@ import { type QualityDebug, installQuality, persistStorageOnce } from './game/re
 import { BootScene } from './game/scenes/BootScene';
 import { MapScene } from './game/scenes/MapScene';
 import { wireQuestHooks } from './game/quests';
-import { Session } from './game/session';
+import { SAVE_KEY, SAVE_KEY_V1, SAVE_KEY_V2, Session } from './game/session';
+import { ownedWeapons } from './game/systems/weapons';
 import { showTitle } from './ui/title';
 import { UI } from './ui/ui';
 import './ui/styles/base.css';
@@ -181,8 +183,11 @@ game.events.once('omnipath:ready', async () => {
     // ---------------------------------------------------------------- v3 game lane: classes, bar, quests
     /** Becomes a class (null = "No class") through the real path; unlocks it first when `force` (QA only). */
     become: (classId: string | null, force = false) => {
-      if (classId && force && !session.book.state.classes[classId] && reg.classDef(classId)) {
+      const forced = classId ? reg.classDef(classId) : undefined;
+      if (classId && force && !session.book.state.classes[classId] && forced) {
         session.book.state.classes[classId] = { rank: 1, xp: 0 };
+        // A forced unlock skips the book's discovery: grant what discovery would (kit skills 1 and 2).
+        for (const id of kitSkillsAt(forced, 1)) if (reg.skill(id) && !session.book.has(id)) session.book.learn(id, `class:${classId}`);
       }
       const r = scene.becomeClass(classId);
       ui.refresh();
@@ -245,6 +250,117 @@ game.events.once('omnipath:ready', async () => {
     quality: (tier?: 'low' | 'medium' | 'high' | null) => (tier === undefined ? handle.quality?.state() : handle.quality?.set(tier)),
     /** The rest button (sit and recover until you move, cast or are hit). */
     rest: () => scene.useQuick('rest'),
+    // ---------------------------------------------------------------- v4 game lane: weapons, mechanic, new kinds
+    /** Holds a weapon through the real path ('fists' = Bare Hands); `force` owns it first and skips the cooldown. */
+    weapon: (w?: WeaponType, force = false) => {
+      const pl = session.player;
+      if (w) {
+        if (force) {
+          pl.ownedWeapons = ownedWeapons([...pl.ownedWeapons, w], pl.weapon);
+          session.weaponSwapAt = 0;
+        }
+        const r = scene.equipWeapon(w);
+        ui.refresh();
+        return { ...r, held: pl.weapon, owned: [...pl.ownedWeapons], swapIn: scene.weaponSwapIn() };
+      }
+      return { ok: true, held: pl.weapon, owned: [...pl.ownedWeapons], swapIn: scene.weaponSwapIn() };
+    },
+    /** Bare Hands (the real path; the swap cooldown applies unless `force`). */
+    equipFists: (force = false) => {
+      if (force) session.weaponSwapAt = 0;
+      const r = scene.unequipWeapon();
+      ui.refresh();
+      return { ...r, held: session.player.weapon };
+    },
+    /** Whether a skill can be cast now, and the weapon lock line if it cannot ("Needs a sword"). */
+    usable: (skillId: string) => ({ ...scene.usable(skillId), lock: scene.weaponLock(skillId) }),
+    /** The lock line's Equip action for a skill. */
+    equipFor: (skillId: string) => scene.equipFor(skillId),
+    /** Sets the Class Level of a class (default: the worn one) and learns the kit skills it unlocks (QA only). */
+    classLevel: (n: number, classId?: string) => {
+      const id = classId ?? session.book.state.worn;
+      const cls = id ? reg.classDef(id) : undefined;
+      if (!id || !cls) return null;
+      const level = Math.max(1, Math.min(CLASS.maxLevel, Math.floor(n)));
+      session.book.state.classes[id] = { rank: level, xp: 0 };
+      (session.book as unknown as { invalidate(): void }).invalidate();
+      for (const k of kitSkillsAt(cls, level)) if (reg.skill(k) && !session.book.has(k)) session.book.learn(k, `class:${id}`);
+      ui.refresh();
+      return { classId: id, level, kit: session.book.kitSkills(id), bar: [...session.player.hotbar] };
+    },
+    /** The mechanic widget, its raw state and the stats it gives right now. */
+    mech: () => ({ view: scene.mechanicView(), state: session.mechanic.state, stats: session.mechanic.stats(scene.combat.nearLevel()), near: scene.combat.nearLevel() }),
+    /** Fills the worn class's gauge (to `value`, default its max): the "meter full" moment fires when it gets there. */
+    fillGauge: (value?: number) => {
+      const rt = session.mechanic;
+      const m = rt.mech();
+      if (m?.kind !== 'gauge' || rt.state.kind !== 'gauge') return null;
+      const to = value ?? m.max ?? 10;
+      const was = rt.state.value;
+      rt.state = { ...rt.state, value: to, idleMs: 0 };
+      if (m.max !== null && was < m.max && to >= m.max) rt.onEffects([{ type: 'full', name: m.name }]);
+      return scene.mechanicView();
+    },
+    /** The stance button. */
+    stance: () => scene.mechanicTap(),
+    /** Casts a known skill by id, on the bar or not (through the real cast path; after-cast lock skipped). */
+    castSkill: (skillId: string) => {
+      scene.combat.lockUntil = 0;
+      return scene.combat.castSkill(skillId);
+    },
+    /**
+     * Places a test zone at the player (or `at`): a plain damaging disc (radius px, lasting ms, ticking every ms)
+     * cast as the held weapon's basic attack — no skill needed (QA for the shared world-object helper).
+     */
+    spawnZone: (radius = 60, durationMs = 4000, tickMs = 500, line = 0) => {
+      const base = reg.skill(session.player.hotbar.find((id) => !!id) ?? '') ?? session.book.known()[0];
+      if (!base) return null;
+      const shape: SkillShape = { kind: 'zone', radius, range: 0, durationMs, tickMs, ...(line > 0 ? { line: { length: line } } : {}) };
+      const skill: SkillDef = { ...base, shape, power: 0.4, riders: undefined };
+      const p = scene.player;
+      const cast = scene.skills.newCast(skill, 1, { x: p.x, y: p.y });
+      scene.skills.execute(cast, { x: p.x + Math.cos(p.aimAngle) * 80, y: p.y + Math.sin(p.aimAngle) * 80 }, null);
+      return scene.skills.objects.all().map((o) => ({ id: o.id, x: Math.round(o.x), y: Math.round(o.y), radius: o.radius, ticksLeft: o.ticksLeft, mech: o.mech ?? null }));
+    },
+    /** Everything the player's skills have placed on this map. */
+    objects: () => scene.skills.objects.all().map((o) => ({ id: o.id, skill: o.skill.id, x: Math.round(o.x), y: Math.round(o.y), radius: o.radius, level: o.level, ticks: o.ticks, ticksLeft: o.ticksLeft, mech: o.mech ?? null, forever: !Number.isFinite(o.until) })),
+    /** Puts a status on the nearest monster ('monster') or on the player ('player'). */
+    status: (kind: StatusKind, who: 'monster' | 'player' = 'monster') => {
+      const p = scene.player;
+      if (who === 'player') {
+        scene.combat.applyPlayerStatus(kind, 20, 'debug', { source: { x: p.x + 60, y: p.y }, rank: 'common' });
+        return Object.keys(p.marks);
+      }
+      const m = scene.combat.nearestMonster(4000);
+      if (!m) return null;
+      scene.combat.applyStatus(m, kind, 20, { x: p.x, y: p.y });
+      return { monster: m.def.id, statuses: m.statuses(scene.time.now) };
+    },
+    /** The shell a shield skill raised (null: none), and the player's statuses. */
+    shell: () => ({ shield: scene.combat.shieldLeft(), marks: Object.keys(scene.player.marks).filter((k) => (scene.player.marks[k as StatusKind] ?? 0) > scene.time.now) }),
+    /** Hurts the player as a monster blow would (shield / mechanic checks). */
+    hurt: (atk = 30) => scene.combat.hurtPlayer(atk, 'debug', { source: { x: scene.player.x + 40, y: scene.player.y } }),
+    /** Deed-style counters: flags starting with a prefix ('hits:', 'kills:'). */
+    flags: (prefix = '') => Object.fromEntries(Object.entries(session.book.state.flags).filter(([k]) => k.startsWith(prefix))),
+    /** Which save keys exist (v3 is written; v2 / v1 are only ever read). */
+    saveKeys: () => ({ v3: !!localStorage.getItem(SAVE_KEY), v2: !!localStorage.getItem(SAVE_KEY_V2), v1: !!localStorage.getItem(SAVE_KEY_V1) }),
+    /**
+     * QA only: adds temporary skills / classes to the running registry (content that has not landed yet), so the
+     * runtime can be driven end to end without touching src/data. Never used by the game itself.
+     */
+    define: (data: { skills?: SkillDef[]; classes?: ClassDef[] }) => {
+      const r = reg as unknown as { skills: Map<string, SkillDef>; classIndex: Map<string, ClassDef>; classes: ClassDef[] };
+      for (const sk of data.skills ?? []) {
+        const tags = [...new Set([...sk.tags, ...(sk.element ? [sk.element] : []), ...(sk.weapons ?? [])])];
+        r.skills.set(sk.id, { ...sk, tags });
+      }
+      for (const c of data.classes ?? []) {
+        if (!r.classIndex.has(c.id)) r.classes.push(c);
+        else r.classes.splice(r.classes.findIndex((x) => x.id === c.id), 1, c);
+        r.classIndex.set(c.id, c);
+      }
+      return { skills: (data.skills ?? []).map((x) => x.id), classes: (data.classes ?? []).map((x) => x.id) };
+    },
     /** Counts game-bus events by name until called again with false (sound / VFX / quest hook checks). */
     tapBus: (on = true) => {
       const w = window as unknown as { __busTap?: { counts: Record<string, number>; off: () => void } };
@@ -252,7 +368,7 @@ game.events.once('omnipath:ready', async () => {
       delete w.__busTap;
       if (!on) return null;
       const counts: Record<string, number> = {};
-      const names = ['hit', 'kill', 'castStart', 'castFire', 'projectileSpawn', 'projectileEnd', 'chainHop', 'novaTelegraph', 'novaBlast', 'dash', 'buffApplied', 'statusApplied', 'combo', 'heal', 'playerHurt', 'death', 'levelUp', 'gather', 'mapEnter', 'warp', 'talk', 'interact', 'questChanged', 'uiOpen', 'uiClose', 'discovery', 'classChanged', 'skillLearned', 'barChanged', 'spark', 'monsterTelegraph', 'dotTick', 'skillPulse', 'monsterTelegraphEnd', 'enrage'] as const;
+      const names = ['hit', 'kill', 'castStart', 'castFire', 'projectileSpawn', 'projectileEnd', 'chainHop', 'novaTelegraph', 'novaBlast', 'dash', 'buffApplied', 'statusApplied', 'combo', 'heal', 'playerHurt', 'death', 'levelUp', 'gather', 'mapEnter', 'warp', 'talk', 'interact', 'questChanged', 'uiOpen', 'uiClose', 'discovery', 'classChanged', 'skillLearned', 'barChanged', 'spark', 'monsterTelegraph', 'dotTick', 'skillPulse', 'monsterTelegraphEnd', 'enrage', 'objectSpawn', 'objectTick', 'objectEnd', 'blink', 'mend', 'shieldUp', 'shieldHit', 'shieldEnd', 'weaponChanged', 'mechanic'] as const;
       const offs = names.map((n) => gameBus.on(n, () => (counts[n] = (counts[n] ?? 0) + 1)));
       w.__busTap = { counts, off: () => offs.forEach((o) => o()) };
       return counts;

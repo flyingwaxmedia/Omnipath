@@ -6,7 +6,7 @@ import { starPts, type Painter } from '../painter';
 import { Strip, chip, elementGlyph, glint, headingOf, motifMark, mkKey, plus, seedOf, spark, type Rng, type TemplateOptions } from './kit';
 
 const CELL: Record<BurstParams['size'], number> = { s: 16, m: 24, l: 32 };
-const DIRECTIONAL: ReadonlySet<BurstClass> = new Set<BurstClass>(['slash', 'pierce']);
+const DIRECTIONAL: ReadonlySet<BurstClass> = new Set<BurstClass>(['slash', 'pierce', 'jab', 'hook', 'kick']);
 
 function cellOf(p: BurstParams): number {
   if (p.cls === 'star') return 64;
@@ -69,7 +69,7 @@ export const burst: Template<'burst'> = {
     const k = C / 24;
     const R = C / 2 - 1;
     const heading = DIRECTIONAL.has(prm.cls) ? headingOf(u, 8) : 0;
-    const S = new Strip(C, C, C / 2, C / 2, seedOf(key, u), opts, { orphans: true, glowFrom: 'hot', matter: prm.cls === 'blunt' || prm.cls === 'star' });
+    const S = new Strip(C, C, C / 2, C / 2, seedOf(key, u), opts, { orphans: true, glowFrom: 'hot', matter: prm.cls === 'blunt' || prm.cls === 'star' || prm.cls === 'slam' });
     const rot0 = S.rng() * Math.PI;
     const add = (ms: number, draw: (p: Painter, rnd: Rng) => void, kind: 'normal' | 'hero' | 'contrast' = 'normal') => S.add(ms, draw, kind, heading);
     const cool = (t: number) => (t < 0.3 ? IDX.WHITE : t < 0.65 ? IDX.R4 : IDX.R3);
@@ -280,6 +280,104 @@ export const burst: Template<'burst'> = {
         add(67, (p) => p.crescent(0, -1, Math.max(2.5, 4 * k), 1.5 * k, 1.5 * k, Math.max(2, 3.5 * k), IDX.R1));
         add(67, (p) => p.crescent(0, -2, Math.max(3, 4.5 * k), 1 * k, 1 * k, Math.max(3, 4.6 * k), IDX.R1));
         break;
+      // ---- the fist impact set (docs/VFX.md §6.9): local +x is the blow direction for jab / hook / kick.
+      case 'jab':
+        // A straight punch: three speed lines drive into a white knuckle point, a tight shock ring snaps out.
+        add(33, (p) => {
+          [-3, 0, 3].forEach((y, j) => p.line(-R, y * k, j === 1 ? -1 : -3 * k, y * k * 0.5, (t) => (t > 0.7 ? IDX.R5 : t > 0.3 ? IDX.R4 : IDX.R3)));
+          p.stamp(0, 0, Math.max(1, 1.4 * k), IDX.WHITE);
+          p.line(1, 0, Math.min(R, 5 * k), 0, IDX.WHITE);
+        }, 'hero');
+        add(33, (p) => {
+          [-3, 3].forEach((y) => p.line(-R * 0.6, y * k, -4 * k, y * k * 0.7, IDX.R3));
+          p.band(0, 0, Math.max(2, 4 * k), Math.max(2, 4 * k), 1, IDX.R5, 1, [-70, 70]);
+          for (const a of [-0.5, 0.5]) p.line(Math.cos(a) * 3 * k, Math.sin(a) * 3 * k, Math.cos(a) * Math.min(R, 8 * k), Math.sin(a) * Math.min(R, 8 * k), IDX.R4);
+          p.dot(0, 0, IDX.R5);
+        });
+        add(50, (p) => {
+          p.band(0, 0, Math.min(R, 7 * k), Math.min(R, 7 * k), 1, IDX.R3, 1, [-60, 60]);
+          for (const a of [-0.5, 0.5]) p.dot(Math.cos(a) * Math.min(R, 9 * k), Math.sin(a) * Math.min(R, 9 * k), IDX.R3);
+        });
+        add(50, (p, rnd) => dots(p, 3, R * 0.6, R, IDX.R2, rnd));
+        break;
+      case 'hook':
+        // A hooked swing: a short thick arc whips in from the side and lands on a four-ray star.
+        add(33, (p) => {
+          p.arcBand(-2 * k, 3 * k, Math.min(R, 9 * k), -2.3, -0.2, (t) => Math.max(1, 4 * k * Math.sin(Math.PI * t ** 1.6)), (t, d) => (d < 1.2 ? IDX.WHITE : t > 0.6 ? IDX.R5 : IDX.R4));
+        }, 'hero');
+        add(50, (p) => {
+          p.arcBand(-2 * k, 3 * k, Math.min(R, 9 * k), -1.7, -0.1, (t) => Math.max(1, 3 * k * Math.sin(Math.PI * t ** 1.6)), (t) => (t > 0.6 ? IDX.R4 : IDX.R3));
+          rays(p, 4, 1, Math.min(R, 6 * k), rot0, cool);
+          p.stamp(Math.min(R - 2, 6 * k), 2 * k, Math.max(1, 1.5 * k), IDX.WHITE);
+        }, 'hero');
+        add(67, (p, rnd) => {
+          p.arcBand(-2 * k, 3 * k, Math.min(R, 9 * k), -1.2, -0.1, () => 1, () => IDX.R2);
+          brokenRing(p, Math.min(R, 6 * k), IDX.R3, 0.3, rnd);
+        });
+        add(67, (p, rnd) => dots(p, 4, R * 0.5, R, IDX.R2, rnd));
+        break;
+      case 'palm':
+        // An open palm: a flat white disc, then double rings 3 px apart pushing out with five finger rays.
+        add(50, (p) => {
+          p.disc(0, 0, Math.max(2, 3 * k), IDX.WHITE);
+          p.ring(0, 0, Math.max(3, 5 * k), 1, IDX.R5);
+        }, 'hero');
+        add(50, (p) => {
+          p.ring(0, 0, Math.min(R, 7 * k), 1, IDX.R4);
+          p.ring(0, 0, Math.min(R, 7 * k) - 3, 1, IDX.R5);
+          rays(p, 5, 1, Math.max(2, 3 * k), -Math.PI / 2, () => IDX.R5);
+        });
+        add(67, (p) => {
+          p.ring(0, 0, Math.min(R, 9.5 * k), 1, IDX.R3);
+          p.ring(0, 0, Math.min(R, 9.5 * k) - 3, 1, IDX.R4);
+          rays(p, 5, Math.min(R - 2, 10 * k), R, -Math.PI / 2, () => IDX.R3);
+        });
+        add(67, (p) => arcs(p, R, 5, IDX.R2, -90));
+        add(67, (p, rnd) => dots(p, 5, R * 0.8, R, IDX.R1, rnd));
+        break;
+      case 'kick':
+        // A kick: a wide flat crescent (the foot's sweep), thick at the heel, kicking up dust behind it.
+        add(33, (p) => {
+          p.arcBand(-R * 0.55, 0, R * 1.4, -0.8, 0.8, (t) => Math.max(1, 5 * k * Math.sin(Math.PI * t) ** 0.7), (_t, d, w) => (d < 1.2 ? IDX.WHITE : d < w * 0.5 ? IDX.R5 : IDX.R4));
+        }, 'hero');
+        add(50, (p) => {
+          p.arcBand(-R * 0.55, 0, R * 1.48, -0.7, 0.7, (t) => Math.max(1, 3.5 * k * Math.sin(Math.PI * t) ** 0.7), (_t, d) => (d < 1.2 ? IDX.R5 : IDX.R3));
+          p.disc(-4 * k, 4 * k, 2 * k, IDX.S2, 0.5);
+          p.disc(-6 * k, -3 * k, 1.6 * k, IDX.S1, 0.5);
+        });
+        add(67, (p) => {
+          p.arcBand(-R * 0.55, 0, R * 1.52, -0.55, 0.55, () => 1, (t) => (Math.abs(t - 0.5) < 0.2 ? IDX.R3 : IDX.R2));
+          p.disc(-5 * k, 4 * k, 2.4 * k, IDX.S1, 0.5);
+        });
+        add(67, (p, rnd) => dots(p, 4, R * 0.7, R, IDX.R2, rnd));
+        break;
+      case 'slam': {
+        // A downward blow: a white streak drops onto the spot, the ground rings and rock chips jump.
+        const cx = [-0.8, -0.3, 0.35, 0.85];
+        add(33, (p) => {
+          p.stroke(0, -R, 0, 0, (t) => Math.max(1, 3 * k * t), (t) => (t > 0.6 ? IDX.WHITE : IDX.R5));
+          p.ellipse(0, 1, Math.max(3, 5 * k), Math.max(1, 2 * k), IDX.WHITE);
+        }, 'hero');
+        add(50, (p) => {
+          p.band(0, 2, Math.min(R, 8 * k), Math.max(2, 3 * k), 2, (q) => (q === 0 ? IDX.R5 : IDX.R4));
+          p.stroke(0, -R * 0.5, 0, 0, () => 1, IDX.R4);
+          for (const x of cx) chip(p, x * 6 * k, -3 * k - Math.abs(x) * 2, IDX.R2);
+        });
+        add(67, (p) => {
+          p.band(0, 2, Math.min(R, 11 * k), Math.max(2, 4 * k), 1, IDX.R3);
+          for (const x of cx) chip(p, x * 9 * k, -6 * k + Math.abs(x) * 3 * k, IDX.R2);
+          p.disc(-4 * k, 1, 2.2 * k, IDX.S2, 0.5);
+          p.disc(5 * k, 2, 2 * k, IDX.S1, 0.5);
+        });
+        add(67, (p) => {
+          for (const x of cx) chip(p, x * 10.5 * k, -3 * k + Math.abs(x) * 4 * k, IDX.R1);
+          p.band(0, 2, R, Math.max(2, 4.5 * k), 1, IDX.R2, 0.5);
+        });
+        add(67, (p) => {
+          for (const x of cx) p.dot(x * 11 * k, 2 + Math.abs(x) * 2, IDX.R1);
+        });
+        break;
+      }
       case 'star': {
         const r1 = 28,
           r0 = 12;

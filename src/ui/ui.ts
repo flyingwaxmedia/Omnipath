@@ -196,10 +196,7 @@ export class UI implements PanelHost {
       this.changes.clear();
       if (k.has('bar') || k.has('class') || k.has('skills')) this.hud.renderHotbar();
       if (k.has('quests') || k.has('skills') || k.has('class')) this.hud.renderPursuits();
-      if (k.has('class')) {
-        this.hud.updatePortrait(true);
-        this.hud.updateStats();
-      }
+      if (k.has('class')) this.hud.updatePortrait(true);
       if (this.panel && PANELS[this.panel] && !this.showingDiscovery) this.render();
     });
   }
@@ -236,7 +233,6 @@ export class UI implements PanelHost {
     this.minimap.setMap();
     this.hud.renderZone();
     this.hud.renderPursuits();
-    this.hud.updateStats();
     this.hud.updatePortrait();
     this.hud.updateQuick();
     this.hud.updateBadges();

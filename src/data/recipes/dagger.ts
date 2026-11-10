@@ -26,6 +26,21 @@ export const DAGGER_RECIPES: FusionRecipe[] = [
     hint: 'Smoke is only a poor cousin of true shadow.',
   },
 
+  // ---------------------------------------------------------------- v4: the two old class signatures that stay
+  // ordinary dagger skills once their classes merge (SPEC-v4 §3.7)
+  {
+    a: 'el:shadow',
+    b: 'skill:phantom_rush',
+    result: 'skill:phantom_sig',
+    hint: 'A rush that leaves an afterimage could become one, with enough shadow.',
+  },
+  {
+    a: 'el:wind',
+    b: 'skill:blade_storm',
+    result: 'skill:vortex_dancer_sig',
+    hint: 'A bloom of knives, caught by the wind and wound into a coil.',
+  },
+
   // ---------------------------------------------------------------- v2: skill + echo
   {
     a: 'skill:venom_edge',

@@ -4039,128 +4039,6 @@ img.px {
   color: var(--p-mute);
 }
 
-/* perks (class tree) */
-
-.perks-top {
-  margin: 8px 0;
-  font-size: 15px;
-}
-
-.perks-top .pts {
-  font-size: 22px;
-  color: var(--p-gold);
-}
-
-.perks-top small {
-  color: var(--p-mute);
-}
-
-.perks-split {
-  display: grid;
-  gap: 12px;
-}
-
-.perks {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.pgate {
-  text-align: center;
-  font-size: 12px;
-  font-weight: 700;
-  color: var(--p-mute);
-  padding: 4px;
-  border-top: 1px dashed rgba(242, 230, 201, 0.2);
-}
-
-.pgate.open {
-  color: var(--p-gold);
-}
-
-.prow {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(86px, 1fr));
-  gap: 6px;
-}
-
-.perk {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 3px;
-  padding: 8px 4px;
-  min-height: 88px;
-  border-radius: 12px;
-  background: rgba(0, 0, 0, 0.22);
-  border: 1px solid rgba(242, 230, 201, 0.12);
-}
-
-.perk small {
-  font-size: 11px;
-  line-height: 1.2;
-}
-
-.perk .pst {
-  font-size: 10px;
-  color: var(--p-gold);
-  letter-spacing: -1px;
-}
-
-.perk.off {
-  opacity: 0.5;
-}
-
-.perk.can {
-  border-color: rgba(233, 196, 106, 0.7);
-}
-
-.perk.max {
-  background: rgba(233, 196, 106, 0.14);
-}
-
-.perk.sel {
-  box-shadow: 0 0 0 2px var(--p-gold);
-}
-
-.perk-card {
-  padding: 12px;
-  border-radius: 14px;
-  background: var(--p-card);
-  border: 1px solid var(--p-card-edge);
-}
-
-.perk-card .pc-head {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.perk-card .pc-head b {
-  display: block;
-  font-size: 17px;
-}
-
-.perk-card .pst {
-  color: var(--p-gold);
-}
-
-.perk-card p {
-  margin: 8px 0;
-  font-size: 14px;
-}
-
-.perk-card .step {
-  color: var(--p-gold);
-  font-weight: 700;
-}
-
-.respec {
-  display: block;
-  margin: 14px auto 0;
-}
-
 @media (min-width: 700px) {
   .ccards3 {
     grid-template-columns: 1fr 1fr;
@@ -4171,19 +4049,8 @@ img.px {
     grid-template-rows: auto auto;
   }
 
-  .ccard3 .become {
+  .ccard3 .cc-act {
     grid-column: 1 / -1;
-    width: 100%;
-  }
-
-  .perks-split {
-    grid-template-columns: 1.3fr 1fr;
-    align-items: start;
-  }
-
-  .perk-card {
-    position: sticky;
-    top: 0;
   }
 }
 
@@ -4211,7 +4078,7 @@ img.px {
     grid-template-columns: auto 1fr;
   }
 
-  .ccard3 .become {
+  .ccard3 .cc-act {
     grid-column: 1 / -1;
     width: 100%;
   }
@@ -4379,4 +4246,267 @@ img.px {
 
 .bag3 .echip img.px {
   vertical-align: middle;
+}
+
+/* ------------------------------------------------------------------ v4 classes (docs/SPEC-v4.md §3.2, §3.4, §12)
+   Rarity is one tag everywhere a class appears: its colour, its word and 1 – 6 pips (colour is never the only sign).
+   Common grey · Uncommon green · Rare blue · Epic violet · Legendary gold · Mythic rose. */
+
+.rar {
+  --rc: #a9a9a2;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 1px 7px 1px 5px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 18px;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  color: var(--rc);
+  background: color-mix(in srgb, var(--rc) 16%, rgba(0, 0, 0, 0.35));
+  border: 1px solid color-mix(in srgb, var(--rc) 60%, transparent);
+}
+
+.rar .rar-p {
+  display: inline-flex;
+  gap: 2px;
+}
+
+.rar .rar-p u {
+  width: 4px;
+  height: 4px;
+  background: var(--rc);
+  transform: rotate(45deg);
+}
+
+.rar-common { --rc: #b4b4ac; }
+.rar-uncommon { --rc: #6cc46a; }
+.rar-rare { --rc: #5aa0f0; }
+.rar-epic { --rc: #b07af0; }
+.rar-legendary { --rc: #e9c46a; }
+.rar-mythic { --rc: #f07a9c; }
+
+.ctags {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 4px 0;
+}
+
+.ctags .ckind {
+  font-size: 13px;
+  color: var(--p-mute);
+}
+
+.cnew-tags {
+  display: flex;
+  justify-content: center;
+  margin: 2px 0 6px;
+}
+
+/* the next reward of the Class Level, and the class Gift: one line each */
+.cnext,
+.cgift {
+  margin: 6px 0 0;
+  font-size: 13px;
+  line-height: 1.35;
+  color: var(--p-text);
+}
+
+.cnext b,
+.cgift b {
+  margin-right: 4px;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--p-gold);
+}
+
+.cnext.done {
+  color: var(--p-gold);
+  font-weight: 700;
+}
+
+.cstats {
+  color: var(--p-mute);
+}
+
+/* the five class skills, each with the Class Level that opens it */
+.ckit {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.ckit-s {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 4px;
+  border-radius: 8px;
+  color: inherit;
+  font: inherit;
+  background: rgba(0, 0, 0, 0.28);
+  border: 1px solid color-mix(in srgb, var(--cc, #b0803a) 45%, transparent);
+}
+
+.ckit.named .ckit-s {
+  width: 76px;
+}
+
+.ckit-s .ck-i {
+  display: grid;
+  place-items: center;
+}
+
+.ckit-s .ck-n {
+  font-size: 11px;
+  line-height: 1.15;
+  text-align: center;
+  color: var(--p-text);
+}
+
+.ckit-s.later .ck-i {
+  filter: grayscale(1) brightness(0.55);
+}
+
+.ckit-s.later .ck-n {
+  color: var(--p-mute);
+}
+
+.ckit-s .ck-lv {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  padding: 0 4px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 700;
+  line-height: 15px;
+  color: #1c140e;
+  background: var(--p-gold);
+}
+
+/* Become + the one line about the weapon it also equips */
+.cc-act {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+  min-width: 104px;
+}
+
+.cc-act .cswap {
+  max-width: 220px;
+  font-size: 12px;
+  line-height: 1.3;
+  text-align: center;
+  color: var(--p-mute);
+}
+
+.cc-act .cswap.missing {
+  color: #ffb0a0;
+}
+
+/* Mastered (Class Level 10): a gold border on the class card */
+.ccard3.mastered,
+.ccur.mastered {
+  border-color: var(--p-gold);
+  box-shadow:
+    0 0 0 1px #1c140e,
+    0 0 0 3px var(--p-gold);
+}
+
+/* locked classes: a silhouette in its rarity colour, the rarity tag and ONE hint line */
+.lcard[class*='rar-'] {
+  border-color: color-mix(in srgb, var(--rc) 45%, transparent);
+}
+
+.lcard.rar-common { --rc: #b4b4ac; }
+.lcard.rar-uncommon { --rc: #6cc46a; }
+.lcard.rar-rare { --rc: #5aa0f0; }
+.lcard.rar-epic { --rc: #b07af0; }
+.lcard.rar-legendary { --rc: #e9c46a; }
+.lcard.rar-mythic { --rc: #f07a9c; }
+
+.lcard[class*='rar-'] .outfit.sil {
+  filter: brightness(0) drop-shadow(0 0 2px var(--rc)) drop-shadow(0 0 1px var(--rc));
+  opacity: 1;
+}
+
+.lcard .lc-art .q {
+  color: var(--rc, rgba(242, 230, 201, 0.75));
+}
+
+.lcard .lc-info .rar {
+  margin: 3px 0;
+}
+
+/* ------------------------------------------------------------------ v4 weapon lock ("Needs a sword — Equip") */
+
+.wi {
+  display: inline-block;
+  width: 18px;
+  height: 18px;
+  flex: none;
+  vertical-align: middle;
+}
+
+.wpn .ico .wi {
+  width: 36px;
+  height: 36px;
+  color: #f2e6c9;
+}
+
+.wpn.locked .ico .wi {
+  color: var(--p-mute);
+}
+
+.sc-card .sc-act .sc-lock {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+}
+
+.sc-card .sc-lock .wi {
+  width: 27px;
+  height: 27px;
+}
+
+.skill-card.sc-tile.wlocked .sc-tico img {
+  filter: grayscale(1) brightness(0.5);
+}
+
+.sc-tile .sc-wl {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  display: grid;
+  place-items: center;
+  transform: translate(-50%, -50%);
+  color: var(--p-gold);
+  filter: drop-shadow(0 0 2px #000) drop-shadow(0 0 1px #000);
+}
+
+.sc-tile .sc-wl .wi {
+  width: 27px;
+  height: 27px;
+}
+
+.sc-card .sc-locknote {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
 }

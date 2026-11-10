@@ -4,7 +4,7 @@ import { SkillBook } from '../src/core/skillbook';
 import { createRegistry } from '../src/data';
 import type { GameController, SkillCardView } from '../src/ui/controller';
 import { type CardModel, cardHtml, cardModel } from '../src/ui/starchart/card';
-import { buildStarChartData } from '../src/ui/starchart/data';
+import { buildStarChartData, classOwnSkills } from '../src/ui/starchart/data';
 import { layoutStarChart } from '../src/ui/starchart/layout';
 
 const reg = createRegistry();
@@ -21,7 +21,9 @@ describe('chart data', () => {
     for (const e of els) expect([e.state, e.name]).toEqual(['fog', '?']);
     const skills = d.stars.filter((s) => s.kind === 'skill');
     expect(skills.every((s) => s.state === 'revealed')).toBe(true);
-    for (const id of ['bolt', 'slash', 'stab']) expect(skills.map((s) => s.id)).toContain(id);
+    // Every weapon's first move is on the chart from the start (Bare Hands included once its tree is in the data).
+    const roots = ['bolt', 'slash', 'stab', ...(reg.skill('jab') ? ['jab'] : [])];
+    for (const id of roots) expect(skills.map((s) => s.id)).toContain(id);
     // Anything else already in the sky is taught by a quest the player can take right now.
     const b = new SkillBook(reg);
     const taught = new Set(
@@ -32,7 +34,7 @@ describe('chart data', () => {
           return [q.rewards.skill, g && 'skill' in g ? g.skill : undefined].filter(Boolean) as string[];
         }),
     );
-    for (const s of skills) if (!['bolt', 'slash', 'stab'].includes(s.id)) expect(taught.has(s.id), s.id).toBe(true);
+    for (const s of skills) if (!roots.includes(s.id)) expect(taught.has(s.id), s.id).toBe(true);
     expect(d.links).toEqual([]);
   });
 
@@ -93,9 +95,10 @@ describe('chart data', () => {
     const b = new SkillBook(reg);
     b.state.witness.boulder_roll = 1;
     expect(star(b, 'boulder_roll')?.state).toBe('revealed');
-    const cls = reg.classes.find((c) => (c.grants ?? []).length && !c.hidden)!;
+    // A whispered class shows its own skills (v4: its five class skills) as stars to find.
+    const cls = reg.classes.find((c) => classOwnSkills(reg, c).length && !c.hidden)!;
     b.state.whispered.push(cls.id);
-    expect(star(b, cls.grants![0])?.state).toBe('revealed');
+    expect(star(b, classOwnSkills(reg, cls)[0])?.state).toBe('revealed');
   });
 
   it('orbits a known variant around its base', () => {

@@ -13,6 +13,10 @@
 // arrivals and return portals (~25 min); --only-portals skips the main run; --maps limits the portal walk.
 //
 // Starts a new game, checks the HUD's pixel size (HUD art px = the world's), opens every panel (and tab), then the v3
+// v4 flows (docs/SPEC-v4.md §15.2 lane D): the Class screen shows rarity, the five class skills with their levels and
+// the next reward (no Perks); a skill that needs another weapon reads "Needs a sword — Equip" on its slot and card and
+// one tap swaps back; Bare Hands is a weapon in the Bag; one mechanic widget above the bar; the HUD diet (no stat strip,
+// no explored strip, a one-line tracker); then the v3
 // flows: the loop sleeps under the Star Chart (and again after a card over it), a star card shows ONE action, Become a
 // class fills the class slots, an empty own slot opens the picker and equips, Equip on a star card with every slot full
 // picks a slot and comes back to that card, AUTO on / off, the ☰ menu's Sound and "Reduce shake & flashes" switches;
@@ -240,6 +244,102 @@ try {
       ok(`Become Blademaster: ${filled.length} class slot(s) filled (${filled.map((v) => v.skillId).join(', ')})`);
     else fail(`Become: worn ${worn}, class slots ${JSON.stringify(bar.map((v) => `${v.kind}:${v.skillId ?? '-'}`))}`);
   }
+  // 3b) v4 Class screen: rarity (colour + word + pips) on every class, the five class skills with their levels, the
+  // next reward as one line, and no Perks anywhere.
+  await page.evaluate(() => window.omnipath.ui.open('classes'));
+  await page.waitForTimeout(250);
+  const cls4 = await page.evaluate(() => {
+    const sheet = document.querySelector('.sheet.classes3');
+    const cur = sheet?.querySelector('.ccur');
+    const cards = [...(sheet?.querySelectorAll('.ccur:not(.none), .ccard3, .lcard') ?? [])];
+    return {
+      rarity: cur?.querySelector('.rar')?.textContent?.trim() ?? null,
+      pips: cur?.querySelectorAll('.rar .rar-p u').length ?? 0,
+      allTagged: cards.length > 0 && cards.every((c) => c.querySelector('.rar')),
+      kit: cur?.querySelectorAll('.ckit .ckit-s').length ?? 0,
+      later: [...(cur?.querySelectorAll('.ckit .ckit-s.later .ck-lv') ?? [])].map((e) => e.textContent.trim()),
+      next: cur?.querySelector('.cnext')?.textContent?.trim() ?? null,
+      perks: /perk/i.test(sheet?.textContent ?? ''),
+      hints: [...(sheet?.querySelectorAll('.lcard .lc-info') ?? [])].filter((e) => e.querySelectorAll('small').length !== 1).length,
+    };
+  });
+  if (!cls4.rarity || cls4.pips < 1 || !cls4.allTagged) fail(`Class screen: rarity missing (${JSON.stringify(cls4)})`);
+  else if (cls4.perks) fail('Class screen still mentions perks');
+  else if (cls4.kit !== 0 && cls4.kit !== 5) fail(`Class screen: ${cls4.kit} class skills shown (wanted 5)`);
+  else if (!cls4.next) fail('Class screen: no next-reward line');
+  else if (cls4.hints) fail(`Class screen: ${cls4.hints} locked class(es) without exactly ONE hint line`);
+  else ok(`Class screen: ${cls4.rarity} (${cls4.pips} pip${cls4.pips === 1 ? '' : 's'}), ${cls4.kit} class skills (later: ${cls4.later.join(' ') || 'none'}), "${cls4.next}"`);
+  await shot('03d-class-v4');
+  await closeModal();
+  // 3c) v4 weapon lock: with a Rod in hand a sword skill stays on the bar, dimmed, "Needs a sword — Equip"; its card
+  // says the same; one tap on the slot swaps back (after the swap cooldown).
+  const lockNow = () =>
+    page.evaluate(() =>
+      [...document.querySelectorAll('.hotbar .slot.wlocked')].map((b) => ({ skill: b.dataset.skill, need: b.dataset.need, label: b.getAttribute('aria-label'), slot: b.dataset.slot })),
+    );
+  await page.evaluate(() => {
+    const o = window.omnipath;
+    const pl = o.session.player;
+    if (!pl.ownedWeapons.includes('staff')) pl.ownedWeapons.push('staff');
+    o.scene.equipWeapon('staff');
+  });
+  await page.waitForTimeout(500);
+  await closeModal();
+  const locked = await lockNow();
+  const swordLock = locked.find((l) => l.need === 'sword');
+  if (!swordLock) fail(`holding a Rod: no bar slot shows "Needs a sword" (${JSON.stringify(locked)})`);
+  else if (!/Needs a sword — Equip$/.test(swordLock.label ?? '')) fail(`lock label reads "${swordLock.label}"`);
+  else {
+    await page.evaluate((id) => window.omnipath.ui.open('skill', id), swordLock.skill);
+    await page.waitForTimeout(250);
+    const cardLine = await page.evaluate(() => document.querySelector('.sc-card .sc-act .sc-lock')?.textContent?.trim() ?? null);
+    await shot('03e-weapon-lock');
+    await closeModal();
+    await page.waitForTimeout(3200); // the swap cooldown
+    await page.click(`.hotbar .slot[data-slot="${swordLock.slot}"]`);
+    await page.waitForTimeout(500);
+    const after = { weapon: await page.evaluate(() => window.omnipath.session.player.weapon), locked: (await lockNow()).filter((l) => l.need === 'sword').length };
+    if (cardLine !== 'Needs a sword — Equip') fail(`the locked skill's card reads "${cardLine}"`);
+    else if (after.weapon !== 'sword' || after.locked) fail(`tapping the locked slot: weapon ${after.weapon}, ${after.locked} sword lock(s) left`);
+    else ok(`weapon lock: ${swordLock.skill} read "Needs a sword — Equip" on its slot and card; one tap equipped the sword`);
+  }
+  await closeModal();
+  // 3d) Bare Hands is a weapon in the Bag.
+  await page.evaluate(() => window.omnipath.ui.open('bag'));
+  await page.waitForTimeout(200);
+  const bare = await page.evaluate(() => {
+    const w = document.querySelector('.wpn.bare');
+    return w ? { name: w.querySelector('b')?.textContent, line: w.querySelector('small')?.textContent, btn: !!w.querySelector('[data-equip="fists"]') } : null;
+  });
+  if (bare?.name === 'Bare Hands' && /weapon/i.test(bare.line ?? '') && bare.btn) ok(`Bag: "${bare.name} — ${bare.line}"`);
+  else fail(`Bag: no Bare Hands weapon row (${JSON.stringify(bare)})`);
+  if (await page.evaluate(() => /\bstaff\b/i.test(document.querySelector('.sheet .weapons')?.textContent ?? ''))) fail('Bag: a weapon still reads "Staff" (say Rod)');
+  await closeModal();
+  // 3e) HUD diet + the one mechanic widget.
+  const diet = await page.evaluate(() => {
+    const view = window.omnipath.scene.mechanicView?.() ?? null;
+    const mechs = [...document.querySelectorAll('.hud-layer .mech')];
+    return {
+      gone: ['.me-stats', '.zone-strip', '.hotbar .grps', '.tip-banner'].filter((s) => document.querySelector(s)),
+      view: view ? `${view.kind}:${view.name}` : null,
+      mechs: mechs.length,
+      label: mechs[0]?.querySelector('.mech-n')?.textContent ?? null,
+      inDock: mechs.every((m) => m.closest('.hotbar .mech-dock')),
+      listOpen: !!document.querySelector('.pursuits.open'),
+      plateFramed: getComputedStyle(document.querySelector('.hud-me .me-plate')).borderImageSource.includes('frame'),
+      fonts: [...new Set([...document.querySelectorAll('.hud-layer *')].filter((e) => e.offsetParent !== null && e.childNodes.length && [...e.childNodes].some((n) => n.nodeType === 3 && n.nodeValue.trim())).map((e) => getComputedStyle(e).fontFamily.split(',')[0].replace(/["']/g, '').trim()))],
+      sizes: [...new Set([...document.querySelectorAll('.hud-layer *')].filter((e) => e.offsetParent !== null && [...e.childNodes].some((n) => n.nodeType === 3 && n.nodeValue.trim())).map((e) => parseFloat(getComputedStyle(e).fontSize) * devicePixelRatio))],
+    };
+  });
+  if (diet.gone.length) fail(`HUD diet: still on screen: ${diet.gone.join(', ')}`);
+  else if (diet.listOpen) fail('HUD diet: the tracker starts open (it must be one collapsed line)');
+  else if (diet.plateFramed) fail('HUD diet: the name plate still wears a frame');
+  else if (diet.fonts.length !== 1) fail(`HUD diet: ${diet.fonts.length} text faces in the HUD (${diet.fonts.join(', ')})`);
+  else if (diet.sizes.length > 2 || diet.sizes.some((v) => Math.abs(v / 8 - Math.round(v / 8)) > 0.01)) fail(`HUD diet: text sizes ${diet.sizes.join(', ')} device px (want whole font pixels, at most 2 text sizes + the display art)`);
+  else ok(`HUD diet: no stat / explored strips, tracker collapsed, plain name plate, one text face (${diet.fonts[0]}) at ${diet.sizes.map((v) => `${v / 8} device px per font pixel`).join(' and ')}`);
+  if (diet.view && (diet.mechs !== 1 || !diet.inDock || diet.label !== diet.view.split(':')[1])) fail(`mechanic widget: view ${diet.view}, ${diet.mechs} widget(s), label "${diet.label}"`);
+  else if (!diet.view && diet.mechs) fail('a mechanic widget shows without a mechanic');
+  else ok(diet.view ? `one mechanic widget above the bar, labelled "${diet.label}" (${diet.view})` : 'no mechanic view for this class: the widget stays hidden');
   // 4) Tap an empty slot of yours → the picker → equip.
   await dbg('learn', 'shadowstep');
   await closeModal();
@@ -648,7 +748,7 @@ try {
     await page.evaluate(() => window.omnipath.ui.banner('Stormbreak Approach', 'Lv 8–10'));
     await page.waitForTimeout(700);
     return page.evaluate(() => {
-      const b = document.querySelector('.zone-banner b')?.getBoundingClientRect();
+      const b = document.querySelector('.zone-banner .zone-plate')?.getBoundingClientRect();
       const ts = [...document.querySelectorAll('.toast')].map((t) => t.getBoundingClientRect());
       return !!b && ts.some((t) => t.bottom > b.top && t.top < b.bottom && t.right > b.left && t.left < b.right);
     });
@@ -920,7 +1020,7 @@ try {
   // Portrait screens keep the middle band (40–60 % of the height, where the player stands) free of HUD boxes, with
   // the Pursuits open: tap-to-move must reach the world there. The bar, the attack cluster, the left-edge quick
   // buttons, the fading log and toasts are allowed.
-  const ALL_BOXES = ['.hud-me .me-plate', '.hud-me .me-stats', '.hud-right .menu', '.hud-right .mm-dock', '.hud-right .pursuits', '.hud-centre .zone-banner', '.hud-centre .target', '.hud-centre .navpill'];
+  const ALL_BOXES = ['.hud-me .me-plate', '.hotbar .mech-dock', '.hud-right .menu', '.hud-right .mm-dock', '.hud-right .pursuits', '.hud-centre .zone-banner', '.hud-centre .target', '.hud-centre .navpill'];
   // Landscape: the centre column over the player (zone plate, target plate, nav pill) and the toasts under it.
   const CENTRE_BOXES = ['.hud-centre .zone-banner', '.hud-centre .target', '.hud-centre .navpill', '.toasts .toast'];
   // `target`: put that target plate up and measure at once, in the same task (the scene's combat pushes its own target

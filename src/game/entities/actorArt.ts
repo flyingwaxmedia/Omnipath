@@ -173,7 +173,7 @@ export function opaqueTop(scene: Phaser.Scene, key: string): number {
 // ---------------------------------------------------------------- status icons
 
 /** The statuses the player shows over the head (order = display order). */
-export const PLAYER_STATUS_ICONS: readonly StatusKind[] = ['stun', 'freeze', 'shock', 'burn', 'poison', 'bleed', 'soak', 'slow'];
+export const PLAYER_STATUS_ICONS: readonly StatusKind[] = ['stun', 'freeze', 'launch', 'root', 'lure', 'shock', 'burn', 'poison', 'bleed', 'expose', 'soak', 'slow'];
 
 /** Status icon art: 7x7 templates on a 9x9 canvas (1 px outline margin). */
 export const STATUS_ART: Readonly<Partial<Record<StatusKind, { rows: string[]; pal: Record<string, string> }>>> = {
@@ -185,6 +185,12 @@ export const STATUS_ART: Readonly<Partial<Record<StatusKind, { rows: string[]; p
   freeze: { rows: ['c..c..c', '.c.c.c.', '..cWc..', 'ccWWWcc', '..cWc..', '.c.c.c.', 'c..c..c'], pal: { c: '#8ae4ff', W: '#ffffff' } },
   stun: { rows: ['...y...', '...y...', '..yWy..', 'yyWWWyy', '..yWy..', '..y.y..', '.y...y.'], pal: { y: '#ffd84a', W: '#fffbe0' } },
   shock: { rows: ['....yy.', '...yy..', '..yy...', '.yyyyy.', '...yy..', '..yy...', '.yy....'], pal: { y: '#ffe04a' } },
+  // v4 statuses (SPEC-v4 §12): Held (a root gripping a boot), Airborne (an up arrow), Exposed (a cracked shield),
+  // Lured (a hook).
+  root: { rows: ['..bbb..', '..bbb..', 'g.bbb.g', '.gbbbg.', '.gbbbbg', 'g.ggg.g', '.g.g.g.'], pal: { b: '#c9a57a', g: '#5fa83c' } },
+  launch: { rows: ['...w...', '..www..', '.wwwww.', 'wwwwwww', '..www..', '..www..', '..sss..'], pal: { w: '#f4f1e4', s: '#9aa4b8' } },
+  expose: { rows: ['rrr.rrr', 'rLr.rLr', 'rrr..rr', 'rr..rrr', '.rr.rr.', '.rr.rr.', '..r.r..'], pal: { r: '#e0703c', L: '#ffd0a0' } },
+  lure: { rows: ['..pp...', '.p..p..', '....p..', '...pp..', '..pp...', '..p..p.', '..pppp.'], pal: { p: '#e88ad8' } },
 };
 
 /** Draws (once) and returns the 9x9 icon texture for a status, or null when the status has no icon. */

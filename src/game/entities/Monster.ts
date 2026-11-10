@@ -35,6 +35,15 @@ export interface StatusState {
   vy: number;
   /** Status markers (combos, vsStatus passives): kind -> until (scene time). */
   marks: Partial<Record<StatusKind, number>>;
+  /** v4 Held (root): cannot move by itself until this scene time (it can still act). */
+  rootUntil: number;
+  /** v4 Airborne (launch): helpless until it lands at this scene time, taking `launchDmg` as it does. */
+  launchUntil: number;
+  launchStart: number;
+  launchDmg: number;
+  /** v4 Lured: walks toward `lureTo` until this scene time. */
+  lureUntil: number;
+  lureTo: { x: number; y: number } | null;
 }
 
 /** A buff a monster technique put on its caster (`amount` is % for atk/speed/regen, flat for def). */
@@ -53,6 +62,12 @@ export const freshStatus = (): StatusState => ({
   vx: 0,
   vy: 0,
   marks: {},
+  rootUntil: 0,
+  launchUntil: 0,
+  launchStart: 0,
+  launchDmg: 0,
+  lureUntil: 0,
+  lureTo: null,
 });
 
 /** Warden enrage (HP < 50 %): moves and swings faster. Technique tempo lives in MonsterSkills. */
@@ -93,6 +108,8 @@ export class Monster implements TextAnchor {
   status: StatusState = freshStatus();
   /** Hit-XP grants per skill id earned on this instance (SkillBook.recordHit instanceHits). */
   hitGrants = new Map<string, number>();
+  /** v4 deed counters: the element of the player's last blow on this instance (a burn that finishes it counts as fire). */
+  lastBlow: { element?: string } | null = null;
   /** Echo technique ids witnessed on this instance (credited on kill). */
   witnessed = new Set<string>();
   /** The '👁' floater was shown for this instance. */
@@ -267,6 +284,30 @@ export class Monster implements TextAnchor {
     return this.scene.time.now < this.status.stunUntil;
   }
 
+  /** Held in place (root, or in the air): it does not walk, chase or wander. */
+  get rooted(): boolean {
+    const now = this.scene.time.now;
+    return now < this.status.rootUntil || now < this.status.launchUntil;
+  }
+
+  /** In the air (launch): helpless until it lands. */
+  get airborne(): boolean {
+    return this.scene.time.now < this.status.launchUntil;
+  }
+
+  /** Where a lure pulls it right now, or null. */
+  get lure(): { x: number; y: number } | null {
+    return this.scene.time.now < this.status.lureUntil ? this.status.lureTo : null;
+  }
+
+  /** How high the body is drawn above the ground (whole px): a launch arcs up and comes down. */
+  private liftPx(now: number): number {
+    const st = this.status;
+    if (now >= st.launchUntil || st.launchUntil <= st.launchStart) return 0;
+    const t = (now - st.launchStart) / (st.launchUntil - st.launchStart);
+    return Math.round(Math.sin(Math.PI * Math.min(1, Math.max(0, t))) * (this.warden ? 0 : 18));
+  }
+
   get frozen(): boolean {
     return this.stunned && (this.status.marks.freeze ?? 0) > this.scene.time.now;
   }
@@ -365,7 +406,7 @@ export class Monster implements TextAnchor {
     if (rc && !held) this.recoilQ.shift();
     const bx = held ? this.held!.x : this.x + this.lag.x;
     const by = held ? this.held!.y : this.y + this.lag.y;
-    this.sprite.setPosition(Math.round(bx) + (rc?.x ?? 0), Math.round(by) + (rc?.y ?? 0) + hoverDy);
+    this.sprite.setPosition(Math.round(bx) + (rc?.x ?? 0), Math.round(by) + (rc?.y ?? 0) + hoverDy - this.liftPx(now));
     this.sprite.setFlipX(this.facing < 0);
     if (this.squashF > 0) {
       // 1-frame squash (the one scale the pixel rule allows): 2 px wider, 2 px shorter.
@@ -494,6 +535,10 @@ export class Monster implements TextAnchor {
       d.next += ms;
     }
     for (const k of Object.keys(st.marks) as StatusKind[]) st.marks[k]! += ms;
+    st.rootUntil += ms;
+    st.launchUntil += ms;
+    st.launchStart += ms;
+    st.lureUntil += ms;
     for (const b of this.buffs) b.until += ms;
     for (const [k, v] of this.techReadyAt) this.techReadyAt.set(k, v + ms);
     this.holdUntil += ms;
@@ -516,6 +561,7 @@ export class Monster implements TextAnchor {
     this.returning = false;
     this.status = freshStatus();
     this.hitGrants.clear();
+    this.lastBlow = null;
     this.witnessed.clear();
     this.eyeShown = false;
     this.techReadyAt.clear();

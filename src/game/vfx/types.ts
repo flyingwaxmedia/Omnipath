@@ -11,7 +11,7 @@ import type { ComboId } from '../../core/combat';
 import type { BuffStat, ElementId, Family, MonsterRank, ShapeKind, Size, SkillDef, StatusKind } from '../../core/types';
 
 /** Bump when a template or recipe rule changes output (cache keys, gallery captures). */
-export const VFX_VERSION = 2;
+export const VFX_VERSION = 3;
 
 // ------------------------------------------------------------------ index frames
 
@@ -348,7 +348,16 @@ export type BurstClass =
   | 'split'
   | 'glint'
   | 'fizzle'
-  | 'star';
+  | 'star'
+  /** The fist impact set (v4 Bare Hands): a straight jab, a curved hook, an open palm, a kick arc, a ground slam. */
+  | 'jab'
+  | 'hook'
+  | 'palm'
+  | 'kick'
+  | 'slam';
+
+/** The fist impact set, in swing order (docs/VFX.md §6.9). */
+export const FIST_CLASSES: readonly BurstClass[] = ['jab', 'hook', 'palm', 'kick', 'slam'];
 
 /** Radial one-shot: hit sparks, muzzle flashes, glints, fizzles, the spark-moment star. */
 export interface BurstParams {
@@ -525,7 +534,13 @@ export type StatusUnit =
   | 'beam'
   | 'speedline'
   | 'spiral'
-  | 'pip';
+  | 'pip'
+  /** v4 statuses: root = a shackle gripping the feet, launch = an updraft under an airborne body, expose = a
+   *  cracked guard mark on the chest, lure = a beckoning hook over the head. */
+  | 'shackle'
+  | 'updraft'
+  | 'breach'
+  | 'beckon';
 
 /** Character-anchored status units (small loops placed at silhouette anchor points). */
 export interface StatusParams {
@@ -563,6 +578,46 @@ export interface AfterimageParams {
   steps: readonly number[];
 }
 
+/** Zone interior: one small ground-hugging living unit in the family's language (flames, ripples, caltrops, ...). */
+export interface FieldParams {
+  /** 's' 22 px, 'm' 31 px wide cell. */
+  size: 's' | 'm';
+}
+
+/** Blink: the actor leaves ('out': the body folds into a vertical seam) and arrives ('in': the seam opens). */
+export interface WarpParams {
+  phase: 'out' | 'in';
+  body: BodySize;
+}
+
+/** Mend: a heal on an actor. 'pulse' is the one-shot bloom, 'loop' the over-time trickle (back / front halves). */
+export interface MendParams {
+  phase: 'pulse' | 'loop';
+  body: BodySize;
+}
+
+/** Shield: a ward that forms, holds, absorbs hits and breaks, in the family's skin (back / front halves). */
+export interface ShellParams {
+  phase: 'form' | 'loop' | 'absorb' | 'break';
+  body: BodySize;
+}
+
+export type EmblemKind = 'full' | 'finisher' | 'cashIn' | 'stance' | 'step' | 'mark';
+
+/**
+ * Class mechanic feedback on an actor (docs/VFX.md §6.10): a short readable mark, never a screen flash.
+ * full = the meter is full (a rising crown of chevrons), finisher = a crossed star cut, cashIn = a mark that splits
+ * into shards, stance = two halves trading places (`n` 1 | 2 = the side now lit), step = combo pips (`n` lit of `of`),
+ * mark = the pip a marked foe wears (`n` marks, a loop).
+ */
+export interface EmblemParams {
+  kind: EmblemKind;
+  /** Count shown (step / mark: 1..5; stance: 1 | 2). */
+  n: 1 | 2 | 3 | 4 | 5;
+  /** Step only: the combo length (pips drawn). */
+  of?: 2 | 3 | 4 | 5;
+}
+
 /** Every component and its bake parameters. */
 export interface ComponentParams {
   slash: SlashParams;
@@ -582,6 +637,11 @@ export interface ComponentParams {
   aura: AuraParams;
   tell: TellParams;
   afterimage: AfterimageParams;
+  field: FieldParams;
+  warp: WarpParams;
+  mend: MendParams;
+  shell: ShellParams;
+  emblem: EmblemParams;
 }
 
 export type ComponentId = keyof ComponentParams;
@@ -604,6 +664,11 @@ export const COMPONENT_IDS: readonly ComponentId[] = [
   'aura',
   'tell',
   'afterimage',
+  'field',
+  'warp',
+  'mend',
+  'shell',
+  'emblem',
 ];
 
 /** Components the runtime draws without baked frames. */
@@ -744,10 +809,12 @@ export type HitGeometry =
       pierce: number;
     }
   | { kind: 'chain'; range: number; hop: number; jumps: number }
+  /** A line zone: a capsule from the caster along the aim, `length` long and 2 x `halfWidth` wide. */
+  | { kind: 'capsule'; length: number; halfWidth: number }
   | { kind: 'self' };
 
-export type StrikeStyle = 'crescent' | 'thrust' | 'staff' | 'fist' | 'cone' | 'execute' | 'claw';
-export type SpinStyle = 'blades' | 'ring' | 'vortex' | 'halo' | 'wail' | 'ripple';
+export type StrikeStyle = 'crescent' | 'thrust' | 'staff' | 'fist' | 'cone' | 'execute' | 'claw' | 'punch' | 'kick';
+export type SpinStyle = 'blades' | 'ring' | 'vortex' | 'halo' | 'wail' | 'ripple' | 'kick';
 export type DashMode = 'ghost' | 'blink' | 'spin' | 'charge' | 'dive' | 'roll';
 export type ChainMode = 'bolt' | 'knife' | 'blade' | 'palm';
 
@@ -759,7 +826,12 @@ export type Carrier =
   | { kind: 'dash'; mode: DashMode }
   | { kind: 'nova'; core: CoreKind; unit: UnitKind | null }
   | { kind: 'chain'; mode: ChainMode }
-  | { kind: 'buff'; motif: AuraMotif };
+  | { kind: 'buff'; motif: AuraMotif }
+  /** v4 kinds (docs/VFX.md §6.9). `line` = a lane field (shape.line), `follow` = it moves with the caster. */
+  | { kind: 'zone'; line: boolean; follow: boolean }
+  | { kind: 'blink'; arrive: boolean }
+  | { kind: 'mend'; area: boolean; over: boolean }
+  | { kind: 'shield'; burst: boolean };
 
 /** Accent a shape merge's secondary parent adds, from the mechanical difference compose() made. */
 export type MergeAccent = 'extra' | 'radial' | 'spinDash' | 'knockback' | 'arc' | 'none';
@@ -773,6 +845,10 @@ export interface RiderFx {
   leech?: { stream: readonly VfxPiece[]; arrive: readonly VfxPiece[] };
   /** Pass-through marks (pierce essence or authored pierce > 0). */
   pierce?: { mark: readonly VfxPiece[] };
+  /** Zone: each damage / heal tick re-lights the field; `end` plays when it expires or is consumed. */
+  zone?: { tick: readonly VfxPiece[]; end: readonly VfxPiece[] };
+  /** Shield: a soaked hit, the shell breaking (soaked through or expired), and the burst some shells end with. */
+  shield?: { absorb: readonly VfxPiece[]; break: readonly VfxPiece[]; burst: readonly VfxPiece[] };
   /**
    * Shape merge accent. `pieces` holds the extra hit's carrier ('extra') or the echo muzzle ring ('radial'); the
    * other accents re-ink pieces already in the recipe (spin band, knockback status, arc zap) in the echo family.

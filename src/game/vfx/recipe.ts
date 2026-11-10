@@ -5,6 +5,7 @@
 // from the composed shape, so every effect is as big as its hit test. Signature patches run last (signatures.ts).
 // Phaser-free and pure: no clock, no Math.random, no ctx.rotate.
 import type { ComboId } from '../../core/combat';
+import type { MechanicEffect } from '../../core/mechanics';
 import { mergeSkills, parseVariantId, SHAPE_PRIORITY, shapeHits } from '../../core/compose';
 import { hashSeed } from '../../core/rng';
 import type { BuffStat, ElementId, SkillDef, SkillShape, StatusKind } from '../../core/types';
@@ -15,6 +16,7 @@ import { SIGNATURES } from './signatures';
 import {
   ANCHOR_DY,
   ARC_BUCKETS,
+  FIST_CLASSES,
   CORE_BUCKETS,
   DECAL_BUCKETS,
   REACH_BUCKETS,
@@ -32,6 +34,7 @@ import {
   type BodySize,
   type BurstClass,
   type Carrier,
+  type EmblemParams,
   type ChainMode,
   type DashMode,
   type FamilyId,
@@ -141,21 +144,26 @@ export function hitGeometry(skill: SkillDef, owner: VfxOwner): HitGeometry {
       return monster ? { kind: 'chain', range: sh.range, hop: 0, jumps: 0 } : { kind: 'chain', range: sh.range, hop: GROUND_TRUTH.chainHopPx, jumps: sh.jumps };
     case 'buff':
     case 'mend':
-    case 'shield':
       return { kind: 'self' };
-    // v4 kinds until their recipes land (VFX lane): a zone reads as a ground disc, a blink as its arrival disc.
+    // v4 kinds (SkillSystem.placeZone / blink / burst; objects.ts objectCovers): a zone is a disc at the aim (at the
+    // feet with range 0) or a lane from the caster along the aim, `radius` each side; a blink hits a disc where it
+    // lands; a shield's burst is a disc round the caster. All circles: no ground aspect for the player.
     case 'zone':
+      if (sh.line) return { kind: 'capsule', length: sh.line.length, halfWidth: sh.radius };
       return { kind: 'disc', r: sh.radius, aspect: monster ? ZONE_ASPECT : 1, at: sh.range > 0 ? 'aim' : 'caster', addCasterRadius: false };
     case 'blink':
       return sh.arrive ? { kind: 'disc', r: sh.arrive.radius, aspect: 1, at: 'aim', addCasterRadius: false } : { kind: 'self' };
+    case 'shield':
+      return sh.burst ? { kind: 'disc', r: sh.burst.radius, aspect: 1, at: 'caster', addCasterRadius: false } : { kind: 'self' };
   }
 }
 
 /** Statuses a hit applies: Combat.hit for players (element, own, knockback rider), MonsterSkills.statusesOf for monsters. */
 export function statusesFor(skill: SkillDef, owner: VfxOwner): StatusKind[] {
   const out: StatusKind[] = [];
-  // Buffs and zero-power skills (quickstep) never call Combat.hit.
-  if (skill.shape.kind === 'buff' || skill.power <= 0) return out;
+  // Buffs, zero-power skills (quickstep) and the v4 kinds that hit nothing (a mend, a shield without a burst, a blink
+  // without an arrival hit) never call Combat.hit.
+  if (skill.shape.kind === 'buff' || skill.power <= 0 || !landsHits(skill.shape)) return out;
   const add = (k: StatusKind | undefined): void => {
     if (k && !out.includes(k) && !(owner === 'monster' && k === 'smite')) out.push(k);
   };
@@ -163,6 +171,11 @@ export function statusesFor(skill: SkillDef, owner: VfxOwner): StatusKind[] {
   add(skill.status);
   if (owner === 'player' && skill.riders?.knockback) add('knockback');
   return out;
+}
+
+/** Whether a shape can land a hit at all (compose.shapeHits: a mend, a plain shield and a plain blink never do). */
+export function landsHits(shape: SkillShape): boolean {
+  return shapeHits(shape) > 0;
 }
 
 // ------------------------------------------------------------------ helpers
@@ -278,6 +291,8 @@ const isHeavy = (w: VfxWeight): boolean => w === 'heavy' || w === 'ultimate';
 
 function strikeStyle(c: Pick<Ctx, 'has' | 'root'>): StrikeStyle {
   const h = c.has;
+  // Bare hands (the `fist` grip): punches and kicks, whatever else the skill is tagged.
+  if (h('fist')) return c.root.delivery === 'kick' ? 'kick' : 'punch';
   if (h('execute')) return 'execute';
   if (h('aoe') && c.root.element && !h('melee')) return 'cone';
   if (h('arcane') && !h('blade')) return 'staff';
@@ -288,6 +303,7 @@ function strikeStyle(c: Pick<Ctx, 'has' | 'root'>): StrikeStyle {
 
 function spinStyle(c: Pick<Ctx, 'has' | 'root' | 'rootFamily' | 'monster'>): SpinStyle {
   const h = c.has;
+  if (h('fist')) return 'kick';
   if (c.root.status === 'pull') return 'vortex';
   if (c.rootFamily === 'holy') return 'halo';
   if (c.monster && c.rootFamily === 'shadow') return 'wail';
@@ -371,15 +387,14 @@ function carrierOf(c: Ctx): Carrier {
       return { kind: 'chain', mode: chainMode(c) };
     case 'buff':
       return { kind: 'buff', motif: BUFF_MOTIF[sh.stat] };
-    // v4 kinds borrow the nearest v2 carrier until their recipes land (VFX lane).
     case 'zone':
-      return { kind: 'nova', core: lookOf(c.rootFamily).core, unit: novaUnit(c.rootId, c.family) };
+      return { kind: 'zone', line: !!sh.line, follow: !!sh.follow };
     case 'blink':
-      return { kind: 'dash', mode: dashMode(c) };
+      return { kind: 'blink', arrive: !!sh.arrive };
     case 'mend':
-      return { kind: 'buff', motif: BUFF_MOTIF.regen };
+      return { kind: 'mend', area: !!sh.radius, over: !!sh.overMs };
     case 'shield':
-      return { kind: 'buff', motif: BUFF_MOTIF.def };
+      return { kind: 'shield', burst: !!sh.burst };
   }
 }
 
@@ -423,6 +438,7 @@ function chargePieces(c: Ctx, carrier: Carrier): VfxPiece[] {
   if (sh.kind === 'strike' && carrier.kind === 'strike') out.push(preview(rim(sh.range, halfArc(sh.arc))));
   if (sh.kind === 'spin') out.push(preview(rim(sh.radius)));
   if (sh.kind === 'nova') out.push(preview(rim(sh.radius)));
+  if (sh.kind === 'zone' && !sh.line) out.push(preview(piece('ring', { r: sh.radius, aspect: 1, thick: 2, style: 'solid', ink: 'mid', anim: 'static', ms: vsync(life) }, c.ink, { anchor: at(sh.range > 0 ? 'aim' : 'caster') })));
   if (sh.kind === 'dash' && sh.width > 0) {
     out.push(preview(piece('tell', { piece: 'bead', danger: false }, c.ink, { anchor: at('caster'), place: { pattern: 'line', count: clamp(round(sh.distance / 12), 4, 24), radius: sh.distance, spacing: round(sh.width) } })));
   }
@@ -499,6 +515,36 @@ function strikePieces(c: Ctx, style: StrikeStyle, ph: Phases): void {
       if (c.accent !== 'steel') push(ph, 'cast', ...overlay(c.acc, c.accLook.strike, tip, { pattern: 'burst', count: 4, spreadDeg: 60 }, 33));
       break;
     }
+    case 'punch':
+    case 'kick': {
+      // Bare hands (docs/VFX.md §6.9): a punch's swing is its own small blow at the fist (speed lines into the
+      // knuckle point), a kick's a low crescent with dust; the hit on the target is the full fist impact (impactPhase).
+      const cls = fistClass(c);
+      const fist = fistInk(c);
+      const tip = { ...anchor, along: round(sh.range * 0.8) };
+      push(ph, 'cast', piece('motes', { kind: 'line', size: 2 }, fist, { anchor: { ...anchor, along: round(sh.range * 0.3) }, place: { pattern: 'burst', count: cls === 'jab' ? 2 : 3, spreadDeg: cls === 'kick' ? 50 : 24 } }));
+      if (cls === 'kick') {
+        push(
+          ph,
+          'cast',
+          piece('slash', { r: reachBucket(sh.range), arc: arcBucket(Math.max(90, sh.arc)), rakes: 1, form: 'arc', weight: 'light', tier: 0, sense: 1, rune: false }, fist, { anchor: at('caster', -4), tags: smearTags }),
+          piece('puff', { kind: 'dust', r: 3 }, utilInk(c, 'dust'), { anchor: at('caster', 0, sh.range * 0.5), layer: 'ground', place: { pattern: 'burst', count: 2, radius: 6 } }),
+        );
+      } else push(ph, 'cast', piece('burst', { cls, size: 's' }, fist, { anchor: tip, tags: ['hero'] }));
+      // The air the blow pushes: a ki ripple off an open palm (double, 3 px apart), a tight snap ring off a fist.
+      if (cls === 'palm') push(ph, 'cast', piece('ring', { r: 16, r0: 4, aspect: 1, thick: 1, style: 'double', ink: 'lit', anim: 'expand', ms: 167 }, fist, { anchor: tip, delayMs: 17 }));
+      else if (cls !== 'kick') push(ph, 'cast', piece('ring', { r: 10, r0: 3, aspect: 1, thick: 1, style: 'solid', ink: 'mid', anim: 'expand', ms: 117 }, fist, { anchor: tip, delayMs: 17 }));
+      if (cls === 'slam') {
+        push(
+          ph,
+          'area',
+          piece('ring', { r: 24, r0: 8, aspect: 1, thick: 2, style: 'solid', ink: 'lit', anim: 'expand', ms: 200 }, fist, { anchor: at('caster', 0, sh.range * 0.6), layer: 'ground' }),
+          piece('decal', { kind: 'cracks', r: 16, aspect: 1, density: 0.5, shape: 'disc' }, utilInk(c, 'dust'), { anchor: at('caster', 0, sh.range * 0.6), layer: 'ground', lifeMs: 800 }),
+        );
+      }
+      if (c.accent !== 'steel') push(ph, 'cast', ...overlay(c.acc, c.accLook.strike, tip, { pattern: 'burst', count: 4, spreadDeg: 60 }, 33));
+      break;
+    }
     case 'claw':
     case 'crescent':
       push(ph, 'cast', slash(r, arc, { rune: c.has('arcane') && c.has('blade') }), ...edge(sh.range, sh.arc));
@@ -509,7 +555,7 @@ function strikePieces(c: Ctx, style: StrikeStyle, ph: Phases): void {
     push(ph, 'cast', piece('burst', { cls: 'glint', size: 's' }, c.acc, { anchor: { ...anchor, along: round(sh.range) }, delayMs: 33, tags: ['lastHit'] }));
   }
   // Ground impact for blows that are heavy by nature (heavy / execute tags, the heavy essence), not merely strong.
-  if ((c.has('heavy') || c.has('execute') || c.mods.has('heavy')) && style !== 'cone') {
+  if ((c.has('heavy') || c.has('execute') || c.mods.has('heavy')) && style !== 'cone' && style !== 'punch' && style !== 'kick') {
     const tip = { to: 'caster' as const, dy: 0, along: round(sh.range * 0.6) };
     push(
       ph,
@@ -567,8 +613,20 @@ function spinPieces(c: Ctx, style: SpinStyle, ph: Phases): void {
     case 'ripple':
       push(ph, 'cast', ring({ style: 'double' }));
       break;
+    case 'kick': {
+      // A spinning kick: one leg sweeps the whole circle (a single-head smear), dust kicked up along the rim.
+      const fist = fistInk(c);
+      push(
+        ph,
+        'cast',
+        reink(ring({ thick: isHeavy(c.weight) ? 4 : 3, ink: 'hot', anim: 'sweep', heads: 1, ms: 150, smear: 6 }, { tags: [...c.geoTags, 'hero'] }), fist),
+        piece('puff', { kind: 'dust', r: 3 }, utilInk(c, 'dust'), { anchor, layer: 'ground', place: { pattern: 'rim', count: 5, radius: round(R * 0.8), aspect: c.aspect, staggerMs: 25 } }),
+        piece('motes', { kind: 'line', size: 2 }, fist, { anchor: at('caster', ANCHOR_DY.swing), place: { pattern: 'rim', count: 4, radius: round(R * 0.6), aspect: c.aspect } }),
+      );
+      break;
+    }
   }
-  if (style !== 'vortex' && style !== 'halo' && style !== 'wail') {
+  if (style !== 'vortex' && style !== 'halo' && style !== 'wail' && style !== 'kick') {
     push(ph, 'cast', ...overlay(c.acc, c.accLook.spin, anchor, { pattern: 'orbit', count: clamp(round(R / 10), 4, VFX_BUDGET.perEvent.spinPulseMotes), radius: R, aspect: c.aspect }));
   }
   // Floor band (0 -> R over 300 ms, ink mid -> dim); it flares on the first and last pulse only. 2 px with a darker
@@ -576,7 +634,7 @@ function spinPieces(c: Ctx, style: SpinStyle, ph: Phases): void {
   const band = (ink: 'dim' | 'mid' | 'hot', tags: readonly PieceTag[]) =>
     piece('ring', { r: R, r0: 0, aspect: c.aspect, thick: 2, style: 'solid', ink, anim: 'expand', ms: 300 }, c.ink, { anchor, layer: 'ground', tags: [...c.geoTags, ...tags] });
   // Blade smears are the hero already: their floor band stays a dim dithered ripple and never flares.
-  if (style === 'blades') push(ph, 'area', band('dim', []));
+  if (style === 'blades' || style === 'kick') push(ph, 'area', band('dim', []));
   else {
     push(ph, 'area', band('mid', []));
     if ((sh.pulses ?? 1) > 1) push(ph, 'area', band('hot', ['firstHitOnly']), band('hot', ['lastHit']));
@@ -771,9 +829,307 @@ function buffPieces(c: Ctx, motif: AuraMotif, ph: Phases): void {
   push(ph, 'aura', aura('loop', { lifeMs: sh.duration }), aura('break', { delayMs: sh.duration }));
 }
 
+// ------------------------------------------------------------------ v4 kinds: zone, blink, mend, shield (docs/VFX.md §6.9)
+
+const FIST_SET: ReadonlySet<BurstClass> = new Set(FIST_CLASSES);
+
+/**
+ * Which blow of the fist impact set a bare-handed skill lands: a kick (kick delivery, spins, light dashes), a slam
+ * (executes, heavy area blows), a hook (heavy punches and body checks), a palm (pushes, spirit / technique forms) or
+ * a jab (everything quick).
+ */
+export function fistClassOf(skill: SkillDef, weight: VfxWeight): BurstClass {
+  const t = skill.tags;
+  const kind = skill.shape.kind;
+  const heavy = t.includes('heavy') || weight === 'heavy' || weight === 'ultimate';
+  if (t.includes('execute') || (heavy && t.includes('aoe') && kind !== 'spin')) return 'slam';
+  if (skill.delivery === 'kick' || kind === 'spin') return 'kick';
+  if (kind === 'nova') return 'palm';
+  if (heavy) return 'hook';
+  if (kind === 'dash') return 'kick';
+  if (t.includes('spirit') || t.includes('technique')) return 'palm';
+  return 'jab';
+}
+
+const fistClass = (c: Pick<Ctx, 'root' | 'weight'>): BurstClass => fistClassOf(c.root, c.weight);
+
+/** Bare knuckles are not steel: an element-less fist skill draws its blows in the warm spirit ramp. */
+const fistInk = (c: Pick<Ctx, 'family' | 'ink' | 'lut'>): Ink => (c.family === 'steel' ? { ramp: 'spirit', motif: c.family, lut: c.lut } : c.ink);
+
+/** A family ring style that is safe for a player's expanding ring (no gaps, no dashes). */
+const openStyle = (c: Pick<Ctx, 'look'>): 'solid' | 'double' | 'jagged' => (c.look.ring === 'double' || c.look.ring === 'jagged' ? c.look.ring : 'solid');
+
+/** How many living units a field of `area` px² scatters. */
+const fieldCount = (area: number): number => clamp(round(area / 2200), 4, 10);
+
+/**
+ * Zone: a field that stays and ticks. `area` plays once when it is placed (the field opens), `aura` stands while it
+ * does (the exact rim, a faint fill, the family's living units), `riders.zone.tick` re-lights it on every tick and
+ * `riders.zone.end` lets it go. The rim is the hit test: a circle of `radius`, or for a lane two straight bead edges
+ * `radius` each side of the caster -> aim line, closed by half rings at both ends (objects.ts objectCovers).
+ */
+function zonePieces(c: Ctx, ph: Phases, rd: RiderFx): void {
+  const sh = c.skill.shape as Extract<SkillShape, { kind: 'zone' }>;
+  const R = sh.radius;
+  const life = sh.durationMs;
+  const asp = c.aspect;
+  const style = openStyle(c);
+  const size = R >= 56 ? 'm' : 's';
+  const pull = c.root.status === 'pull';
+  const heals = c.skill.extra === 'heal' || c.skill.extra === 'shield';
+  const healMotes = (anchor: VfxAnchor, place: VfxPiece['place']): VfxPiece[] => (heals ? [piece('motes', { kind: 'mote', size: 1 }, utilInk(c, 'heal'), { anchor, place })] : []);
+  if (c.castMs <= 0 && sh.range > 0) push(ph, 'cast', piece('burst', { cls: 'muzzle', size: 's' }, c.acc, { anchor: at('caster', ANCHOR_DY.hand) }));
+  if (sh.line) {
+    const L = sh.line.length;
+    const lane: readonly PieceTag[] = ['geometryFromEvent'];
+    const from = at('caster', 0);
+    const edge = (along: number): VfxPiece =>
+      piece('tell', { piece: 'bead', danger: false }, c.ink, { anchor: at('caster', 0, along), layer: 'preview', place: { pattern: 'line', count: 24, radius: round(L / 2), spacing: 2 * R }, lifeMs: life, tags: lane });
+    const cap = (along: number, arc: readonly [number, number]): VfxPiece =>
+      piece('ring', { r: R, aspect: 1, thick: 2, style: 'solid', ink: 'lit', anim: 'static', arc, ms: vsync(life) }, c.ink, { anchor: at('caster', 0, along), layer: 'preview', lifeMs: life, tags: lane });
+    const along = (kind: Extract<VfxPiece, { component: 'motes' }>['params']['kind'], ink: Ink, count: number): VfxPiece =>
+      piece('motes', { kind, size: 1 }, ink, { anchor: from, place: { pattern: 'line', count, radius: L, spacing: R } });
+    push(ph, 'area', along(c.accLook.hit, c.acc, 10), piece('motes', { kind: 'line', size: 2 }, c.ink, { anchor: at('caster', ANCHOR_DY.swing), place: { pattern: 'line', count: clamp(round(L / 40), 3, 6), radius: L } }));
+    push(
+      ph,
+      'aura',
+      edge(0),
+      edge(L / 2),
+      cap(0, [90, 270]),
+      cap(L, [-90, 90]),
+      piece('field', { size }, c.acc, { anchor: from, layer: 'ground', place: { pattern: 'line', count: clamp(round(L / 24), 4, 10), radius: L, spacing: R }, lifeMs: life }),
+    );
+    rd.zone = {
+      tick: [along(c.accLook.hit, c.acc, 8), ...healMotes(from, { pattern: 'line', count: 6, radius: L, spacing: R })],
+      end: [along(c.accLook.hit, c.acc, 6)],
+    };
+    return;
+  }
+  const aim = at('aim', 0);
+  push(
+    ph,
+    'area',
+    piece('ring', { r: R, r0: round(R * 0.3), aspect: asp, thick: 3, style, ink: 'hot', anim: 'expand', ms: 250 }, c.ink, { anchor: aim, layer: 'ground', tags: c.geoTags }),
+    piece('motes', { kind: c.accLook.hit, size: 1 }, c.acc, { anchor: aim, place: { pattern: 'burst', count: 8, radius: round(R * 0.7), aspect: asp } }),
+  );
+  push(
+    ph,
+    'aura',
+    // The truthful rim: solid, 2 px, at the hit radius for as long as the zone stands; a 12.5 % tint inside it.
+    piece('ring', { r: R, aspect: asp, thick: 2, style: 'solid', ink: 'lit', anim: 'static', ms: vsync(life) }, c.ink, { anchor: aim, layer: 'preview', lifeMs: life }),
+    piece('decal', { kind: 'shadow', r: decalR(R), aspect: asp, density: 0.125, shape: 'disc' }, c.ink, { anchor: aim, layer: 'preview', lifeMs: life }),
+    piece('field', { size }, c.acc, { anchor: aim, layer: 'ground', place: { pattern: 'poisson', count: fieldCount(Math.PI * R * R * asp), radius: round(R * 0.78), aspect: asp, spacing: 18 }, lifeMs: life }),
+  );
+  rd.zone = {
+    tick: [
+      // A pulling field breathes inward, everything else outward.
+      pull
+        ? piece('ring', { r: round(R * 0.45), r0: R, aspect: asp, thick: 2, style, ink: 'mid', anim: 'contract', ms: 233 }, c.ink, { anchor: aim, layer: 'ground', tags: c.geoTags })
+        : piece('ring', { r: R, r0: round(R * 0.55), aspect: asp, thick: 2, style, ink: 'mid', anim: 'expand', ms: 200 }, c.ink, { anchor: aim, layer: 'ground', tags: c.geoTags }),
+      piece('motes', { kind: c.accLook.hit, size: 1 }, c.acc, { anchor: aim, place: { pattern: 'rise', count: 6, radius: round(R * 0.7), aspect: asp } }),
+      ...healMotes(aim, { pattern: 'rise', count: 4, radius: round(R * 0.5), aspect: asp }),
+    ],
+    end: [
+      piece('ring', { r: round(R * 0.7), r0: R, aspect: asp, thick: 1, style: 'solid', ink: 'dim', anim: 'contract', ms: 200 }, c.ink, { anchor: aim, layer: 'ground', tags: c.geoTags }),
+      piece('motes', { kind: c.accLook.hit, size: 1 }, c.acc, { anchor: aim, place: { pattern: 'burst', count: 5, radius: round(R * 0.6), aspect: asp } }),
+    ],
+  };
+}
+
+/**
+ * Blink: vanish -> arrive. `cast` plays where the caster left (the body folds into a seam; the actor's own frame
+ * slices away), `trail` joins the two ends with a few streaks so the eye finds where they went, `area` plays where
+ * they land (the seam opens over a landing ring; an arrival hit adds the family core and a ring at its true radius).
+ */
+function blinkPieces(c: Ctx, ph: Phases): void {
+  const sh = c.skill.shape as Extract<SkillShape, { kind: 'blink' }>;
+  const from = at('caster', 0);
+  const to = at('aim', 0);
+  const dark = c.has('stealth') || c.family === 'shadow' || c.family === 'twilight';
+  push(
+    ph,
+    'cast',
+    piece('warp', { phase: 'out', body: 'M' }, c.ink, { anchor: from }),
+    piece('afterimage', { mode: 'blink', steps: STEPS3 }, c.ink, { anchor: at('caster', -1) }),
+    dark
+      ? piece('puff', { kind: 'veil', r: 5 }, c.ink, { anchor: from, layer: 'ground', place: { pattern: 'burst', count: 3, radius: 8 } })
+      : piece('puff', { kind: 'dust', r: 3 }, utilInk(c, 'dust'), { anchor: from, layer: 'ground', place: { pattern: 'burst', count: 2, radius: 8 } }),
+  );
+  const streaks = clamp(round(sh.distance / 40), 3, 6);
+  push(ph, 'trail', piece('motes', { kind: 'line', size: 2 }, c.ink, { anchor: at('caster', ANCHOR_DY.swing), place: { pattern: 'line', count: streaks, radius: sh.distance }, tags: ['geometryFromEvent'] }));
+  if (c.accLook.trail.mote) push(ph, 'trail', piece('motes', { kind: c.accLook.trail.mote, size: 1 }, c.acc, { anchor: at('caster', ANCHOR_DY.swing), place: { pattern: 'line', count: 5, radius: sh.distance }, tags: ['geometryFromEvent'] }));
+  push(
+    ph,
+    'area',
+    piece('warp', { phase: 'in', body: 'M' }, c.ink, { anchor: to }),
+    piece('ring', { r: 20, r0: 4, aspect: 1, thick: 2, style: openStyle(c), ink: 'lit', anim: 'expand', ms: 200 }, c.ink, { anchor: to, layer: 'ground' }),
+  );
+  if (sh.arrive) {
+    const R = sh.arrive.radius;
+    push(
+      ph,
+      'area',
+      piece('nova', { core: c.look.core, c: 24, heavy: false }, c.ink, { anchor: to, delayMs: 33, tags: ['hero'] }),
+      piece('ring', { r: R, r0: round(R * 0.35), aspect: 1, thick: 2, style: openStyle(c), ink: 'hot', anim: 'expand', ms: 200 }, c.ink, { anchor: to, layer: 'ground', delayMs: 33, tags: ['geometryFromEvent'] }),
+      piece('motes', { kind: c.accLook.hit, size: 1 }, c.acc, { anchor: to, place: { pattern: 'burst', count: 6, radius: round(R * 0.6) }, delayMs: 33 }),
+    );
+  }
+}
+
+/** Length of the mend pulse strip (components/mend.ts) and of the shell's forming strip (components/shell.ts). */
+const MEND_PULSE_MS = 500;
+const SHELL_FORM_MS = 335;
+
+/**
+ * Mend: a heal. `cast` = the bloom on the healed actor (the green heal crosses every element shares, inside the
+ * caster family's own ring and motes); `aura` = the over-time trickle and, for a resting circle, its rim; `area` =
+ * the circle opening; `trail` = the small lift each later pulse of a heal over time plays.
+ */
+function mendPieces(c: Ctx, ph: Phases): void {
+  const sh = c.skill.shape as Extract<SkillShape, { kind: 'mend' }>;
+  const feet = at('caster', 0);
+  const chest = at('caster', ANCHOR_DY.chest);
+  const heal = utilInk(c, 'heal');
+  push(
+    ph,
+    'cast',
+    piece('mend', { phase: 'pulse', body: 'M' }, heal, { anchor: feet }),
+    piece('ring', { r: 32, r0: 8, aspect: 1, thick: 2, style: openStyle(c), ink: 'lit', anim: 'expand', ms: 250 }, c.has('fist') ? fistInk(c) : c.ink, { anchor: feet, layer: 'ground' }),
+    piece('motes', { kind: c.accLook.trail.mote ?? 'mote', size: 1 }, c.acc, { anchor: chest, place: { pattern: 'rise', count: 6, radius: 16, aspect: ZONE_ASPECT } }),
+  );
+  const over = sh.overMs ?? 0;
+  if (over > MEND_PULSE_MS) {
+    push(ph, 'aura', piece('mend', { phase: 'loop', body: 'M' }, heal, { anchor: feet, delayMs: MEND_PULSE_MS, lifeMs: over - MEND_PULSE_MS }));
+    push(ph, 'trail', piece('motes', { kind: 'mote', size: 1 }, heal, { anchor: chest, place: { pattern: 'rise', count: 3, radius: 10, aspect: ZONE_ASPECT } }));
+  }
+  if (sh.radius) {
+    const R = sh.radius;
+    const aim = at('aim', 0);
+    push(ph, 'area', piece('ring', { r: R, r0: round(R * 0.3), aspect: 1, thick: 2, style: 'double', ink: 'lit', anim: 'expand', ms: 300 }, heal, { anchor: aim, layer: 'ground', tags: ['geometryFromEvent'] }));
+    if (over > 0) {
+      push(
+        ph,
+        'aura',
+        piece('ring', { r: R, aspect: 1, thick: 2, style: 'solid', ink: 'mid', anim: 'static', ms: vsync(over) }, heal, { anchor: aim, layer: 'preview', lifeMs: over }),
+        piece('decal', { kind: 'fill', r: decalR(R), aspect: 1, density: 0.125, shape: 'disc' }, heal, { anchor: aim, layer: 'preview', lifeMs: over }),
+      );
+    }
+  }
+}
+
+/**
+ * Shield: a ward that forms, absorbs and breaks. `cast` = the shell rising from the ground in the family's skin;
+ * `aura` = the shell while it holds; `riders.shield` = the flash of a soaked hit, the break, and the burst some
+ * shells end with (a ring at the burst's true radius).
+ */
+function shieldPieces(c: Ctx, ph: Phases, rd: RiderFx): void {
+  const sh = c.skill.shape as Extract<SkillShape, { kind: 'shield' }>;
+  const feet = at('caster', 0);
+  const chest = at('caster', ANCHOR_DY.chest);
+  const ink = c.has('fist') ? fistInk(c) : c.ink;
+  const shell = (phase: 'form' | 'loop' | 'absorb' | 'break', opts: Parameters<typeof piece>[3] = {}): VfxPiece => piece('shell', { phase, body: 'M' }, ink, { anchor: feet, ...opts });
+  push(ph, 'cast', shell('form'), piece('ring', { r: 28, r0: 8, aspect: 1, thick: 2, style: openStyle(c), ink: 'lit', anim: 'expand', ms: 217 }, ink, { anchor: feet, layer: 'ground' }));
+  push(ph, 'aura', shell('loop', { delayMs: SHELL_FORM_MS, lifeMs: Math.max(100, sh.durationMs - SHELL_FORM_MS) }));
+  const R = sh.burst?.radius ?? 0;
+  rd.shield = {
+    absorb: [shell('absorb'), piece('motes', { kind: c.accLook.hit, size: 1 }, c.acc, { anchor: chest, place: { pattern: 'burst', count: 4, radius: 14 } })],
+    break: [
+      shell('break'),
+      piece('motes', { kind: c.accLook.hit, size: 2 }, c.acc, { anchor: chest, place: { pattern: 'burst', count: 8, radius: 20 } }),
+      piece('ring', { r: 32, r0: 12, aspect: 1, thick: 1, style: 'solid', ink: 'mid', anim: 'expand', ms: 200 }, ink, { anchor: feet, layer: 'ground' }),
+    ],
+    burst: sh.burst
+      ? [
+          piece('nova', { core: c.look.core, c: 24, heavy: false }, c.ink, { anchor: at('caster', ANCHOR_DY.chest + 4), tags: ['hero'] }),
+          piece('ring', { r: R, r0: round(R * 0.3), aspect: 1, thick: 3, style: openStyle(c), ink: 'hot', anim: 'expand', ms: 250 }, c.ink, { anchor: feet, layer: 'ground', tags: ['geometryFromEvent'] }),
+          piece('motes', { kind: c.accLook.hit, size: 1 }, c.acc, { anchor: feet, place: { pattern: 'burst', count: 8, radius: round(R * 0.7) } }),
+        ]
+      : [],
+  };
+}
+
+// ------------------------------------------------------------------ class mechanic feedback (docs/VFX.md §6.10)
+
+export type MechanicFx = MechanicEffect['type'];
+/** Every effect the mechanic engine can report (core/mechanics.ts MechanicEffect). */
+export const MECHANIC_FX: readonly MechanicFx[] = ['full', 'spent', 'comboStep', 'comboBreak', 'finisher', 'marked', 'cashIn', 'markEnd', 'stance', 'placed', 'expired', 'levelUp', 'consumed'];
+/** A mark pip never outlives this (the bridge ends it earlier: cash-in, expiry, death). */
+export const MARK_LIFE_MS = 15000;
+
+export interface MechanicFxOpts {
+  /** comboStep: the step reached; marked: marks on the foe; stance: 1 | 2 = the side now lit. */
+  n?: number;
+  /** comboStep: the combo's length. */
+  of?: number;
+  /** Body bucket of the marked foe (marked / cashIn / markEnd). */
+  body?: BodySize;
+  /** 'Reduce shake & flashes': the readable mark alone, no rings or motes. */
+  calm?: boolean;
+}
+
+/**
+ * The flourish of one mechanic effect, in the class's family. Always on an actor or a class object, never the screen:
+ * 'caster' anchors are the player's feet; 'target' anchors are the marked foe (marked, cashIn, markEnd) or the class
+ * object (placed, expired, levelUp, consumed). Small and short: the widest piece is a 32 px ring.
+ */
+export function mechanicPieces(type: MechanicFx, family: FamilyId, o: MechanicFxOpts = {}): readonly VfxPiece[] {
+  const fam: FamilyId = family === 'danger' ? 'steel' : family;
+  const ink = inkOf(fam, 'base');
+  const smoke: Ink = { ramp: 'smoke', motif: fam, lut: 'base' };
+  const look = lookOf(fam);
+  const body = o.body ?? 'M';
+  const head = at('caster', -BODYTOP.M - 6);
+  const chest = at('caster', ANCHOR_DY.chest);
+  const feet = at('caster', 0);
+  const tMid = at('target', -round(BODYTOP[body] / 2));
+  const tFeet = at('target', 0);
+  const n = clamp(round(o.n ?? 1), 1, 5) as EmblemParams['n'];
+  const em = (kind: EmblemParams['kind'], anchor: VfxAnchor, extra: Partial<EmblemParams> = {}, opts: Parameters<typeof piece>[3] = {}): VfxPiece => piece('emblem', { kind, n: 1, ...extra }, ink, { anchor, ...opts });
+  const ring = (anchor: VfxAnchor, r: number, r0: number, k: 'hot' | 'lit' | 'mid', ms: number, thick: 1 | 2 = 2): VfxPiece =>
+    piece('ring', { r, r0, aspect: 1, thick, style: 'solid', ink: k, anim: r0 < r ? 'expand' : 'contract', ms }, ink, { anchor, layer: 'ground' });
+  const motes = (kind: Extract<VfxPiece, { component: 'motes' }>['params']['kind'], anchor: VfxAnchor, place: VfxPiece['place']): VfxPiece => piece('motes', { kind, size: 1 }, ink, { anchor, place });
+  const rise = (count: number, radius: number): VfxPiece['place'] => ({ pattern: 'rise', count, radius, aspect: ZONE_ASPECT });
+  const pieces = ((): VfxPiece[] => {
+    switch (type) {
+      case 'full':
+        return [em('full', head), ring(feet, 24, 6, 'hot', 250), motes('glint', chest, rise(6, 14))];
+      case 'spent':
+        return [ring(feet, 6, 20, 'mid', 167, 1), motes(look.hit, chest, { pattern: 'burst', count: 3, radius: 10 })];
+      case 'comboStep': {
+        const of = clamp(round(o.of ?? 3), 2, 5) as 2 | 3 | 4 | 5;
+        return [em('step', head, { n: Math.min(n, of) as EmblemParams['n'], of })];
+      }
+      case 'comboBreak':
+        return [piece('burst', { cls: 'fizzle', size: 's' }, smoke, { anchor: head })];
+      case 'finisher':
+        return [em('finisher', chest, {}, { tags: ['hero'] }), ring(feet, 32, 8, 'hot', 217), piece('motes', { kind: 'streak', size: 2 }, ink, { anchor: chest, place: { pattern: 'burst', count: 6, radius: 24 } })];
+      case 'marked':
+        return [em('mark', at('target', -BODYTOP[body] - 8), { n }, { lifeMs: MARK_LIFE_MS })];
+      case 'cashIn':
+        return [em('cashIn', tMid), ring(tFeet, 20, 4, 'hot', 200), motes(look.hit, tMid, { pattern: 'burst', count: 6 })];
+      case 'markEnd':
+        return [piece('burst', { cls: 'magic', size: 's' }, ink, { anchor: tMid }), motes(look.hit, tMid, { pattern: 'burst', count: 4 })];
+      case 'stance':
+        return [em('stance', at('caster', -2), { n: n >= 2 ? 2 : 1 }), motes('line', chest, rise(4, 12))];
+      case 'placed':
+        return [ring(tFeet, 20, 4, 'lit', 200), motes(look.hit, at('target', -6), rise(4, 10))];
+      case 'expired':
+        return [piece('burst', { cls: 'fizzle', size: 'm' }, smoke, { anchor: at('target', -6) })];
+      case 'levelUp':
+        return [em('full', at('target', -10)), ring(tFeet, 28, 8, 'hot', 250), piece('erupt', { unit: look.unit, scale: 's' }, ink, { anchor: tFeet, place: { pattern: 'single', count: 1 } })];
+      case 'consumed':
+        return [ring(tFeet, 6, 28, 'hot', 200), piece('burst', { cls: 'glint', size: 's' }, ink, { anchor: at('target', -8) })];
+    }
+  })();
+  if (!o.calm) return pieces;
+  const calm = pieces.filter((p) => p.component === 'emblem' || p.component === 'burst');
+  return calm.length ? calm : pieces.slice(0, 1);
+}
+
 // ------------------------------------------------------------------ impact, statuses, riders
 
 function impactClass(c: Ctx, car: Carrier): BurstClass {
+  if (c.has('fist')) return fistClass(c);
   if ((car.kind === 'strike' && car.style === 'fist') || (car.kind === 'chain' && car.mode === 'palm')) return 'ki';
   if (car.kind === 'projectile' && car.matter && BLUNT_BODIES.has(car.body)) return 'blunt';
   if (c.has('blade')) return 'slash';
@@ -792,7 +1148,10 @@ function impactSize(c: Ctx): 's' | 'm' | 'l' {
 function impactPhase(c: Ctx, car: Carrier): VfxPiece[] {
   const hit = at('target', ANCHOR_DY.strike);
   const cls = impactClass(c, car);
-  const out: VfxPiece[] = [piece('burst', { cls, size: impactSize(c) }, cls === 'magic' ? c.acc : c.ink, { anchor: hit })];
+  const fist = FIST_SET.has(cls);
+  // A fist blow is never smaller than 'm': the knuckle point of a 16 px jab is lost on a phone.
+  const size = fist && impactSize(c) === 's' ? 'm' : impactSize(c);
+  const out: VfxPiece[] = [piece('burst', { cls, size }, cls === 'magic' ? c.acc : fist ? fistInk(c) : c.ink, { anchor: hit })];
   if (c.imbue) out.push(piece('burst', { cls: 'magic', size: 's' }, c.acc, { anchor: hit }));
   out.push(piece('motes', { kind: c.accLook.hit, size: 1 }, c.acc, { anchor: hit, place: { pattern: 'burst', count: c.weight === 'light' ? 4 : 6 } }));
   if (c.echo) out.push(piece('motes', { kind: lookOf(c.echo).hit, size: 1 }, inkOf(c.echo, c.lut), { anchor: hit, place: { pattern: 'burst', count: 2 }, tags: ['echo'] }));
@@ -854,15 +1213,19 @@ export function statusPieces(kind: StatusKind, source: FamilyId, body: BodySize,
         // Static arcs are loops: they carry the one-shot's life, or they would outlive the pull.
         piece('ring', { r: 20, aspect: 1, thick: 1, style: 'solid', ink: 'mid', anim: 'static', arc: [0, 120], ms: 300 }, ink, { anchor: feet, layer: 'ground', place: { pattern: 'single', count: 3 }, lifeMs: life }),
       ];
-    // v4 statuses borrow existing units until their own land (VFX lane): held = chevrons at the feet, airborne and
-    // lured = speed lines, exposed = stars overhead.
+    // v4 statuses (docs/VFX.md §6.4): each in the family of the skill that applied it.
     case 'root':
-      return [u('chevron', feet, { place: { pattern: 'single', count: 2 } })];
+      // A cuff with teeth closed round the feet.
+      return [u('shackle', feet)];
     case 'launch':
-    case 'lure':
-      return [u('speedline', mid, { place: { pattern: 'single', count: 3 } })];
+      // Airborne: a shrinking ground shadow and chevrons of air rushing up under the lifted body.
+      return [u('updraft', feet)];
     case 'expose':
-      return [u('star', at('body', -BODYTOP[body] - 4), { place: { pattern: 'orbit', count: 2, radius: 7 } })];
+      // A cracked guard plate on the chest.
+      return [u('breach', mid)];
+    case 'lure':
+      // A hook on a line bobbing over the head.
+      return [u('beckon', at('body', -BODYTOP[body] - 2))];
   }
 }
 
@@ -1081,7 +1444,9 @@ const JUICE: Readonly<Record<VfxWeight, VfxJuice>> = {
 };
 
 function juiceOf(c: Ctx): VfxJuice {
-  if (c.skill.shape.kind === 'buff' || c.skill.power <= 0) return { ...JUICE.light };
+  if (c.skill.shape.kind === 'buff' || c.skill.power <= 0 || !landsHits(c.skill.shape)) return { ...JUICE.light };
+  // A zone ticks many small hits: it never stops the victim or shakes the camera.
+  if (c.skill.shape.kind === 'zone') return { ...JUICE.light };
   const j = { ...JUICE[c.weight] };
   if (c.monster) return { ...j, trauma: 0, flash: j.flash === 'none' ? 'none' : 'local' };
   if (c.weight === 'ultimate' && c.skill.shape.kind === 'nova') j.flash = 'screen';
@@ -1106,6 +1471,14 @@ export function deriveVfx(skill: SkillDef, owner: VfxOwner = 'player', lookup?: 
   const recipe = build(skill, owner, lookup ?? authoredLookup);
   if (!lookup) cache.set(key, recipe);
   return recipe;
+}
+
+/**
+ * The recipe of a skill AS CAST, never cached: a class mechanic's boost may have scaled the shape of a skill that
+ * keeps its id (bigger radius, more pulses), and its effect must be as big as its hit test (docs/VFX.md §6.9).
+ */
+export function deriveVfxAsCast(skill: SkillDef, owner: VfxOwner = 'player'): VfxRecipe {
+  return build(skill, owner, authoredLookup);
 }
 
 function build(skill: SkillDef, owner: VfxOwner, lookup: (id: string) => SkillDef | undefined): VfxRecipe {
@@ -1157,6 +1530,7 @@ function build(skill: SkillDef, owner: VfxOwner, lookup: (id: string) => SkillDe
   if (carrier.kind === 'nova') carrier.unit = novaUnit(rootId, accent);
 
   const ph: Phases = {};
+  const extraRiders: RiderFx = {};
   switch (carrier.kind) {
     case 'strike':
       strikePieces(c, carrier.style, ph);
@@ -1179,9 +1553,22 @@ function build(skill: SkillDef, owner: VfxOwner, lookup: (id: string) => SkillDe
     case 'buff':
       buffPieces(c, carrier.motif, ph);
       break;
+    case 'zone':
+      zonePieces(c, ph, extraRiders);
+      break;
+    case 'blink':
+      blinkPieces(c, ph);
+      break;
+    case 'mend':
+      mendPieces(c, ph);
+      break;
+    case 'shield':
+      shieldPieces(c, ph, extraRiders);
+      break;
   }
-  // Only skills that can hit get impact pieces (buffs and zero-power / zero-width dashes like quickstep never do).
-  const hits = carrier.kind !== 'buff' && skill.power > 0 && !(skill.shape.kind === 'dash' && skill.shape.width <= 0);
+  // Only skills that can hit get impact pieces (buffs, zero-power / zero-width dashes like quickstep, mends, plain
+  // shields and plain blinks never do).
+  const hits = carrier.kind !== 'buff' && skill.power > 0 && landsHits(skill.shape) && !(skill.shape.kind === 'dash' && skill.shape.width <= 0);
   if (hits) push(ph, 'impact', ...impactPhase(c, carrier));
   if (c.mods.has('haste') && carrier.kind !== 'dash') push(ph, 'cast', piece('motes', { kind: 'line', size: 2 }, c.ink, { anchor: at('caster', 0), place: { pattern: 'burst', count: 4, spreadDeg: 30 } }));
   if (c.mods.has('expanse') && carrier.kind === 'spin') {
@@ -1199,7 +1586,7 @@ function build(skill: SkillDef, owner: VfxOwner, lookup: (id: string) => SkillDe
     push(ph, 'charge', ...chargePieces(c, carrier));
   }
   const statuses = statusesFor(skill, owner);
-  const riders = riderFx(c, variety);
+  const riders = { ...riderFx(c, variety), ...extraRiders };
 
   let recipe: VfxRecipe = {
     version: VFX_VERSION,

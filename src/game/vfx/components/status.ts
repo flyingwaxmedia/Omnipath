@@ -9,7 +9,7 @@ import { Strip, glint, headingOf, mkKey, plus, seedOf, type TemplateOptions } fr
 import { tongue } from './erupt';
 
 const SCALE: Record<BodySize, number> = { S: 1, M: 1, L: 1.4, W: 1.8 };
-const LOOPS: ReadonlySet<StatusUnit> = new Set<StatusUnit>(['tongue', 'drip', 'puddle', 'chevron', 'star', 'crystal', 'icicle', 'pip']);
+const LOOPS: ReadonlySet<StatusUnit> = new Set<StatusUnit>(['tongue', 'drip', 'puddle', 'chevron', 'star', 'crystal', 'icicle', 'pip', 'shackle', 'updraft', 'breach', 'beckon']);
 
 function keyOf(p: StatusParams, _motif: unknown, opts: TemplateOptions): string {
   return mkKey('status', p.unit === 'pip' ? { unit: p.unit, kind: p.kind } : { unit: p.unit, body: p.body }, null, opts);
@@ -53,6 +53,14 @@ function cellOf(unit: StatusUnit, body: BodySize): [number, number, number, numb
       return c(31, 31, 15, 15);
     case 'pip':
       return [9, 9, 4, 4];
+    case 'shackle':
+      return c(27, 14, 13, 9);
+    case 'updraft':
+      return c(23, 24, 11, 19);
+    case 'breach':
+      return c(15, 16, 7, 8);
+    case 'beckon':
+      return c(13, 16, 6, 12);
   }
 }
 
@@ -288,6 +296,78 @@ export const status: Template<'status'> = {
       case 'pip':
         add(200, (p) => pip(p, prm));
         break;
+      case 'shackle': {
+        // Root: a cuff closed round the feet (near arc bright, far arc dim) with three teeth biting upward, and two
+        // stakes driven into the ground at its ends. It tightens every other frame.
+        for (let f = 0; f < 4; f++)
+          add(133, (p) => {
+            const rx = (10 - (f % 2)) * s,
+              ry = 3.2 * s;
+            p.band(0, 0, rx, ry, 1, (_q, deg) => (deg < 0 ? IDX.R2 : 0));
+            p.band(0, 0, rx, ry, 2, (q, deg) => (deg >= 0 ? (q === 0 ? IDX.R4 : IDX.R3) : 0));
+            for (const [x, h] of [
+              [-5 * s, 4],
+              [0, 5],
+              [5 * s, 4],
+            ]) {
+              const y0 = Math.sqrt(Math.max(0, 1 - (x / rx) ** 2)) * ry;
+              p.line(x, y0 - 1, x, y0 - 1 - h * s, (t) => (t > 0.6 ? (f % 2 ? IDX.R5 : IDX.R4) : IDX.R3));
+            }
+            for (const sx of [-1, 1]) {
+              p.line(sx * rx, -1, sx * rx, 3 * s, IDX.R3);
+              p.dot(sx * rx, -2, IDX.R5);
+            }
+          });
+        break;
+      }
+      case 'updraft': {
+        // Launch: the body is in the air. A ground shadow shrinks under it while chevrons of air rush upward.
+        for (let f = 0; f < 4; f++)
+          add(100, (p) => {
+            p.ellipse(0, 2, (7 - (f % 2)) * s, 2 * s, IDX.R1, 0.5);
+            for (let j = 0; j < 3; j++) {
+              const t = ((f + j * 1.33) % 4) / 4;
+              const y = -2 - t * 15 * s;
+              const w = (5 - t * 2) * s;
+              const ink = t < 0.3 ? IDX.R5 : t < 0.7 ? IDX.R4 : IDX.R3;
+              p.line(-w, y + w * 0.6, 0, y, ink);
+              p.line(w, y + w * 0.6, 0, y, ink);
+            }
+          });
+        break;
+      }
+      case 'breach': {
+        // Expose: a guard plate split by a crack, pulsing; the crack runs top to bottom, a chip falls away.
+        const plate = [-5 * s, -6 * s, 5 * s, -6 * s, 5 * s, 1 * s, 0, 6 * s, -5 * s, 1 * s];
+        for (let f = 0; f < 4; f++)
+          add(150, (p) => {
+            p.poly(plate, (lx, ly, fx, fy) => {
+              const edge = Math.abs(lx) > 5 * s - 1.5 || ly < -6 * s + 1.5 || ly > 1 * s + (5 * s - Math.abs(lx)) - 1.6;
+              if (edge) return lx < 0 ? IDX.R4 : IDX.R3;
+              return p.pass(fx, fy, 0.25) ? IDX.R2 : 0;
+            });
+            // The crack: a zig-zag gap with a hot edge.
+            const pts = [0.5, -6 * s, -1.5 * s, -3 * s, 1.5 * s, -0.5 * s, -1 * s, 2.5 * s, 0, 6 * s];
+            p.polyline(pts, f % 2 ? IDX.R5 : IDX.R4);
+            if (f >= 2) p.dot(3 * s, (f - 1) * 2 * s + 2, IDX.R3);
+          });
+        break;
+      }
+      case 'beckon': {
+        // Lure: a hook on a line, bobbing over the head, its barb glinting.
+        const bob = [0, -1, 0, 1];
+        for (let f = 0; f < 4; f++)
+          add(150, (p) => {
+            const y = bob[f];
+            p.line(0, -10 * s + y, 0, -2 * s + y, IDX.R3);
+            p.band(-2 * s, -2 * s + y, 2.6 * s, 2.6 * s, 1, IDX.R4, 1, [-10, 190]);
+            p.dot(-4 * s - 0.5, -3 * s + y, IDX.R5);
+            p.dot(-4 * s - 0.5, -4 * s + y, IDX.R4);
+            p.dot(0, -10 * s + y - 1, IDX.ACCENT);
+            if (f === 1) glint(p, -4 * s - 0.5, -4 * s + y, 1, IDX.R5, IDX.R4);
+          });
+        break;
+      }
     }
     return S.done(use);
   },

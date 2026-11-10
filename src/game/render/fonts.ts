@@ -14,7 +14,7 @@ import pixelify400 from '@fontsource/pixelify-sans/files/pixelify-sans-latin-400
 import pixelify700 from '@fontsource/pixelify-sans/files/pixelify-sans-latin-700-normal.woff2?inline';
 import tiny5 from '@fontsource/tiny5/files/tiny5-latin-400-normal.woff2?inline';
 import '../../ui/styles/fonts.css';
-import { FONT_OUTLINE, type FontTier, parseColor, tierAtlas, type TierAtlas } from './glyphs';
+import { FONT_OUTLINE, type FontTier, glyphMasks, GLYPH_ROWS, parseColor, pixelSafe, tierAtlas, type TierAtlas } from './glyphs';
 
 export const PIXEL_FONT_KEY = 'omni-pixel';
 
@@ -147,4 +147,98 @@ export function pixelFontSize(scene: Phaser.Scene, key: string): number {
 /** Bakes the in-world bitmap fonts the game uses most (BootScene; the rest are baked on first use). */
 export function bakePixelFont(scene: Phaser.Scene): void {
   for (const [tier, color] of BOOT_COLOURS) pixelFontKey(scene, tier, color);
+}
+
+// ------------------------------------------------------------------ display face for the DOM (v4, SPEC-v4 §11.7)
+
+/** Display-face inks: [top, middle, bottom] rows of each letter (a 3-step ramp, lit from above) + drop shade. */
+export const DISPLAY_INKS = {
+  gold: ['#fff1c0', '#e9c46a', '#b0803a'],
+  parchment: ['#ffffff', '#f2e6c9', '#b9a98a'],
+  danger: ['#ffc8b8', '#e8604e', '#a82c32'],
+  calm: ['#d8f0ff', '#8cc6e6', '#4a92c4'],
+} as const;
+export type DisplayInk = keyof typeof DISPLAY_INKS;
+
+export interface DisplayText {
+  url: string;
+  /** Size in art pixels (multiply by the UI pixel scale for CSS px). */
+  w: number;
+  h: number;
+}
+
+const displayCache = new Map<string, DisplayText>();
+
+/**
+ * Paints `text` (one line) in the game's own drawn display face: the hand-authored glyphs of render/glyphs.ts at 2x,
+ * a 3-step ramp down each letter, a 1 px dark outline and a 1 px drop shade. Returns a PNG data URL and its size in
+ * art px. Cached per (text, ink). Use it for zone names and headers; body text and numbers use var(--ui-font-body).
+ */
+export function displayText(text: string, ink: DisplayInk = 'gold'): DisplayText {
+  const safe = pixelSafe(text).split('\n')[0] ?? '';
+  const id = `${ink}|${safe}`;
+  const hit = displayCache.get(id);
+  if (hit) return hit;
+  const masks = glyphMasks();
+  const S = 2;
+  let w = 2;
+  for (const ch of safe) {
+    const m = masks.get(ch);
+    if (m) w += m.w * S + S;
+  }
+  const h = GLYPH_ROWS * S + 3;
+  const out: DisplayText = { url: '', w, h };
+  if (typeof document === 'undefined') return out;
+  const cv = document.createElement('canvas');
+  cv.width = w;
+  cv.height = h;
+  const c = cv.getContext('2d')!;
+  const cells = new Uint8Array(w * h);
+  let x = 1;
+  for (const ch of safe) {
+    const m = masks.get(ch);
+    if (!m) continue;
+    for (let gy = 0; gy < GLYPH_ROWS; gy++)
+      for (let gx = 0; gx < m.w; gx++)
+        if (m.bits[gy * m.w + gx])
+          for (let sy = 0; sy < S; sy++) for (let sx = 0; sx < S; sx++) cells[(1 + gy * S + sy) * w + x + gx * S + sx] = 1;
+    x += m.w * S + S;
+  }
+  const ramp = DISPLAY_INKS[ink];
+  const at = (X: number, Y: number) => X >= 0 && Y >= 0 && X < w && Y < h && cells[Y * w + X] === 1;
+  for (let Y = 0; Y < h; Y++)
+    for (let X = 0; X < w; X++) {
+      if (at(X, Y)) {
+        const row = (Y - 1) / (GLYPH_ROWS * S);
+        c.fillStyle = !at(X, Y - 1) && row < 0.6 ? ramp[0] : row > 0.62 ? ramp[2] : ramp[1];
+        c.fillRect(X, Y, 1, 1);
+        continue;
+      }
+      let near = false;
+      for (let dy = -1; dy <= 1 && !near; dy++) for (let dx = -1; dx <= 1; dx++) if (at(X + dx, Y + dy)) near = true;
+      if (near || at(X, Y - 2) || at(X - 1, Y - 2)) {
+        c.fillStyle = FONT_OUTLINE;
+        c.fillRect(X, Y, 1, 1);
+      }
+    }
+  out.url = cv.toDataURL('image/png');
+  displayCache.set(id, out);
+  return out;
+}
+
+/**
+ * A DOM element showing `text` in the display face (an image, with the text as its accessible name). `scale` is the
+ * whole-number CSS px per art px (default: the --ui-px custom property, so it follows the HUD's pixel scale).
+ */
+export function displayLabel(text: string, ink: DisplayInk = 'gold', scale?: number): HTMLElement {
+  const t = displayText(text, ink);
+  const el = document.createElement('span');
+  el.className = 'ui-display';
+  el.setAttribute('role', 'img');
+  el.setAttribute('aria-label', text);
+  const unit = scale ? `${scale}px` : 'var(--ui-px, 1px)';
+  el.style.width = `calc(${unit} * ${t.w})`;
+  el.style.height = `calc(${unit} * ${t.h})`;
+  el.style.backgroundImage = `url("${t.url}")`;
+  return el;
 }

@@ -1,7 +1,7 @@
 // HUD HTML builders (HUD lane; docs/CLIENT-v3.md §2, docs/UX-SIMPLE.md). Pure string functions — art comes in as URL
 // callbacks — so tests/hud.test.ts can check them in node. Every player-facing word of the HUD lives here or in
 // ../hud.ts / ../picker.ts, written per docs/UX-SIMPLE.md (plain words, one short line, no internals).
-import type { BarSlotView, PursuitView, SlotPickerView, WornClassView, ZoneView } from '../controller';
+import type { BarSlotView, PursuitView, SlotPickerView, ZoneView } from '../controller';
 import { esc } from '../util';
 import { splitCount } from './layout';
 
@@ -28,10 +28,6 @@ export const HUD_WORDS = {
   sp: 'SP',
   exp: 'EXP',
   empty: 'Empty',
-  explored: 'Explored',
-  warden: 'Warden',
-  wardenDown: 'Warden beaten',
-  noClass: 'No class',
 } as const;
 
 /** Art lookups the builders need (data URLs; '' when missing). */
@@ -49,6 +45,39 @@ export interface SlotOpts {
   className?: string;
   /** The skill has a sudden-insight form to find (shows the spark rune when the window opens). */
   spark?: boolean;
+  /** The skill's element colour ('#rrggbb'): tints the icon's ground. */
+  elementColor?: string;
+  /** The held weapon cannot use this skill: the slot dims and wears the weapon it needs ("Needs a sword — Equip"). */
+  lock?: SlotLock;
+}
+
+/** A slot's weapon lock (src/ui/classinfo.ts weaponLock). */
+export interface SlotLock {
+  /** The weapon to equip: 'sword' | 'dagger' | 'staff' | 'fists'. */
+  need: string;
+  /** "Needs a sword". */
+  line: string;
+  /** One tap can equip it. */
+  owned: boolean;
+}
+
+/** 9 × 9 pixel glyphs of the four weapons (the small icon on a locked slot and on lock lines). */
+const WEAPON_BITS: Record<string, string[]> = {
+  sword: ['.......##', '......###', '.....###.', '....###..', '#..###...', '.####....', '..##.....', '.#.##....', '#...#....'],
+  dagger: ['.........', '......#..', '.....##..', '....###..', '.#.###...', '..###....', '..##.....', '.#..#....', '#........'],
+  staff: ['.....###.', '....#####', '....##.##', '....#####', '...#.###.', '..#......', '.#.......', '#........', '.........'],
+  fists: ['.........', '..#.#.#..', '.#######.', '.#######.', '.#######.', '#.#####..', '.######..', '..####...', '.........'],
+};
+
+/** A weapon's pixel glyph as crisp inline SVG (coloured by CSS `color`); '' for unknown weapons. */
+export function weaponGlyph(weapon: string, cls = ''): string {
+  const rows = WEAPON_BITS[weapon];
+  if (!rows) return '';
+  let d = '';
+  rows.forEach((row, y) => {
+    for (let x = 0; x < row.length; x++) if (row[x] === '#') d += `M${x} ${y}h1v1h-1z`;
+  });
+  return `<svg class="wi ${cls}" viewBox="0 0 9 9" shape-rendering="crispEdges" aria-hidden="true"><path fill="currentColor" d="${d}"/></svg>`;
 }
 
 const attr = (s: string): string => esc(s);
@@ -65,7 +94,8 @@ export function digits(html: string): string {
 export function slotHtml(v: BarSlotView, art: HudArt, o: SlotOpts): string {
   const cls = v.kind === 'class';
   const n = v.index + 1;
-  const style = cls && o.classColor ? ` style="--cc:${attr(o.classColor)}"` : '';
+  const vars = [cls && o.classColor ? `--cc:${attr(o.classColor)}` : '', v.skillId && o.elementColor ? `--el:${attr(o.elementColor)}` : ''].filter(Boolean).join(';');
+  const style = vars ? ` style="${vars}"` : '';
   const key = `<kbd class="key" aria-hidden="true">${attr(v.key)}</kbd>`;
   if (!v.skillId) {
     const label = cls ? `Class slot ${n}${o.className ? ` (${o.className})` : ''}` : `Empty slot ${n}: tap to pick a skill`;
@@ -85,58 +115,48 @@ export function slotHtml(v: BarSlotView, art: HudArt, o: SlotOpts): string {
       ? `<span class="rk${maxed ? ' max' : ''}" aria-hidden="true">${maxed ? '★' : rank}</span>`
       : '';
   const pip = v.element ? art.pip(v.element) : '';
-  const name = v.name ?? '';
-  const label = `${name}${maxed ? ', mastered' : max > 0 ? `, rank ${rank}` : ''}${cls ? ' (class slot)' : ''}`;
-  const classes = ['slot', cls ? 'by-class' : 'own', o.auto ? 'auto' : '', maxed ? 'maxed' : '', ready ? 'ready' : ''].filter(Boolean).join(' ');
-  return `<button class="${classes}" data-slot="${v.index}" data-skill="${attr(v.skillId)}"${style} aria-label="${attr(label)}">
-<img class="ico" src="${attr(art.skill(v.skillId))}" alt="" draggable="false">${pip ? `<img class="pip" src="${attr(pip)}" alt="" draggable="false">` : ''}${
+  // In the other stance the slot casts another skill: it shows that one.
+  const name = v.castsAs?.name ?? v.name ?? '';
+  const iconId = v.castsAs?.skillId ?? v.skillId;
+  const lock = o.lock ?? (v.lock ? { need: v.lock.weapon, line: v.lock.line, owned: v.lock.owned } : undefined);
+  // A class skill its meter has not opened yet ("Needs more Vow."): dimmed, the line is its name for screen readers.
+  const waiting = !lock && v.waiting ? v.waiting : '';
+  const lockText = lock ? `${lock.line}${lock.owned ? ' — Equip' : ''}` : '';
+  const label = lock ? `${name}: ${lockText}` : waiting ? `${name}: ${waiting}` : `${name}${maxed ? ', mastered' : max > 0 ? `, rank ${rank}` : ''}${cls ? ' (class slot)' : ''}`;
+  const classes = ['slot', cls ? 'by-class' : 'own', o.auto ? 'auto' : '', maxed ? 'maxed' : '', ready ? 'ready' : '', o.elementColor ? 'tint' : '', lock ? 'wlocked' : '', waiting ? 'waiting' : '', v.boosted && !lock && !waiting ? 'boost' : '']
+    .filter(Boolean)
+    .join(' ');
+  const lockHtml = lock ? `<span class="wlock${lock.owned ? ' can' : ''}" data-need="${attr(lock.need)}" title="${attr(lockText)}">${weaponGlyph(lock.need)}</span>` : '';
+  return `<button class="${classes}" data-slot="${v.index}" data-skill="${attr(v.skillId)}"${lock ? ` data-need="${attr(lock.need)}"` : ''}${style} aria-label="${attr(label)}">
+<img class="ico" src="${attr(art.skill(iconId))}" alt="" draggable="false">${lockHtml}${pip ? `<img class="pip" src="${attr(pip)}" alt="" draggable="false">` : ''}${
     cls && v.classId ? `<img class="emb" src="${attr(art.cls(v.classId))}" alt="" draggable="false">` : '<span class="edit" aria-hidden="true"></span>'
   }${badge}${o.spark ? `<span class="spk" data-w="none" aria-hidden="true">${SPARK_RUNE}</span>` : ''}<span class="cd" aria-hidden="true"><b></b></span><span class="xp" aria-hidden="true"><i></i></span><span class="ring" aria-hidden="true"></span>${key}</button>`;
-}
-
-/** Small tabs above the bar naming the two groups (class slots / your slots) — landscape layouts only. */
-export function barTabsHtml(classCount: number, total: number, worn: WornClassView | null, classIcon: string): string {
-  if (!worn || classCount <= 0 || classCount >= total) return '';
-  return `<span class="grp by-class" style="--cc:${attr(worn.color)};--n:${classCount}">${classIcon ? `<img src="${attr(classIcon)}" alt="" draggable="false">` : ''}${esc(worn.name)}</span><span class="grp own" style="--n:${total - classCount}">Yours</span>`;
 }
 
 const TAG_CLASS: Record<ZoneView['tag'], string> = { Safe: 'safe', Hunting: 'hunt', Dungeon: 'dungeon', Warden: 'warden' };
 
 /** Zone plate: map name, safety pill, level band. The name sits in `b` (the playtest checks `.zone-banner b`). */
-export function zonePlateHtml(z: Pick<ZoneView, 'name' | 'tag'> & { band?: string }): string {
-  return `<b class="zn">${esc(z.name)}</b><em class="zt ${TAG_CLASS[z.tag] ?? 'safe'}">${esc(z.tag)}</em>${
+export function zonePlateHtml(z: Pick<ZoneView, 'name' | 'tag'> & { band?: string }, title?: { url: string; w: number; h: number } | null): string {
+  // On arrival the name is drawn in the display face (an image: `title`); the small tag it shrinks to is plain text.
+  const big = title?.url ? `<img class="zn-d" src="${attr(title.url)}" style="--w:${title.w};--h:${title.h}" alt="" draggable="false">` : '';
+  return `${big}<b class="zn">${esc(z.name)}</b><em class="zt ${TAG_CLASS[z.tag] ?? 'safe'}">${esc(z.tag)}</em>${
     z.band ? `<span class="zb">${digits(esc(z.band))}</span>` : ''
   }`;
 }
 
-/** The slim strip under the zone plate: explored % · element sources · warden. */
-export function zoneStripHtml(z: ZoneView, elIcon: (el: string) => string): string {
-  const parts: string[] = [];
-  parts.push(`<span class="zx">${HUD_WORDS.explored} <span class="num">${Math.max(0, Math.min(100, Math.round(z.explored)))}%</span></span>`);
-  if (z.sources.length)
-    parts.push(
-      `<span class="zs">${z.sources
-        .map((e) => {
-          const u = elIcon(e);
-          return u ? `<img src="${attr(u)}" alt="${attr(e)}" title="${attr(e)}" draggable="false">` : '';
-        })
-        .join('')}</span>`,
-    );
-  if (z.warden) parts.push(`<span class="zw ${z.warden}">${z.warden === 'alive' ? HUD_WORDS.warden : HUD_WORDS.wardenDown}</span>`);
-  return parts.join('<i class="dot" aria-hidden="true"></i>');
-}
-
-/** Stat strip: ATK · MATK · DEF and the worn class with its Class Level (bar in the class colour). */
-export function statsHtml(st: { atk: number; matk: number; def: number }, worn: WornClassView | null, classIcon: string, showClass: boolean): string {
-  const n = (v: number) => Math.round(v);
-  const stats = `<span class="st"><small>ATK</small><b>${n(st.atk)}</b></span><span class="st"><small>MATK</small><b>${n(st.matk)}</b></span><span class="st"><small>DEF</small><b>${n(st.def)}</b></span>`;
-  if (!showClass) return stats;
-  if (!worn) return `${stats}<span class="cl none">${HUD_WORDS.noClass}</span>`;
-  const pct = Math.round(Math.max(0, Math.min(1, worn.progress)) * 100);
-  const max = worn.level >= worn.maxLevel;
-  return `${stats}<span class="cl" style="--cc:${attr(worn.color)}" title="Class Level ${worn.level}${max ? ' (max)' : ''}">${
-    classIcon ? `<img src="${attr(classIcon)}" alt="" draggable="false">` : ''
-  }<span class="cn">${esc(worn.name)}</span><b>Lv <span class="num">${worn.level}</span>${max ? '★' : ''}</b><u><i style="width:${max ? 100 : pct}%"></i></u></span>`;
+/**
+ * The collapsed tracker (docs/SPEC-v4.md §11.7): ONE line on a soft dark strip — the first pursuit's next step and
+ * "+N" for the rest. Tap opens the rows.
+ */
+export function pursuitLineHtml(list: readonly PursuitView[], mark?: QuestMarkArt | null): string {
+  const p = list[0];
+  if (!p) return '';
+  const { text, count } = splitCount(p.line);
+  const ico = p.kind === 'quest' ? questMarkHtml(!!p.ready, mark) : '<i class="g g-quest" aria-hidden="true"></i>';
+  const rest = list.length - 1;
+  return `<span class="pz-ico">${ico}</span><span class="pz-one${p.ready ? ' ready' : ''}">${digits(esc(text))}${count ? ` <em class="num">${esc(count)}</em>` : ''}</span>${
+    rest > 0 ? `<em class="pz-rest num">+${rest}</em>` : ''
+  }`;
 }
 
 /** A quest marker as the NPCs wear it (pixel art data URL + its size in art px). */

@@ -30,7 +30,7 @@ describe('friendly names', () => {
     expect(plural(3, 'class', 'classes')).toBe('3 classes');
     expect(more(1, 'fire skill')).toBe('1 more fire skill');
     expect(classLevel(4)).toBe('Class Level 4');
-    expect(classLevel(10, 10)).toBe('Class Level 10 · max');
+    expect(classLevel(10, 10)).toBe('Class Level 10 · Mastered');
     expect(fraction(9, 8)).toBe('8/8');
     expect(oneLine('Spin and slash. Then more words.')).toBe('Spin and slash.');
     expect(plainText('<b>Flame</b>  Spin')).toBe('Flame Spin');

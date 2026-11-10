@@ -59,6 +59,15 @@ export class Player implements TextAnchor {
   dots: PlayerDot[] = [];
   /** Status markers for the head icons: kind -> until. */
   marks: Partial<Record<StatusKind, number>> = {};
+  /** v4 Held (root): cannot walk until this scene time (skills still work). */
+  rootUntil = 0;
+  /** v4 Airborne (launch): the landing blow waiting at `launchUntil` (0 = none). */
+  launchUntil = 0;
+  launchDmg = 0;
+  launchFrom = '';
+  /** v4 Lured: walks toward `lureTo` until this scene time (taps do not steer meanwhile). */
+  lureUntil = 0;
+  lureTo: { x: number; y: number } | null = null;
   /** Knockback / pull velocity (px/s), decays quickly. */
   pushVx = 0;
   pushVy = 0;
@@ -220,6 +229,9 @@ export class Player implements TextAnchor {
     this.dots = [];
     this.marks = {};
     this.stunUntil = this.frozenUntil = this.slowUntil = 0;
+    this.rootUntil = this.launchUntil = this.lureUntil = 0;
+    this.launchDmg = 0;
+    this.lureTo = null;
     this.pushVx = this.pushVy = 0;
     this.slowMult = 1;
   }
@@ -231,6 +243,9 @@ export class Player implements TextAnchor {
     this.stunUntil += ms;
     this.frozenUntil += ms;
     this.ccImmuneUntil += ms;
+    this.rootUntil += ms;
+    this.launchUntil += ms;
+    this.lureUntil += ms;
     this.atkUntil += ms;
     this.holdUntil += ms;
     for (const d of this.dots) {

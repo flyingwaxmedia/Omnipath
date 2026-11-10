@@ -10,7 +10,28 @@ import { CLASSES, CLASS_PASSIVES } from '../src/data/classes';
 import { NPCS } from '../src/data/npcs';
 import { QUESTS, QUEST_LORE } from '../src/data/quests';
 import { passiveLine } from '../src/ui/panels/skills';
-import { effectLine, objectiveWords } from '../src/ui/words';
+import { MATERIAL_IDS, RARITIES } from '../src/core/types';
+import { GAME_DATA, createRegistry } from '../src/data';
+import { WEAPONS } from '../src/data/weapons';
+import { classRewards } from '../src/ui/classinfo';
+import { HUD_WORDS } from '../src/ui/hud/html';
+import { mechanicHint } from '../src/ui/hud/mechanic';
+import {
+  FRIENDLY,
+  MATERIAL_WORD,
+  RARITY_PIPS,
+  RARITY_WORD,
+  STATUS_WORD,
+  WEAPON_WORD,
+  chanceWord,
+  classKindLine,
+  effectLine,
+  lockLine,
+  objectiveWords,
+  rarityHtml,
+  weaponLevelText,
+  weaponName,
+} from '../src/ui/words';
 
 /** Internal term → what the player sees instead (UX-SIMPLE §1.2 / §1.8). */
 const INTERNAL: [RegExp, string][] = [
@@ -153,5 +174,107 @@ describe('objectiveWords', () => {
     expect(objectiveWords('Witness Boulder Roll 1/3 ✓')).toBe('See Boulder Roll 1/3 ✓');
     expect(objectiveWords('Cast dash at Greenmeadow 0/3')).toBe('Dash in Greenmeadow 0/3');
     expect(objectiveWords('Use heavy skills 2/20')).toBe('Use heavy skills 2/20');
+  });
+});
+
+// ---------------------------------------------------------------- v4 (docs/SPEC-v4.md §12)
+// The left column of the §12 table never reaches a player: weapons are "Rod" and "Bare Hands", a class shows its
+// rarity word, its mechanic by its own name and "Class skills" — never grip tags, kits, power sources or perks.
+const V4_INTERNAL: [RegExp, string][] = [
+  [/\bstaffs?\b/i, 'Rod'],
+  [/\bfists weapon\b|\bunarmed\b/i, 'Bare Hands'],
+  [/\bgrip\b|weaponOk|weapon-bound|\bfree skill/i, '"Needs a sword — Equip"'],
+  [/\bkits?\b|classOf/i, 'Class skills'],
+  [/\brarity\b/i, 'the word: Common … Mythic'],
+  [/power source|\bgrid\b/i, '"Sword · Fire"'],
+  [/signature mechanic|\bmechanics?\b|\bgauge\b/i, "the mechanic's own name"],
+  [/\bperks?\b|perk point|class tree|\bnodes?\b/i, 'Class Levels give fixed rewards'],
+  [/\bpity\b|drop chance|autoRule|\bhpCost\b/i, 'never shown'],
+  [/\bpassives?\b/i, 'Gift / Keepsake'],
+];
+
+function v4Words(texts: Text[]): string[] {
+  const bad: string[] = [];
+  for (const { where, text } of texts) for (const [re, say] of V4_INTERNAL) if (re.test(text)) bad.push(`${where}: "${text}" (say: ${say})`);
+  return bad;
+}
+
+describe('v4 plain words (SPEC-v4 §12)', () => {
+  const reg = createRegistry();
+
+  it('weapons read "Rod" and "Bare Hands"; the lock line is "Needs a sword — Equip"', () => {
+    expect(WEAPON_WORD).toEqual({ sword: 'Sword', dagger: 'Dagger', staff: 'Rod', fists: 'Bare Hands' });
+    for (const w of Object.values(WEAPONS)) expect(weaponName(w.name)).not.toMatch(/staff/i);
+    expect(weaponName('Oak Staff')).toBe('Oak Rod');
+    expect(lockLine('Needs a sword', true)).toBe('Needs a sword — Equip');
+    expect(lockLine('Needs a rod', false)).toBe('Needs a rod');
+    expect(weaponLevelText('sword', 2)).toBe('Sharpened ★★☆☆☆');
+    expect(weaponLevelText('fists', 2)).toBe('Hand Wraps ★★☆☆☆');
+  });
+
+  it('rarity is the word, a colour class and 1 – 6 pips', () => {
+    expect(RARITIES.map((r) => RARITY_WORD[r])).toEqual(['Common', 'Uncommon', 'Rare', 'Epic', 'Legendary', 'Mythic']);
+    expect(RARITIES.map((r) => RARITY_PIPS[r])).toEqual([1, 2, 3, 4, 5, 6]);
+    const html = rarityHtml('epic');
+    expect(html).toContain('rar-epic');
+    expect(html).toContain('Epic');
+    expect(html.match(/<u><\/u>/g)).toHaveLength(4);
+  });
+
+  it('class cards say "Sword · Fire", never the grid or the power source', () => {
+    const el = (id: string) => ({ fire: 'Fire' })[id];
+    expect(classKindLine('sword', 'fire', el)).toBe('Sword · Fire');
+    expect(classKindLine('staff', 'physical', el)).toBe('Rod');
+    expect(classKindLine('fists', 'none', el)).toBe('Bare Hands');
+    expect(classKindLine('staff', 'prism', el)).toBe('Rod · Every element');
+    expect(classKindLine('any', undefined, el)).toBe('Any weapon');
+    expect(classKindLine(undefined, undefined, el)).toBe('');
+  });
+
+  it('new statuses, materials and drop chances are words', () => {
+    expect(STATUS_WORD).toMatchObject({ root: 'Held', launch: 'Airborne', expose: 'Exposed', lure: 'Lured' });
+    expect(MATERIAL_IDS.map((m) => MATERIAL_WORD[m])).toEqual(['Fangs', 'Motes', 'Cores', 'Sap', 'Dust', 'Sigils']);
+    for (const p of [0.9, 0.5, 0.3, 0.15, 0.02]) expect(chanceWord(p)).not.toMatch(/\d+%|\./);
+    expect(chanceWord(0.5)).toBe('about 1 in 2');
+  });
+
+  it('the UI\'s own v4 words carry no internals', () => {
+    const texts: Text[] = [
+      ...Object.entries(FRIENDLY).map(([k, text]) => ({ where: `FRIENDLY.${k}`, text })),
+      ...Object.entries(HUD_WORDS).map(([k, text]) => ({ where: `HUD_WORDS.${k}`, text })),
+      ...(['gauge', 'combo', 'marks', 'stance', 'zone'] as const).map((kind) => ({
+        where: `mechanicHint.${kind}`,
+        text: mechanicHint({ kind, name: 'Heat', widget: 'bar', value: 0, max: 5, ready: false }).replace(/<[^>]+>/g, ''),
+      })),
+      ...reg.classes.flatMap((c) => classRewards(reg, c).map((r) => ({ where: `${c.id}.reward.${r.level}`, text: r.text }))),
+    ];
+    expect(v4Words(texts)).toEqual([]);
+    expect(Object.values(FRIENDLY).join(' ')).not.toMatch(/perk/i);
+  });
+
+  it('class names, lines and hints, class skills and weapons carry no v4 internals', () => {
+    const texts: Text[] = [
+      ...classTexts(),
+      ...Object.values(WEAPONS).flatMap((w) => [{ where: `${w.id}.blurb`, text: w.blurb }]),
+      ...GAME_DATA.skills.filter((s) => s.classOf).flatMap((s) => [
+        { where: `${s.id}.name`, text: s.name },
+        { where: `${s.id}.desc`, text: s.desc },
+      ]),
+      ...CLASSES.flatMap((c) => (c.mechanicUpgrade ? [{ where: `${c.id}.mechanicUpgrade`, text: c.mechanicUpgrade.line }] : [])),
+    ];
+    expect(v4Words(texts)).toEqual([]);
+  });
+
+  it('class lines and hints are one short line (rule 1: under 60 characters) for the classes rebuilt for v4', () => {
+    const long = CLASSES.filter((c) => c.kit && c.mechanic && c.rarity).flatMap((c) =>
+      (['desc', 'hint'] as const).filter((k) => c[k].length > 60).map((k) => `${c.id}.${k} (${c[k].length})`),
+    );
+    expect(long).toEqual([]);
+  });
+
+  it('the v4 lint catches every listed term', () => {
+    const samples = ['Oak Staff', 'a grip tag', 'its kit', 'Rarity: epic', 'power source', 'signature mechanic', 'a perk point', 'the pity counter', 'class passive'];
+    expect(samples.map((text) => v4Words([{ where: 'x', text }]).length > 0)).toEqual(samples.map(() => true));
+    expect(v4Words([{ where: 'x', text: 'Needs a rod. Its Gift is a Keepsake once Mastered.' }])).toEqual([]);
   });
 });

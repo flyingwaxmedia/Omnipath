@@ -191,7 +191,9 @@ type Prop =
   | 'compass'
   | 'kite'
   | 'pickaxe'
-  | 'bow';
+  | 'bow'
+  /** Bare Hands: no weapon, cloth wraps on both fists. */
+  | 'wraps';
 
 interface Look {
   skin: string;
@@ -275,7 +277,7 @@ interface Pose {
   armBehind?: boolean;
   /** How far the hand slides up a staff toward its head (px). */
   grip?: number;
-  fx?: 'slash' | 'stab' | 'cast' | 'charge' | 'glint';
+  fx?: 'slash' | 'stab' | 'cast' | 'charge' | 'glint' | 'punch';
   /** Cloth/prop phase (0..3). */
   t: number;
 }
@@ -1234,6 +1236,14 @@ function paintArm(c: Ctx, R: Rig, front: boolean): void {
   if (front) px(c, sh[0] - 1, sh[1] - 1, sl[3]);
   cap(c, hd[0], hd[1], hd[0], hd[1], 1, front ? sk[2] : sk[1]);
   if (front) px(c, hd[0] - 1, hd[1] - 1, sk[3]);
+  if (L.prop === 'wraps') {
+    // Bare Hands: the fist is bound in cloth (lit knuckles, a shaded underside) with a red tie at the wrist
+    cap(c, hd[0], hd[1], hd[0], hd[1], 1, front ? '#e6dcc0' : '#b8a684');
+    px(c, hd[0] - 1, hd[1] - 1, front ? '#fbf6e6' : '#d6c8a4');
+    px(c, hd[0] + 1, hd[1] + 1, front ? '#b8a684' : '#8a7a5a');
+    px(c, hd[0], hd[1], front ? '#cfc4a6' : '#a09478');
+    px(c, Math.round(wx), Math.round(wy), front ? '#b8323a' : '#7a1f26');
+  }
   if (front && L.pauldron) {
     const p = ramp(L.pauldron);
     const pal = { l: p[3], p: p[2], P: p[1], d: p[0], s: STEEL[3], S: STEEL[1], c: '#e8fbff', C: '#7fd6ff', K: '#3f8fd0' };
@@ -1506,7 +1516,7 @@ function paintProp(c: Ctx, R: Rig, over: boolean): void {
 
 /** Unoutlined effects painted before the body (motion streaks trail behind the character). */
 function paintFxBack(c: Ctx, R: Rig): void {
-  if (R.P.fx !== 'stab') return;
+  if (R.P.fx !== 'stab' && R.P.fx !== 'punch') return;
   const y = R.hdF[1];
   for (const [dy, x0, x1] of [[-4, 2, 11], [-1, 0, 9], [2, 3, 12]] as const)
     for (let x = x0; x <= x1; x++) px(c, x, y + dy, x > x1 - 3 ? '#ffffff' : '#d8eef6');
@@ -1596,6 +1606,12 @@ function paintFx(c: Ctx, R: Rig): void {
     px(c, tx + 3, ty - 2, '#d8eef6');
     px(c, tx + 3, ty + 2, '#d8eef6');
   }
+  if (P.fx === 'punch') {
+    // knuckle flash: a small four-point burst just past the fist
+    const fx0 = hx + 3;
+    for (const [dx, dy, col] of [[0, 0, '#ffffff'], [1, 0, '#ffffff'], [2, 0, '#fff0a8'], [0, -1, '#fff0a8'], [0, 1, '#fff0a8'], [1, -2, '#ffc04a'], [1, 2, '#ffc04a'], [3, -1, '#ffc04a'], [3, 1, '#ffc04a']] as const)
+      if (fx0 + dx < W) px(c, fx0 + dx, hy + dy, col);
+  }
   if (P.fx === 'glint') {
     const [gx, gy] = axisPt(hx, hy, P.ang ?? -1.15, 13);
     px(c, gx, gy, '#ffffff');
@@ -1650,7 +1666,7 @@ function charTex(scene: Phaser.Scene, key: string, L: Look, P: Pose): void {
 
 // ---------------------------------------------------------------- frame sets
 
-type Weapon = 'sword' | 'dagger' | 'staff';
+type Weapon = 'sword' | 'dagger' | 'staff' | 'fists';
 
 const IDLE: Pose[] = [
   { ...REST, t: 0 },
@@ -1665,7 +1681,29 @@ const WALK: Pose[] = [
   { ...REST, bob: -1, backFoot: [0, 0], frontFoot: [0, 2], backHand: [0, 0], frontHand: [0, -1], t: 3 },
 ];
 
+/** Bare Hands stands in a guard: both fists up, the lead fist forward; the walk keeps the guard and bobs it. */
+const GUARD_F: [number, number] = [2, -6];
+const GUARD_B: [number, number] = [5, -5];
+const FIST_IDLE: Pose[] = [
+  { ...REST, lean: 1, backFoot: [-1, 0], frontFoot: [1, 0], frontHand: GUARD_F, backHand: GUARD_B, t: 0 },
+  { ...REST, lean: 1, bob: 1, backFoot: [-1, 0], frontFoot: [1, 0], frontHand: [GUARD_F[0], GUARD_F[1] + 1], backHand: [GUARD_B[0], GUARD_B[1]], t: 1 },
+];
+const FIST_WALK: Pose[] = WALK.map((p, i) => ({
+  ...p,
+  lean: 1,
+  frontHand: [GUARD_F[0] + (i === 0 ? -1 : i === 2 ? 1 : 0), GUARD_F[1] + (i & 1)] as [number, number],
+  backHand: [GUARD_B[0] + (i === 0 ? 1 : i === 2 ? -1 : 0), GUARD_B[1] + ((i + 1) & 1)] as [number, number],
+}));
+const idleOf = (w: Weapon): Pose[] => (w === 'fists' ? FIST_IDLE : IDLE);
+const walkOf = (w: Weapon): Pose[] => (w === 'fists' ? FIST_WALK : WALK);
+
 const ATTACK: Record<Weapon, Pose[]> = {
+  fists: [
+    // wind-up: weight back, the lead fist cocked at the ribs, the rear fist guarding the chin
+    { ...REST, lean: -1, bob: 1, backFoot: [-2, 0], frontFoot: [2, 0], frontHand: [-4, -4], backHand: [6, -7], t: 2 },
+    // straight punch: the whole body behind it, speed lines and a knuckle flash
+    { ...REST, lean: 3, bob: 1, backFoot: [-4, 0], frontFoot: [5, 0], frontHand: [8, -6], backHand: [0, -3], fx: 'punch', t: 0 },
+  ],
   sword: [
     // wind-up: weight back, blade cocked over the shoulder
     { ...REST, lean: -1, bob: 1, backFoot: [-2, 0], frontFoot: [3, 0], frontHand: [-10, -11], backHand: [3, -2], ang: -2.2, behind: true, armBehind: true, t: 2 },
@@ -1687,6 +1725,22 @@ const ATTACK: Record<Weapon, Pose[]> = {
 };
 
 const PLAYERS: Record<Weapon, Look> = {
+  // Bare Hands: a road-worn brawler — bare arms, a short ochre tunic over dark trousers, a red headband, wrapped fists.
+  fists: {
+    skin: '#e9b98c',
+    hair: '#3a2a22',
+    style: 'tousled',
+    top: '#c98a3c',
+    sleeves: '#e9b98c',
+    legs: '#3f3a52',
+    boots: '#5c3d22',
+    belt: '#b8323a',
+    sash: '#7a4a26',
+    hat: 'bandana',
+    hatColor: '#b8323a',
+    broad: true,
+    prop: 'wraps',
+  },
   sword: {
     skin: '#f0c49a',
     hair: '#7a4a26',
@@ -1951,7 +2005,7 @@ export interface CharAnimDef {
   repeat: number;
 }
 
-const WEAPONS: Weapon[] = ['sword', 'dagger', 'staff'];
+const WEAPONS: Weapon[] = ['sword', 'dagger', 'staff', 'fists'];
 const NPC_LOOKS = Object.keys(NPCS);
 
 /**
@@ -2086,7 +2140,8 @@ export function drawPlayerLookFrame(scene: Phaser.Scene, base: string, weapon: W
     L = outfitLook(PLAYERS[weapon], outfit);
     outfitLooks.set(base, L);
   }
-  const pose = i === 0 ? IDLE[0] : i === 1 ? (weapon === 'sword' ? { ...IDLE[1], fx: 'glint' as const } : IDLE[1]) : i < 6 ? WALK[i - 2] : ATTACK[weapon][i - 6];
+  const idle = idleOf(weapon);
+  const pose = i === 0 ? idle[0] : i === 1 ? (weapon === 'sword' ? { ...idle[1], fx: 'glint' as const } : idle[1]) : i < 6 ? walkOf(weapon)[i - 2] : ATTACK[weapon][i - 6];
   charTex(scene, key, L, pose);
 }
 
@@ -2094,9 +2149,10 @@ export function drawPlayerLookFrame(scene: Phaser.Scene, base: string, weapon: W
 export function drawCharacters(scene: Phaser.Scene): void {
   for (const w of WEAPONS) {
     const L = PLAYERS[w];
-    charTex(scene, `player_${w}`, L, IDLE[0]);
-    charTex(scene, `player_${w}_idle_1`, L, w === 'sword' ? { ...IDLE[1], fx: 'glint' } : IDLE[1]);
-    WALK.forEach((p, i) => charTex(scene, `player_${w}_walk_${i}`, L, p));
+    const idle = idleOf(w);
+    charTex(scene, `player_${w}`, L, idle[0]);
+    charTex(scene, `player_${w}_idle_1`, L, w === 'sword' ? { ...idle[1], fx: 'glint' } : idle[1]);
+    walkOf(w).forEach((p, i) => charTex(scene, `player_${w}_walk_${i}`, L, p));
     ATTACK[w].forEach((p, i) => charTex(scene, `player_${w}_atk_${i}`, L, p));
   }
   for (const n of NPC_LOOKS) {

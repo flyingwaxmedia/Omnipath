@@ -14,16 +14,17 @@
 // handed to the grade's soft flash channel while the grade runs. Props are flipped and jittered per tile.
 import Phaser from 'phaser';
 import { STRUCTURE_FOOTPRINT } from '../../core/world/compile';
-import type { CompiledMap, MapDef, PropKind } from '../../core/world/types';
-import { PROP_VARIANTS } from '../art/world';
+import type { CompiledMap, MapDef, PropInst, PropKind } from '../../core/world/types';
+import { PROP_VARIANTS, propKey } from '../art/world';
 import { TILE } from '../world/runtime';
 import { cellHash } from './autotile';
 import { CameraRig, type RigScene } from './camera';
 import { currentScale } from './config';
 import { DEPTH, Y_BIAS, ySort } from './depths';
-import { type DressingItem, placeDressing, planDressing } from './dressing';
+import { DRESSING_DECAL_DEPTH, type DressingItem, placeDressing, planDressing } from './dressing';
 import { Grade, gradeEnabled, gradeSupported, onGradeChange } from './grade';
-import { type BakedGround, bakeGround } from './ground';
+import { type BakedGround, FOREST_TINTS, bakeGround } from './ground';
+import { ActorShadows, type Caster, type ShadowActor, shadowAlphaFor, shearFor } from './shadows';
 import { LightMap, lightMapSupported, lightProfile, lightingEnabled, onLightingChange, staticLights } from './lighting';
 import { clampScroll, cssToArt } from './pixelscale';
 import { vfxSettings } from '../vfx/runtime/settings';
@@ -99,7 +100,51 @@ export const PROP_JY_DOWN = 2;
  * two-tone pine would be lit from the right next to its unflipped neighbour. Organic props (trees, bushes, dead trees,
  * mushrooms, willows, reeds) keep the flip: their scattered cluster highlights read as another plant, not another sun.
  */
-export const PROP_NO_FLIP: ReadonlySet<PropKind> = new Set<PropKind>(['rock', 'boulder', 'crystal', 'stalagmite', 'tombstone', 'basalt_spire', 'pine', 'frostpine']);
+export const PROP_NO_FLIP: ReadonlySet<PropKind> = new Set<PropKind>(['rock', 'boulder', 'crystal', 'stalagmite', 'tombstone', 'basalt_spire', 'pine', 'frostpine', 'menhir']);
+
+/** Alpha of a tall prop or building while the hero stands behind it (SPEC-v4 §11.2 B / G), and the step per frame. */
+export const BEHIND_ALPHA = 0.4;
+const FADE_STEP = 0.12;
+/** The lowest part of a tall sprite never hides the hero (the trunk, a wall's foot): px above its foot. */
+const FADE_FOOT = 22;
+
+/** How one compiled prop is drawn: texture, foot position (px), mirror and multiply tint. Pure per map seed. */
+export interface PropView {
+  key: string;
+  x: number;
+  y: number;
+  flip: boolean;
+  tint: number;
+  /** L, XL or a canopy mass: fades while the hero stands behind it. */
+  tall: boolean;
+}
+
+/**
+ * Resolves a compiled prop to what the stage draws (SPEC-v4 §11.2 B, E). Tiered props carry their own look, offset
+ * and mirror from the compiler; plain one-tile props keep the per-tile look, jitter and coin flip of propPlacement().
+ * `has` tells whether a texture exists (a missing tier or look falls back to a drawn one).
+ */
+export function propView(pr: PropInst, seed: number, has: (key: string) => boolean): PropView | null {
+  const tier = pr.tier ?? 'M';
+  const tint = FOREST_TINTS[Math.min(FOREST_TINTS.length - 1, pr.shade ?? 0)];
+  const noFlip = PROP_NO_FLIP.has(pr.kind);
+  if (pr.mass) {
+    const key = [`${pr.kind}_mass${pr.look ? `~${pr.look}` : ''}`, `${pr.kind}_mass`].find(has);
+    if (!key) return null;
+    return { key, x: pr.tx * TILE + TILE / 2 + (pr.ox ?? 0), y: (pr.ty + 1) * TILE + (pr.oy ?? 0), flip: !noFlip && !!pr.flip, tint, tall: true };
+  }
+  if (tier === 'M') {
+    const looks = [pr.kind, ...(PROP_VARIANTS[pr.kind] ?? [])].filter(has);
+    if (!looks.length) return null;
+    const at = propPlacement(pr.tx, pr.ty, seed, pr.kind, looks.length);
+    const key = pr.look !== undefined ? looks[pr.look % looks.length] : looks[at.look];
+    if (pr.ox === undefined && pr.oy === undefined) return { key, x: at.x, y: at.y, flip: pr.flip ?? at.flip, tint, tall: false };
+    return { key, x: pr.tx * TILE + TILE / 2 + (pr.ox ?? 0), y: (pr.ty + 1) * TILE + (pr.oy ?? 0), flip: !noFlip && (pr.flip ?? at.flip), tint, tall: false };
+  }
+  const key = [propKey(pr.kind, tier, pr.look ?? 0), propKey(pr.kind, tier, 0), pr.kind].find(has);
+  if (!key) return null;
+  return { key, x: pr.tx * TILE + TILE / 2 + (pr.ox ?? 0), y: (pr.ty + 1) * TILE + (pr.oy ?? 0), flip: !noFlip && pr.kind !== 'rock' && !!pr.flip, tint, tall: tier !== 'S' };
+}
 
 /**
  * Where a map prop stands and whether it is mirrored (pure, deterministic per tile and map seed): a look variant,
@@ -157,6 +202,8 @@ class Culler {
     rows: number,
     /** How far above its base (px) an image may reach (tall trees, banners). */
     private readonly reach: number,
+    /** How far to either side of its foot (px) an image may reach (half the widest sprite). */
+    private readonly side: number = TILE * 1.5,
   ) {
     this.chunks = Array.from({ length: cols * rows }, () => []);
   }
@@ -175,8 +222,8 @@ class Culler {
 
   /** Shows what overlaps the view rect (x, y, w, h in px); runs only when the view moved by a tile. */
   cull(x: number, y: number, w: number, h: number): void {
-    const left = x - TILE * 1.5;
-    const right = x + w + TILE * 1.5;
+    const left = x - this.side;
+    const right = x + w + this.side;
     const top = y - TILE;
     const bottom = y + h + this.reach;
     const key = `${Math.floor(left / TILE)},${Math.floor(top / TILE)},${Math.ceil(right / TILE)},${Math.ceil(bottom / TILE)}`;
@@ -240,6 +287,10 @@ class PixelStage implements Stage {
   private view = { w: 0, h: 0 };
   /** Camera rig (render/camera.ts): shake + kicks after the map clamp, the look (pan / lead) before it. */
   readonly rig: CameraRig;
+  /** Tall props and buildings (they fade while the hero stands behind them) and the actors' cast shadows. */
+  private tall: { img: Phaser.GameObjects.Image; hw: number; h: number }[] = [];
+  private actorShadows: ActorShadows | null = null;
+  private npcShadows: ShadowActor[] | null = null;
   private readonly onResize = () => this.fit();
   /** A panel paused the world: a flash mid-frames must not stay up behind it (camera rig). */
   private readonly onPause = () => this.rig.settle();
@@ -261,12 +312,18 @@ class PixelStage implements Stage {
     this.hp = hpReader(host);
     const cols = Math.ceil(cm.w / CHUNK);
     const rows = Math.ceil(cm.h / CHUNK);
-    this.props = new Culler(cols, rows, TILE * 3);
+    this.props = new Culler(cols, rows, TILE * 5, TILE * 2.5);
     this.decor = new Culler(cols, rows, TILE * 2);
-    this.ground = bakeGround(scene, cm);
-    this.buildDressing();
-    this.buildProps();
-    this.buildStructures();
+    // Plan everything static first: the ground baker paints its cast shadows into the ground (render/shadows.ts).
+    const casters: Caster[] = [];
+    this.buildDressing(casters);
+    this.buildProps(casters);
+    this.buildStructures(casters);
+    this.planFixtureShadows(casters);
+    const shear = shearFor(def.biome);
+    const alpha = shadowAlphaFor(def);
+    this.ground = bakeGround(scene, cm, { casters, alpha, shear });
+    this.actorShadows = new ActorShadows(scene, alpha, shear);
     this.applyLighting();
     this.applyGrade();
     this.unsub.push(
@@ -420,6 +477,47 @@ class PixelStage implements Stage {
     this.rig.update(dt, t, { w: this.view.w || cam.width, h: this.view.h || cam.height });
     this.place();
     this.dark?.setPosition(Math.round(t.x), Math.round(t.y - 16));
+    this.fadeTall(t);
+    this.syncShadows();
+  }
+
+  /** Tall things in front of the hero go see-through while they cover him, in a few alpha steps (never a tween). */
+  private fadeTall(p: { x: number; y: number }): void {
+    for (const t of this.tall) {
+      const img = t.img;
+      if (!img.visible) continue;
+      const covers = p.y < img.y - 2 && p.y > img.y - t.h - 4 && p.y - 30 < img.y - FADE_FOOT && Math.abs(p.x - img.x) < t.hw + 6;
+      const want = covers ? BEHIND_ALPHA : 1;
+      if (img.alpha === want) continue;
+      const a = img.alpha < want ? Math.min(want, img.alpha + FADE_STEP) : Math.max(want, img.alpha - FADE_STEP);
+      img.setAlpha(a);
+    }
+  }
+
+  /**
+   * Cast shadows of the actors (the player, monsters, NPCs): their own shadow images are pointed at the silhouette of
+   * the frame they show (render/shadows.ts). The entities are read structurally (`sprite`, `shadow`, `hover`), like
+   * hpReader() reads the session: an actor without those fields simply keeps its plain blob.
+   */
+  private syncShadows(): void {
+    const sh = this.actorShadows;
+    if (!sh) return;
+    const h = this.host as unknown as { player?: ShadowActor; combat?: { monsters?: ShadowActor[] }; npcs?: { sprite?: Phaser.GameObjects.Sprite }[] };
+    if (h.player) sh.sync(h.player);
+    const ms = h.combat?.monsters;
+    if (ms) for (let i = 0; i < ms.length; i++) sh.sync(ms[i]);
+    if (!this.npcShadows && h.npcs) {
+      // NPC shadow images are not kept by their views: find each one under its sprite (same x, same foot y)
+      const blobs = this.scene.children.list.filter((o): o is Phaser.GameObjects.Image => o instanceof Phaser.GameObjects.Image && o.depth === DEPTH.SHADOW && o.texture.key === 'shadow');
+      this.npcShadows = [];
+      for (const n of h.npcs) {
+        const sp = n.sprite;
+        const blob = sp && blobs.find((b) => Math.abs(b.x - sp.x) < 1 && Math.abs(b.y - sp.y) < 2);
+        if (sp && blob) this.npcShadows.push({ sprite: sp, shadow: blob });
+      }
+    }
+    if (this.npcShadows) for (const n of this.npcShadows) sh.sync(n);
+    sh.flush();
   }
 
   destroy(): void {
@@ -431,6 +529,10 @@ class PixelStage implements Stage {
     this.dressing = null;
     this.props.clear();
     this.decor.clear();
+    this.tall = [];
+    this.actorShadows?.destroy();
+    this.actorShadows = null;
+    this.npcShadows = null;
     for (const u of this.unsub.splice(0)) u();
     this.light?.destroy();
     this.light = null;
@@ -548,7 +650,13 @@ class PixelStage implements Stage {
     return key;
   }
 
-  private buildDressing(): void {
+  /** A static image as a shadow caster (its texture frame's top-left corner in world px). */
+  private caster(key: string, x: number, y: number, flip = false): Caster {
+    const f = this.scene.textures.get(key).get();
+    return { key, x: Math.floor(x - f.width / 2), y: y - f.height, flip };
+  }
+
+  private buildDressing(casters: Caster[]): void {
     const id = this.host.def.id;
     let plan = dressingPlans.get(id);
     if (!plan) {
@@ -558,35 +666,56 @@ class PixelStage implements Stage {
     this.dressingPlan = plan;
     const handle = placeDressing(this.scene, plan);
     for (const img of handle.images) this.decor.add(img);
+    for (const it of plan) {
+      if (it.depthY === DRESSING_DECAL_DEPTH || !this.scene.textures.exists(it.key)) continue;
+      casters.push(this.caster(it.key, it.x, it.y, it.flipX));
+    }
     this.dressing = handle;
   }
 
   /**
-   * Props on their tiles (propPlacement): kinds with look variants (trees, pines) pick one per tile, every prop gets
-   * a whole-pixel jitter (±4 px) and about half of the organic ones are mirrored (lit-face props never are), so dense
-   * forests and rock fields stop reading as a grid of one stamp. Visual only: collision stays on the tile. Mirroring
-   * is flipX (never a fractional scale).
+   * Props (propView): tiered props stand where the compiler put them, with the look it chose; plain one-tile props
+   * pick a look per tile, get a whole-pixel jitter (±4 px) and about half of the organic ones are mirrored (lit-face
+   * props never are). Rows deeper in a tree line are tinted a step darker each. Visual only: collision stays on the
+   * tiles. Mirroring is flipX (never a fractional scale).
    */
-  private buildProps(): void {
+  private buildProps(casters: Caster[]): void {
     const seed = this.host.def.seed ?? 0;
+    const has = (k: string) => this.scene.textures.exists(k);
     for (const pr of this.host.cm.props) {
-      if (!this.scene.textures.exists(pr.kind)) continue;
-      const looks = [pr.kind, ...(PROP_VARIANTS[pr.kind] ?? []).filter((k) => this.scene.textures.exists(k))];
-      const at = propPlacement(pr.tx, pr.ty, seed, pr.kind, looks.length);
-      const img = this.scene.add.image(at.x, at.y, looks[at.look]).setOrigin(0.5, 1).setDepth(ySort(at.y, Y_BIAS.PROP));
-      if (at.flip) img.setFlipX(true);
+      const v = propView(pr, seed, has);
+      if (!v) continue;
+      const img = this.scene.add.image(v.x, v.y, v.key).setOrigin(0.5, 1).setDepth(ySort(v.y, Y_BIAS.PROP));
+      if (v.flip) img.setFlipX(true);
+      if (v.tint !== 0xffffff) img.setTint(v.tint);
       this.props.add(img);
+      // the interior of a tree line is already in shade: only the rows the light reaches cast
+      if (!pr.mass && (pr.shade ?? 0) < 2) casters.push(this.caster(v.key, v.x, v.y, v.flip));
+      if (v.tall && !pr.mass && (pr.shade ?? 0) < 2) this.tall.push({ img, hw: img.width / 2 - 8, h: img.height });
     }
   }
 
-  private buildStructures(): void {
+  private buildStructures(casters: Caster[]): void {
     for (const st of this.host.def.structures ?? []) {
       const fp = STRUCTURE_FOOTPRINT[st.kind];
       const key = `struct_${st.kind}`;
       if (!fp || !this.scene.textures.exists(key)) continue;
       const x = (st.tx + fp.w / 2) * TILE;
       const y = (st.ty + fp.h) * TILE;
-      this.scene.add.image(Math.round(x), y + 4, key).setOrigin(0.5, 1).setDepth(ySort(y));
+      const img = this.scene.add.image(Math.round(x), y + 4, key).setOrigin(0.5, 1).setDepth(ySort(y));
+      casters.push(this.caster(key, Math.round(x), y + 4));
+      // only what rises above the footprint can cover the hero (he cannot stand inside it)
+      if (img.height > fp.h * TILE + 24) this.tall.push({ img, hw: img.width / 2 - 6, h: img.height });
     }
+  }
+
+  /** Objects and gather nodes are placed by the map scene; their shadows are static, so they are baked here. */
+  private planFixtureShadows(casters: Caster[]): void {
+    const def = this.host.def;
+    const add = (key: string, tx: number, ty: number) => {
+      if (this.scene.textures.exists(key)) casters.push(this.caster(key, tx * TILE + TILE / 2, ty * TILE + TILE - 4));
+    };
+    for (const o of def.objects ?? []) add(`obj_${o.kind}`, o.tx, o.ty);
+    for (const n of def.nodes ?? []) if (n.kind !== 'fishing') add(`node_${n.kind}`, n.tx, n.ty);
   }
 }

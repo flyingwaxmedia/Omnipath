@@ -254,11 +254,11 @@ function grassGround(g: GrassLook): Ground {
 // Olive, earthy greens (docs/ART-DIRECTION.md; measured against the reference: hue ~72, saturation ~0.42). Reds,
 // banners and flowers stay saturated so the accents still pop.
 const GRASS_LOOK: GrassLook = {
-  base: '#6c7a45',
-  dark: '#58653a',
-  deep: '#465230',
-  light: '#7e8a50',
-  hi: '#939e5f',
+  base: '#476630',
+  dark: '#3c5b32',
+  deep: '#2f5435',
+  light: '#587a33',
+  hi: '#739238',
   tufts: 4,
   specks: 5,
 };
@@ -361,11 +361,11 @@ function dirtGround(g: DirtLook): Ground {
 }
 
 const PATH_LOOK: DirtLook = {
-  base: '#a08f72',
-  dark: '#8a7a61',
-  light: '#b0a084',
-  stone: '#b5a991',
-  stoneHi: '#cbc1a9',
+  base: '#bfa272',
+  dark: '#a3845c',
+  light: '#d0b684',
+  stone: '#c9b796',
+  stoneHi: '#e6d8b2',
   pebbles: 1,
   specks: 5,
 };
@@ -405,7 +405,7 @@ function waterGround(g: WaterLook): Ground {
   };
 }
 
-const MOSS_LOOK = { base: '#48632f', dark: '#3a5127', deep: '#2f4220', light: '#5b7b39', hi: '#729447' };
+const MOSS_LOOK = { base: '#32663a', dark: '#2a563a', deep: '#23483a', light: '#447a3a', hi: '#5f943c' };
 function mossGround(): Ground {
   const base = hx(MOSS_LOOK.base);
   return {
@@ -563,7 +563,7 @@ function lavaGround(): Ground {
 const G: Record<string, Ground> = {
   grass: grassGround(GRASS_LOOK),
   grass2: grassGround({ ...GRASS_LOOK, tufts: 7, specks: 4 }),
-  hill: grassGround({ base: '#859f4f', dark: '#6d8840', deep: '#5a7233', light: '#99b45d', hi: '#b0c871', tufts: 4, specks: 5 }),
+  hill: grassGround({ base: '#62843a', dark: '#527436', deep: '#3f6234', light: '#789a40', hi: '#93ab45', tufts: 4, specks: 5 }),
   storm: grassGround({
     base: '#687f69',
     dark: '#556b57',
@@ -596,11 +596,11 @@ const G: Record<string, Ground> = {
     glints: ['#e8fff0', '#fff2b0'],
   }),
   dark: grassGround({
-    base: '#4a5a3c',
-    dark: '#3c4a31',
-    deep: '#313d28',
-    light: '#5a6b49',
-    hi: '#6c7f57',
+    base: '#30503a',
+    dark: '#284539',
+    deep: '#1f3b33',
+    light: '#3d6038',
+    hi: '#52773a',
     tufts: 3,
     specks: 4,
     litter: ['#6e5636', '#5e4a64', '#7a6038'],

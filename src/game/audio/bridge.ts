@@ -17,8 +17,11 @@ import {
   comboSound,
   deathSound,
   discoverySound,
+  type FistBlow,
+  fistSound,
   gatherSound,
   hitSound,
+  mechanicSound,
   novaSound,
   statusSound,
   stepSound,
@@ -114,6 +117,24 @@ interface Emitter {
   next: number;
 }
 
+/**
+ * Which blow of the fist set a bare-handed skill lands (the VFX's rule, vfx/recipe.ts fistClassOf, restated on the
+ * skill alone so the audio stays free of the VFX modules): slam for executes and heavy area blows, kick for kicks,
+ * spins and light dashes, palm for pushes and spirit forms, hook for heavy punches, jab otherwise.
+ */
+export function fistBlow(skill: { tags: readonly string[]; power: number; delivery?: string; shape: { kind: string } }): FistBlow {
+  const t = skill.tags;
+  const kind = skill.shape.kind;
+  const heavy = t.includes('heavy') || t.includes('execute') || skill.power >= 2;
+  if (t.includes('execute') || (heavy && t.includes('aoe') && kind !== 'spin')) return 'slam';
+  if (skill.delivery === 'kick' || kind === 'spin') return 'kick';
+  if (kind === 'nova') return 'palm';
+  if (heavy) return 'hook';
+  if (kind === 'dash') return 'kick';
+  if (t.includes('spirit') || t.includes('technique')) return 'palm';
+  return 'jab';
+}
+
 /** Quieter for every later hit of the same cast. */
 export function hitRestraint(hitIndex: number): number {
   return hitIndex <= 0 ? 1 : Math.max(0.35, 0.72 ** hitIndex);
@@ -172,8 +193,53 @@ export function createAudioBridge(scene: AudioScene, sink: AudioSink, bus: Event
     if (e.durationMs >= 150) here(chargeSound(e.element ?? e.skill.element));
   });
   scope.on('castFire', (e) => {
-    // Strikes / spins / volleys / novas speak through skillPulse, dashes through dash, buffs through buffApplied.
-    if (e.shape === 'chain') here(castSound('chain', e.element ?? e.skill.element));
+    // Strikes / spins / volleys / novas speak through skillPulse, dashes through dash, buffs through buffApplied;
+    // blinks, mends and shields through their own events (v4). A zone speaks here, as its field goes down.
+    if (e.shape === 'chain' || e.shape === 'zone') here(castSound(e.shape, e.element ?? e.skill.element));
+  });
+
+  // ---------------------------------------------------------------- v4: zones, blinks, mends, shields, mechanics
+  scope.on('objectTick', (e) => at('zone_tick', e.x, e.y, { gain: e.index === 0 ? 1 : 0.8 }));
+  scope.on('objectEnd', (e) => {
+    // A map change clears everything at once; an object used up by a skill is spoken for by that skill.
+    if (e.reason !== 'clear' && e.reason !== 'consumed') at('zone_end', e.x, e.y);
+  });
+  scope.on('blink', (e) => {
+    if (!isMonster(e.owner)) here(castSound('blink', e.element ?? e.skill.element));
+  });
+  scope.on('mend', (e) => {
+    if (e.first) here(castSound('mend', e.element ?? e.skill.element));
+    else here('mend_tick', { gain: 0.8 });
+  });
+  scope.on('shieldUp', (e) => here(castSound('shield', e.element ?? e.skill.element)));
+  scope.on('shieldHit', (e) => {
+    // Lean toward the blow, like a hurt.
+    here('shield_absorb', { pan: e.origin ? spatialize(e.origin.x, e.origin.y, view()).pan * 0.5 : 0 });
+  });
+  scope.on('shieldEnd', (e) => {
+    if (e.reason === 'broken') here('shield_break');
+    else if (e.reason === 'expired') here('shield_break', { gain: 0.55, rate: 1.2 });
+    if (e.burst && (e.reason === 'broken' || e.reason === 'expired')) here(novaSound(e.burst), { gain: 0.85 });
+  });
+  scope.on('mechanic', (e) => {
+    const s = mechanicSound(e.type);
+    if (!s) return;
+    const fx = e.effect;
+    switch (fx.type) {
+      case 'comboStep':
+        // Each step a tone higher: the ear hears the combo climb.
+        return here(s, { rate: 1 + 0.12 * Math.max(0, Math.min(4, fx.step - 1)) });
+      case 'stance':
+        return here(s, { rate: fx.stance ? 0.92 : 1.06 });
+      case 'marked':
+        return e.target ? at(s, e.target.x, e.target.y, { rate: 1 + 0.09 * Math.max(0, Math.min(4, fx.marks - 1)) }) : undefined;
+      case 'markEnd':
+        return e.target ? at(s, e.target.x, e.target.y, { rate: 0.8, gain: 0.8 }) : undefined;
+      case 'levelUp':
+        return e.at ? at(s, e.at.x, e.at.y, { rate: 1 + 0.06 * Math.max(0, Math.min(5, fx.level - 1)) }) : here(s);
+      default:
+        return here(s);
+    }
   });
   scope.on('skillPulse', (e) => {
     const el = e.element ?? e.skill.element;
@@ -253,6 +319,8 @@ export function createAudioBridge(scene: AudioScene, sink: AudioSink, bus: Event
     const strong = e.multiplier > 1.25;
     const weak = e.multiplier < 0.8;
     at(hitSound(el), e.x, e.y, { gain: g * (weak ? 0.85 : 1), rate: strong ? 1.06 : weak ? 0.94 : 1 });
+    // Bare hands: the blow's own layer (jab / hook / palm / kick / slam) over the element hit.
+    if (e.skill.tags.includes('fist')) at(fistSound(fistBlow(e.skill)), e.x, e.y, { gain: g });
     if (e.crit) at('crit', e.x, e.y, { gain: g });
     if (e.via === 'arc') at('zap_chain', e.x, e.y, { gain: 0.45, rate: 1.2 });
   });
@@ -270,7 +338,10 @@ export function createAudioBridge(scene: AudioScene, sink: AudioSink, bus: Event
     if (s) at(s, e.x, e.y, { gain: 0.7 });
   });
   scope.on('combo', (e) => at(comboSound(e.name), e.x, e.y));
-  scope.on('heal', () => here('heal'));
+  // (A mend skill's heal is voiced by its own `mend` event.)
+  scope.on('heal', (e) => {
+    if ((e.source as string) !== 'mend') here('heal');
+  });
   scope.on('spark', (e) => {
     if (e.x !== undefined && e.y !== undefined) at('spark_crack', e.x, e.y);
     else here('spark_crack');

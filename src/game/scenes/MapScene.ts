@@ -22,7 +22,9 @@ import type {
   ChangeKind,
   ClassScreenView,
   GameController,
+  MechanicHudView,
   MenuBadgesView,
+  WeaponLockView,
   MinimapView,
   NpcQuestsView,
   Outcome,
@@ -78,6 +80,8 @@ import {
   travelTargets,
 } from '../world/runtime';
 import { statPct } from '../../core/passives';
+import { weaponLockLine, weaponOk } from '../../core/requirements';
+import { canSwap, nextSwapAt } from '../systems/weapons';
 import { gameBus } from '../events';
 import { attachAudio } from '../audio';
 import { attachAmbient } from '../render/ambient';
@@ -175,6 +179,7 @@ export class MapScene extends Phaser.Scene implements GameController {
     this.frozenUntil = 0;
     this.combat = new Combat(this);
     this.skills = new SkillSystem(this.combat);
+    this.skills.mechName = () => this.session.mechanic.view()?.name ?? null;
     this.monsterSkills = new MonsterSkills(this);
     this.interactions = new Interactions(this);
   }
@@ -796,6 +801,29 @@ export class MapScene extends Phaser.Scene implements GameController {
 
   private followPath(dt: number, st: Stats, now: number): void {
     const p = this.player;
+    // v4 statuses on the player: Held (root) — no walking; Lured — the feet walk toward the lure, taps do not steer.
+    if (now < p.rootUntil) {
+      p.moving = false;
+      return;
+    }
+    if (now < p.lureUntil && p.lureTo && now >= p.lockedUntil) {
+      const dx = p.lureTo.x - p.x;
+      const dy = p.lureTo.y - p.y;
+      const d = Math.hypot(dx, dy);
+      const step = st.speed * 0.7 * p.speedMult(now) * dt;
+      p.path = [];
+      p.moving = d > 14;
+      if (p.moving) {
+        const nx = p.x + (dx / d) * step;
+        const ny = p.y + (dy / d) * step;
+        if (this.combat.canStand(nx, ny)) {
+          p.x = nx;
+          p.y = ny;
+        }
+        if (Math.abs(dx) > 1) p.facing = dx > 0 ? 1 : -1;
+      }
+      return;
+    }
     if (now < p.lockedUntil || !p.path.length) {
       p.moving = false;
       return;
@@ -951,7 +979,22 @@ export class MapScene extends Phaser.Scene implements GameController {
   // =================================================================== GameController
 
   stats(): Stats {
-    return computeStats(this.session.player, this.book.activeBonus(), this.combat?.buffs ?? [], statPct(this.book.totals(), 'def'));
+    const st = computeStats(this.session.player, this.book.activeBonus(), this.combat?.buffs ?? [], statPct(this.book.totals(), 'def'));
+    // v4: what the worn class's mechanic gives right now (a meter's points, standing near a class object).
+    const rt = this.session.mechanic;
+    if (!rt.mech()) return st;
+    const ms = rt.stats(this.combat && this.player && this.skills ? this.combat.nearLevel() : null);
+    const pct = (n: number) => 1 + n / 100;
+    return {
+      ...st,
+      maxHp: Math.round(st.maxHp * pct(ms.hp)),
+      maxSp: Math.round(st.maxSp * pct(ms.sp)),
+      atk: Math.round(st.atk * pct(ms.atk)),
+      matk: Math.round(st.matk * pct(ms.matk)),
+      def: Math.round(st.def * pct(ms.def)),
+      crit: st.crit + ms.crit,
+      speed: st.speed * pct(ms.speed),
+    };
   }
 
   castSlot(i: number): void {
@@ -1008,14 +1051,18 @@ export class MapScene extends Phaser.Scene implements GameController {
     return this.combat ? this.combat.cooldown(id) : { remain: 0, total: 0 };
   }
 
+  /**
+   * Whether a known skill can be cast right now (SPEC-v4 §2.2): "if a move uses a weapon, you need that weapon"
+   * (core weaponOk — the reason is core's weaponLockLine, "Needs a sword"; the UI adds "— Equip"), and a class skill
+   * its meter has not unlocked yet waits for it.
+   */
   usable(id: string): { ok: boolean; reason?: string } {
     const s = this.reg.skill(id);
     if (!s || !this.book.has(id)) return { ok: false, reason: 'Unknown skill.' };
-    // Sandbox rule (docs/SPEC-v2.md §5.1): learned skills work with ANY weapon. Only tier-0 basic attacks stay
-    // bound to their weapon, because they ARE that weapon's auto-attack.
     const w = this.session.player.weapon;
-    if (s.tier === 0 && s.weapons && !s.weapons.includes(w))
-      return { ok: false, reason: `${s.name} is the ${s.weapons.map((x) => WEAPONS[x].name).join(' / ')}'s basic attack.` };
+    if (!weaponOk(s, w)) return { ok: false, reason: weaponLockLine(s, w) ?? 'Needs another weapon.' };
+    const rt = this.session.mechanic;
+    if (rt.locked(id)) return { ok: false, reason: `Needs more ${rt.view()?.name ?? 'power'}.` };
     return { ok: true };
   }
 
@@ -1109,21 +1156,68 @@ export class MapScene extends Phaser.Scene implements GameController {
     pl.coins -= def.price;
     pl.ownedWeapons.push(w);
     this.ui.log(`Bought a <b>${def.name}</b>.`, 'loot');
-    return this.equipWeapon(w);
+    // Bought at the smith: it goes straight into the hand (no swap cooldown).
+    return this.equipWeapon(w, 'buy');
   }
 
-  equipWeapon(w: WeaponType): Outcome {
+  /**
+   * Changes the held weapon (SPEC-v4 §2.2). Bare Hands is "nothing equipped": always owned. A swap by the player
+   * (`reason` 'swap': the bag, the "Needs a sword — Equip" line) has a short cooldown and waits for a wind-up to
+   * finish; becoming a class ('class') equips its weapon in the same tap. Bound skills of the other weapons stay on
+   * the bar, greyed (usable() says "Needs a …").
+   */
+  equipWeapon(w: WeaponType, reason: 'swap' | 'class' | 'buy' = 'swap'): Outcome {
     const pl = this.session.player;
-    if (!pl.ownedWeapons.includes(w)) return { ok: false, message: 'You do not own that weapon.' };
-    pl.weapon = w;
-    this.player?.setWeapon(w);
+    const check = canSwap(
+      { owned: pl.ownedWeapons, held: pl.weapon, now: performance.now(), readyAt: this.session.weaponSwapAt, windup: !!this.combat?.windup, dead: !!this.combat?.dead },
+      w,
+      reason !== 'swap',
+    );
     const def = WEAPONS[w];
-    if (!this.book.has(def.basic)) this.book.learn(def.basic, `Picked up the ${def.name}`);
+    if (!check.ok) return check.reason === 'same' ? { ok: true, message: `${def.name} ready.` } : { ok: false, message: check.message };
+    const prev = pl.weapon;
+    pl.weapon = w;
+    if (reason === 'swap') this.session.weaponSwapAt = nextSwapAt(performance.now());
+    this.player?.setWeapon(w);
+    if (this.reg.skill(def.basic) && !this.book.has(def.basic)) this.book.learn(def.basic, `Picked up the ${def.name}`);
+    // The old weapon's swing is not this weapon's: a queued basic attack starts fresh.
+    this.combat?.cooldowns.delete(WEAPONS[prev].basic);
+    gameBus.emit('weaponChanged', { weapon: w, prev, reason });
     this.ui.log(`${def.icon} Equipped <b>${def.name}</b>.`, 'info');
     this.ui.renderHotbar();
     this.clampVitals();
     this.save();
     return { ok: true, message: `Equipped ${def.name}.` };
+  }
+
+  /** Puts every weapon away (Bare Hands). */
+  unequipWeapon(): Outcome {
+    return this.equipWeapon('fists');
+  }
+
+  /** Ms until the next weapon swap is allowed (0 = now). */
+  weaponSwapIn(): number {
+    return Math.max(0, Math.ceil(this.session.weaponSwapAt - performance.now()));
+  }
+
+  weaponLock(skillId: string): WeaponLockView | null {
+    return views.weaponLock(this, skillId);
+  }
+
+  equipFor(skillId: string): Outcome {
+    return views.equipForSkill(this, skillId);
+  }
+
+  mechanicView(): MechanicHudView | null {
+    return views.mechanicHud(this);
+  }
+
+  /** The stance button. */
+  mechanicTap(): Outcome {
+    if (!this.combat || !this.session.mechanic.canSwap()) return { ok: false };
+    const swapped = this.combat.mechTap();
+    if (swapped) this.ui.renderHotbar();
+    return swapped ? { ok: true, message: this.session.mechanic.view()?.name } : { ok: false, message: 'Not yet.' };
   }
 
   useItem(itemId: string): Outcome {

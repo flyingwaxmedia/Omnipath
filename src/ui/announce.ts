@@ -17,7 +17,8 @@ import type { DiscoveryCard } from './dialogs';
 import type { LogKind } from './hud';
 import { learnIconUrl, learnedLine, rewardChipsHtml } from './panels/quests';
 import { esc, gate, hex, sourceText } from './util';
-import { FRIENDLY, article, classLevel, objectiveWords, oneLine, seen, shapeWord, stars } from './words';
+import { becomeSwapLine, classRewards, rarityOf } from './classinfo';
+import { FRIENDLY, article, classLevel, objectiveWords, oneLine, rarityHtml, seen, shapeWord, stars } from './words';
 
 /** What announcements need from the UI facade. */
 export interface AnnounceHost {
@@ -82,9 +83,13 @@ export function movedObjective<T extends { have: number; done: boolean }>(prev: 
 /** The kind of skill a class wants, in plain words: its tree's main tag ("fire", "piercing"), "elemental" for classes
  *  built on many elements. */
 export function classSkillWord(reg: Registry, cls: ClassDef): string {
-  if (cls.distinctElements) return 'elemental';
+  if (cls.distinctElements || cls.source === 'prism') return 'elemental';
+  // v4: a class is a weapon and a power source — its element names what it wants, else its weapon.
+  if (cls.source && cls.source !== 'physical' && cls.source !== 'none') return tagWords([cls.source]);
   const tag = classTreeTags(reg, cls)[0] ?? cls.clauses?.[0]?.tags[0];
-  return tag ? tagWords([tag]) : '';
+  if (tag) return tagWords([tag]);
+  const w = cls.weapon && cls.weapon !== 'any' ? cls.weapon : undefined;
+  return w ? { sword: 'sword', dagger: 'dagger', staff: 'rod', fists: 'fist' }[w] : '';
 }
 
 /**
@@ -286,6 +291,13 @@ export function wireAnnouncements(ui: AnnounceHost, ctrl: GameController): () =>
     } catch {
       outfit = undefined;
     }
+    // Becoming it also equips its weapon (the game does it): the card says so in one short line when that swaps.
+    let swap: ReturnType<typeof becomeSwapLine> = null;
+    try {
+      swap = worn ? null : becomeSwapLine(cls, ctrl.session.player);
+    } catch {
+      swap = null;
+    }
     ui.discovery({
       kind: 'class',
       icon: cls.icon,
@@ -296,13 +308,13 @@ export function wireAnnouncements(ui: AnnounceHost, ctrl: GameController): () =>
       title: worn ? `You are now ${article(cls.name)}` : cls.name,
       body: worn
         ? `${esc(oneLine(cls.desc))}<br><small>${classFill().filled > 0 ? 'Its skills are in your class slots.' : `${esc(classSlotsLine(reg, cls, 0))}.`}</small>`
-        : `${esc(oneLine(cls.desc))}`,
-      extra: icons ? `<div class="cskills">${icons}</div>` : undefined,
+        : `${esc(oneLine(cls.desc))}${swap ? `<br><small>${esc(swap.line)}</small>` : ''}`,
+      extra: `<div class="cnew-tags">${rarityHtml(rarityOf(reg, cls.id))}</div>${icons ? `<div class="cskills">${icons}</div>` : ''}`,
       ...(worn
         ? { okLabel: 'Great!' }
         : {
             action: {
-              label: FRIENDLY.becomeClass,
+              label: `${FRIENDLY.becomeClass} ${article(cls.name)}`,
               run: () => {
                 const r = ctrl.becomeClass(cls.id);
                 if (!r.ok && r.message) ui.toast(esc(r.message));
@@ -311,7 +323,38 @@ export function wireAnnouncements(ui: AnnounceHost, ctrl: GameController): () =>
           }),
     });
   };
-  add(ev.on('classRank', ({ cls, rank }) => ui.toast(`🏛️ <b>${esc(cls.name)}</b> · ${classLevel(rank)}`)));
+  // A Class Level's fixed reward rides on its toast ("Class Level 4 — New skill: Flame Wheel").
+  add(
+    ev.on('classRank', ({ cls, rank }) => {
+      const reward = classRewards(reg, cls).find((r) => r.level === rank);
+      ui.toast(`🏛️ <b>${esc(cls.name)}</b> · ${classLevel(rank)}${reward ? ` — ${esc(reward.text)}` : ''}`);
+    }),
+  );
+  // Rare and rarer classes ask for a Trial first: one card, one action (the quest giver holds the Trial).
+  add(
+    ev.on('trialReady', ({ cls, quest }) => {
+      let who = '';
+      let where = '';
+      try {
+        const q = ctrl.questCard(quest);
+        who = q?.giverName ?? '';
+        where = q?.where ?? '';
+      } catch {
+        who = '';
+      }
+      ui.log(`🏛️ ${FRIENDLY.trial} ready: <b>${esc(cls.name)}</b>`, 'rare');
+      ui.discovery({
+        kind: 'class',
+        icon: cls.icon,
+        image: icon('cls', cls.id),
+        kicker: `${FRIENDLY.trial.toUpperCase()} READY`,
+        title: cls.name,
+        body: who ? `${esc(who)}${where ? ` in ${esc(where)}` : ''} holds your ${FRIENDLY.trial}.` : `Your ${FRIENDLY.trial} is waiting.`,
+        extra: `<div class="cnew-tags">${rarityHtml(rarityOf(reg, cls.id))}</div>`,
+        cta: ui.open ? { label: FRIENDLY.beginTrial, run: () => ui.open?.('codex', `quests:${quest}`) } : undefined,
+      });
+    }),
+  );
   add(
     gameBus.on('classChanged', ({ classId, reason }) => {
       if (reason !== 'wear') return;

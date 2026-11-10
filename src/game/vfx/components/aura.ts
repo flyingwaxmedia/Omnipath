@@ -24,7 +24,7 @@ interface Geo {
 }
 
 /** Hex cell edge test (cell radius 4, pointy axial grid). Returns 1 on cell edges, 0 inside. */
-function hexEdge(x: number, y: number): number {
+export function hexEdge(x: number, y: number): number {
   const size = 4;
   const q = ((Math.sqrt(3) / 3) * x - y / 3) / size;
   const r = ((2 / 3) * y) / size;

@@ -1,5 +1,5 @@
 // Skills views of the Star Chart (starchart lane; docs/UX-SIMPLE.md): the List tab (a plain icon grid: Class skills /
-// Your skills / Other skills), the Passives tab (Mastery bonuses, lessons, Perks, Keepsakes — stars and one line each)
+// Your skills / Other skills), the Passives tab (Mastery bonuses, lessons, the class Gift, Keepsakes — stars and one line each)
 // and the Essences tab (what you hold, where it sits, where it drops). panels/starchart.ts hosts them; tapping a
 // skill opens the simple card (../starchart/card.ts). Also the small shared widgets other panels import (sheet, pips,
 // rune, elChip, socketsHtml, weaponPath, pathOf) — their signatures stay as they are.
@@ -9,7 +9,9 @@ import type { ActivePassive } from '../../core/passives';
 import type { Registry } from '../../core/registry';
 import { WEAPON_TYPES, type EssenceDef, type PassiveDef, type SkillDef, type WeaponType } from '../../core/types';
 import { WEAPONS } from '../../data/weapons';
+import { lockOf } from '../classinfo';
 import { SPARK_RUNE } from '../hud';
+import { weaponGlyph } from '../hud/html';
 import { esc, hex } from '../util';
 import { FRIENDLY, stars } from '../words';
 import type { PanelHost } from './common';
@@ -148,8 +150,10 @@ function tile(host: PanelHost, s: SkillDef, opts: { sel: boolean; note?: string;
   // Gold "New": learned, never used, not on the bar yet.
   const fresh = !!p && p.uses === 0 && !opts.equipped;
   const src = icon(host, 'skill', s.id);
-  return `<button class="skill-card sc-tile ${ready ? 'ready' : ''} ${opts.sel ? 'sel' : ''} ${rank >= s.maxRank ? 'mastered' : ''}" data-skill="${esc(s.id)}" aria-label="${esc(s.name)}">
-    <span class="sc-tico">${src ? `<img class="px" src="${src}" width="64" height="64" alt="" draggable="false">` : `<b>${s.icon}</b>`}${ready ? '<i class="sc-spark" aria-hidden="true">✨</i>' : fresh ? '<i class="sc-new" aria-hidden="true">New</i>' : ''}</span>
+  // "Needs a sword": the tile dims and wears the weapon (its card has the line and the Equip action).
+  const lock = lockOf(host.ctrl, s.id);
+  return `<button class="skill-card sc-tile ${ready ? 'ready' : ''} ${opts.sel ? 'sel' : ''} ${rank >= s.maxRank ? 'mastered' : ''} ${lock ? 'wlocked' : ''}" data-skill="${esc(s.id)}" aria-label="${esc(s.name)}${lock ? `: ${esc(lock.line)}` : ''}">
+    <span class="sc-tico">${src ? `<img class="px" src="${src}" width="64" height="64" alt="" draggable="false">` : `<b>${s.icon}</b>`}${ready ? '<i class="sc-spark" aria-hidden="true">✨</i>' : fresh ? '<i class="sc-new" aria-hidden="true">New</i>' : ''}${lock ? `<i class="sc-wl" aria-hidden="true">${weaponGlyph(lock.need)}</i>` : ''}</span>
     <span class="sc-tname">${esc(s.name)}</span>
     <span class="sc-tstars ${rank >= s.maxRank ? 'gold' : ''}" aria-hidden="true">${rankStars(rank, s.maxRank)}</span>
     ${opts.note ? `<span class="sc-tnote">${esc(opts.note)}</span>` : ''}
@@ -277,7 +281,7 @@ export function passivesTab(host: PanelHost): string {
   return `<p class="sc-lead">Passives are always on. They grow as you use your skills.</p>
     ${part(`${FRIENDLY.tagPassive}es`, of('tag'), 'Keep using your skills: the more you master a kind, the stronger it gets.')}
     ${of('learned').length ? part('Learned', of('learned'), '') : ''}
-    ${worn || of('class').length ? part(`${FRIENDLY.classTree}${worn ? ` <small>${esc(worn.name)}</small>` : ''}`, of('class'), 'Spend perk points on the Class screen.') : ''}
+    ${of('class').length ? part(`${FRIENDLY.gift}${worn ? ` <small>${esc(worn.name)}</small>` : ''}`, of('class'), 'Your class has no Gift yet.') : ''}
     ${of('imprint').length ? part(`${FRIENDLY.imprint}s`, of('imprint'), '') : ''}`;
 }
 

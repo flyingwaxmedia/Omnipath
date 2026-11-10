@@ -5,9 +5,10 @@
 // camera clear colour around it. The baker repeats the map's own border terrain outward (water around an islet, wall
 // tops around a crypt, the tree wall around a glade, with the border's trees and rocks echoed on it), so the centred
 // camera always shows world. Purely visual: nothing outside the map is walkable or collides.
-import type Phaser from 'phaser';
+import Phaser from 'phaser';
 import type { CompiledMap, PropKind } from '../../core/world/types';
 import { PROP_VARIANTS } from '../art/world';
+import { type Caster, CONTACT_ALPHA, SHADOW_ALPHA, SHADOW_RGB, SHADOW_SHEAR, ShadowBaker } from './shadows';
 import { ensureEdgeFamilies } from '../art/tiles';
 import { T } from '../../core/world/tiles';
 import { DECALS_PER_SET, DECAL_SETS, EDGE_VARIANTS, TERRAIN_CLASS, TILE_PX, TONE_TILES, cellHash, computeTerrainLayers, edgeFrameInfo, toneNoise } from './autotile';
@@ -51,7 +52,81 @@ export function extendMap(cm: CompiledMap, ax: number, ay: number): CompiledMap 
       coll[y * W + x] = cm.coll[sy * cm.w + sx];
     }
   }
-  return { ...cm, w: W, h: H, ground, coll, props: [] };
+  let forest: Uint8Array | undefined;
+  if (cm.forest) {
+    forest = new Uint8Array(W * H);
+    for (let y = 0; y < H; y++) {
+      const sy = Math.min(cm.h - 1, Math.max(0, y - ay));
+      for (let x = 0; x < W; x++) {
+        const sx = Math.min(cm.w - 1, Math.max(0, x - ax));
+        const d = cm.forest[sy * cm.w + sx];
+        // past the map edge a tree line only gets deeper
+        forest[y * W + x] = d && (x < ax || y < ay || x >= ax + cm.w || y >= ay + cm.h) ? Math.max(d, 3) : d;
+      }
+    }
+  }
+  return { ...cm, w: W, h: H, ground, coll, props: [], forest, clearing: undefined };
+}
+
+/** What the ground baker paints over the terrain: the cast shadows of everything static (SPEC-v4 §11.2 A). */
+export interface GroundShadows {
+  casters: readonly Caster[];
+  /** Multiply strength (0.4 outdoors, 0.3 underground). */
+  alpha?: number;
+  shear?: number;
+}
+
+/** Forest floor: the shade under a tree line, a second step darker from the third row in (multiply strengths). */
+const FOREST_SHADE = 0.5;
+const FOREST_DEEP = 0.62;
+
+/**
+ * The shade of a tree line's floor for one chunk: every forest cell from the second row in is in shadow; the edge
+ * toward the front row is ragged in 8 px blocks (hard pixels, no gradient). Returns [shade, deep] canvases or null.
+ */
+function forestFloor(ext: CompiledMap, seed: number, tx0: number, ty0: number, tw: number, th: number): [HTMLCanvasElement, HTMLCanvasElement] | null {
+  const f = ext.forest;
+  if (!f) return null;
+  const at = (X: number, Y: number) => (X < 0 || Y < 0 || X >= ext.w || Y >= ext.h ? 7 : f[Y * ext.w + X]);
+  let any = false;
+  for (let y = 0; y < th && !any; y++) for (let x = 0; x < tw && !any; x++) any = at(tx0 + x, ty0 + y) >= 1;
+  if (!any) return null;
+  const mk = () => {
+    const cv = document.createElement('canvas');
+    cv.width = tw * TILE_PX;
+    cv.height = th * TILE_PX;
+    const c = cv.getContext('2d')!;
+    c.fillStyle = `#${SHADOW_RGB.toString(16).padStart(6, '0')}`;
+    return [cv, c] as const;
+  };
+  const [shade, sc] = mk();
+  const [deep, dc] = mk();
+  const B = 4;
+  for (let y = 0; y < th; y++)
+    for (let x = 0; x < tw; x++) {
+      const X = tx0 + x;
+      const Y = ty0 + y;
+      const d = at(X, Y);
+      if (!d) continue;
+      if (d >= 2) sc.fillRect(x * TILE_PX, y * TILE_PX, TILE_PX, TILE_PX);
+      if (d >= 3) dc.fillRect(x * TILE_PX, y * TILE_PX, TILE_PX, TILE_PX);
+      // ragged rim: the front row takes blocks of shade along its sides that touch the second row (and the second
+      // row takes blocks of the deep tone along the third)
+      for (const [c2, need] of [[sc, 2], [dc, 3]] as const) {
+        if (d !== need - 1) continue;
+        for (const [dx, dy] of [[0, -1], [0, 1], [-1, 0], [1, 0]] as const) {
+          if (at(X + dx, Y + dy) < need) continue;
+          for (let k = 0; k < TILE_PX / B; k++) {
+            const hsh = cellHash(X * 8 + k, Y * 8 + (dx ? 1 : 0), seed, 0xf07e + need);
+            const depth = B * (1 + (hsh % 3)) + (k & 1) * B;
+            const px = dx ? (dx < 0 ? 0 : TILE_PX - depth) : k * B;
+            const py = dy ? (dy < 0 ? 0 : TILE_PX - depth) : k * B;
+            c2.fillRect(x * TILE_PX + px, y * TILE_PX + py, dx ? depth : B, dy ? depth : B);
+          }
+        }
+      }
+    }
+  return [shade, deep];
 }
 
 /**
@@ -61,28 +136,16 @@ export function extendMap(cm: CompiledMap, ax: number, ay: number): CompiledMap 
 const UNDERGROUND_MOSS_TINT = 0x9c9ea8;
 const UNDERGROUND: ReadonlySet<string> = new Set(['cave', 'crypt']);
 
-/** Ordered dither (8x8 Bayer, 0..63) for the tone wash. */
-const BAYER8 = (() => {
-  const m = [0, 2, 3, 1];
-  const out = new Uint8Array(64);
-  for (let y = 0; y < 8; y++)
-    for (let x = 0; x < 8; x++) {
-      let v = 0;
-      for (let bit = 0, xx = x, yy = y; bit < 3; bit++, xx >>= 1, yy >>= 1) v = v * 4 + m[(yy & 1) * 2 + (xx & 1)];
-      out[y * 8 + x] = v;
-    }
-  return out;
-})();
 /** Tone wash colours (RGBA): deeper, cooler grass where the noise is low; drier olive where it is high. */
-const TONE_DARK = [38, 48, 26, 54] as const;
-const TONE_LIGHT = [180, 171, 106, 40] as const;
+const TONE_DARK = [31, 59, 51, 70] as const;
+const TONE_LIGHT = [147, 171, 69, 46] as const;
 /** The wash fades out over this many px toward ground it does not cover. */
 const FADE_PX = 28;
 
 /**
  * Large-scale ground tone for one chunk (docs/ART-DIRECTION.md; the reference reads as darker and lighter grass patches
  * several tiles across): a translucent wash over grass-like base tiles, its coverage following smooth value noise
- * (autotile.ts toneNoise) through an ordered dither, so patches fade in and out with no shapes, steps or seams. Drawn
+ * (autotile.ts toneNoise) as hard-edged two-tone pixel clusters (no dither, no soft blobs). Drawn
  * over the base tiles and edge pieces, under the decals. Null when the chunk has no grass-like ground.
  */
 function toneWash(cm: CompiledMap, ext: CompiledMap, ax: number, ay: number, tx0: number, ty0: number, tw: number, th: number): HTMLCanvasElement | null {
@@ -122,10 +185,13 @@ function toneWash(cm: CompiledMap, ext: CompiledMap, ax: number, ay: number, tx0
           edge = Math.min(edge, Math.hypot(ex, ey));
         }
       const col = dark ? TONE_DARK : TONE_LIGHT;
-      const cover = (dark || light) * 64 * Math.min(1, edge / FADE_PX);
+      // hard-edged two-tone clusters (SPEC-v4 §11.2 H): a 4 px block is in the patch or out of it; only a ragged
+      // one-block rim (a coin per block) breaks the outline. No dither, no soft blob.
+      const cover = (dark || light) * Math.min(1, edge / FADE_PX);
+      const coin = (cellHash(Math.floor(bx / B) + tx0 * 8, Math.floor(by / B) + ty0 * 8, seed, 0x70ee) & 0xff) / 255;
+      if (cover < 0.5 + coin * 0.12) continue;
       for (let y = by; y < by + B; y++)
         for (let x = bx; x < bx + B; x++) {
-          if (BAYER8[(y & 7) * 8 + (x & 7)] >= cover) continue;
           const i = (y * W + x) * 4;
           d[i] = col[0];
           d[i + 1] = col[1];
@@ -147,7 +213,7 @@ const APRON_PROPS: ReadonlySet<string> = new Set(['tree', 'darktree', 'pine', 'f
  * Bakes the ground of `cm` into static RenderTexture chunks (<= 1024 x 1024 px each) at depth GROUND_DEPTH.
  * Requires the 'tiles', 'tiles_edge' and 'tiles_decal' textures (drawTiles from ../art/tiles). Deterministic per map.
  */
-export function bakeGround(scene: Phaser.Scene, cm: CompiledMap): BakedGround {
+export function bakeGround(scene: Phaser.Scene, cm: CompiledMap, shadows?: GroundShadows): BakedGround {
   const ax = apronTiles(cm.w);
   const ay = apronTiles(cm.h);
   const inner = computeTerrainLayers(cm);
@@ -192,6 +258,32 @@ export function bakeGround(scene: Phaser.Scene, cm: CompiledMap): BakedGround {
   const edgeTint = (frame: number) => (dimMoss && edgeFrameInfo(frame).family === 'moss' ? UNDERGROUND_MOSS_TINT : 0xffffff);
   const decalTint = (frame: number) => (dimMoss && Math.floor(frame / DECALS_PER_SET) === mossSet ? UNDERGROUND_MOSS_TINT : 0xffffff);
 
+  // Shadows: the apron's echoed props are planned first so they cast too. One multiply stamp per layer and chunk.
+  const apron = ax || ay ? planApronProps(scene, cm, ax, ay) : [];
+  const baker = new ShadowBaker(scene, shadows?.shear ?? SHADOW_SHEAR);
+  const casters: Caster[] = [...(shadows?.casters ?? [])];
+  for (const a of apron) {
+    const f = scene.textures.get(a.key).get(a.frame);
+    casters.push({ key: a.key, frame: a.frame, x: a.x - Math.floor(f.width / 2), y: a.y - f.height, flip: a.flip });
+  }
+  const shadowAlpha = shadows?.alpha ?? SHADOW_ALPHA;
+  let tmpId = 0;
+  const multiply = (rt: Phaser.GameObjects.RenderTexture, canvas: HTMLCanvasElement, alpha: number) => {
+    const key = `__shade_${cm.def.id}_${tmpId++}`;
+    if (scene.textures.exists(key)) scene.textures.remove(key);
+    if (!scene.textures.addCanvas(key, canvas)) return;
+    const img = scene.make.image({ key, add: false }).setOrigin(0, 0).setBlendMode(Phaser.BlendModes.MULTIPLY).setAlpha(alpha);
+    rt.batchDraw(img, 0, 0);
+    // batchDrawFrame() never sets a blend mode: hand the renderer back to NORMAL, or the next chunk's tiles multiply
+    const r = scene.renderer as unknown as { gl?: unknown; setBlendMode?: (mode: number, force?: boolean) => boolean };
+    if (r.gl && r.setBlendMode) r.setBlendMode(Phaser.BlendModes.NORMAL);
+    stale.push(() => {
+      img.destroy();
+      if (scene.textures.exists(key)) scene.textures.remove(key);
+    });
+  };
+  const stale: (() => void)[] = [];
+
   const chunks: Phaser.GameObjects.RenderTexture[] = [];
   for (let cy = 0; cy < rows; cy++) {
     for (let cx = 0; cx < cols; cx++) {
@@ -215,12 +307,28 @@ export function bakeGround(scene: Phaser.Scene, cm: CompiledMap): BakedGround {
       if (wash && !scene.textures.exists(washKey) && scene.textures.addCanvas(washKey, wash)) rt.batchDrawFrame(washKey, undefined, 0, 0);
       for (const d of decalBuckets[cy * cols + cx])
         rt.batchDrawFrame('tiles_decal', d.frame, d.x - tx0 * TILE_PX, d.y - ty0 * TILE_PX, 1, decalTint(d.frame));
+      // forest floor shade, then every static cast shadow as ONE flat layer (overlaps never add up), then contacts
+      const floor = forestFloor(ext, cm.def.seed | 0, tx0, ty0, tw, th);
+      const layer = baker.layer(casters, (tx0 - ax) * TILE_PX, (ty0 - ay) * TILE_PX, tw * TILE_PX, th * TILE_PX);
+      if (floor) {
+        // the forest shade and the cast shadows share one layer: a trunk's shadow on a shaded floor adds nothing
+        if (layer) floor[0].getContext('2d')!.drawImage(layer.cast, 0, 0);
+        multiply(rt, floor[0], Math.max(shadowAlpha, FOREST_SHADE));
+        multiply(rt, floor[1], FOREST_DEEP);
+      } else if (layer) multiply(rt, layer.cast, shadowAlpha);
+      if (layer) multiply(rt, layer.contact, CONTACT_ALPHA);
       rt.endDraw();
+      for (const f of stale.splice(0)) f();
       if (scene.textures.exists(washKey)) scene.textures.remove(washKey);
       chunks.push(rt);
     }
   }
-  const props = ax || ay ? apronProps(scene, cm, ax, ay) : [];
+  const props = apron.map((a) => {
+    const img = scene.add.image(a.x, a.y, a.key, a.frame).setOrigin(0.5, 1).setDepth(ySort(a.y, Y_BIAS.PROP));
+    if (a.flip) img.setFlipX(true);
+    if (a.tint !== undefined) img.setTint(a.tint);
+    return img;
+  });
   return {
     apron: { x: ax, y: ay },
     destroy() {
@@ -232,27 +340,50 @@ export function bakeGround(scene: Phaser.Scene, cm: CompiledMap): BakedGround {
   };
 }
 
-/** The border's trees and rocks echoed on the apron (most apron cells beside a border prop get one of its looks). */
-function apronProps(scene: Phaser.Scene, cm: CompiledMap, ax: number, ay: number): Phaser.GameObjects.Image[] {
+interface ApronProp {
+  key: string;
+  frame?: number;
+  x: number;
+  y: number;
+  flip?: boolean;
+  tint?: number;
+}
+
+/**
+ * The border echoed on the apron: a tree line continues as canopy masses (one per 2 x 2 cells, like the interior of
+ * the map's own forest); other border props (rocks, spires, bushes) are echoed on most apron cells beside them.
+ */
+function planApronProps(scene: Phaser.Scene, cm: CompiledMap, ax: number, ay: number): ApronProp[] {
   const kindAt = new Map<number, PropKind>();
-  for (const p of cm.props) if (APRON_PROPS.has(p.kind)) kindAt.set(p.ty * cm.w + p.tx, p.kind);
-  if (!kindAt.size) return [];
+  for (const p of cm.props) if (APRON_PROPS.has(p.kind) && !p.mass && (p.tier ?? 'M') === 'M') kindAt.set(p.ty * cm.w + p.tx, p.kind);
+  const forestKind = cm.props.find((p) => p.mass)?.kind;
+  if (!kindAt.size && !forestKind) return [];
   const seed = cm.def.seed | 0;
-  const out: Phaser.GameObjects.Image[] = [];
+  const out: ApronProp[] = [];
   for (let ty = -ay; ty < cm.h + ay; ty++) {
     for (let tx = -ax; tx < cm.w + ax; tx++) {
       if (tx >= 0 && ty >= 0 && tx < cm.w && ty < cm.h) continue;
       // past APRON_PROP_TILES from the map nothing is on screen at the usual views: keep the image count small
       if (Math.max(-tx, tx - cm.w + 1, -ty, ty - cm.h + 1) > APRON_PROP_TILES) continue;
-      const kind = kindAt.get(Math.min(cm.h - 1, Math.max(0, ty)) * cm.w + Math.min(cm.w - 1, Math.max(0, tx)));
-      if (!kind || !scene.textures.exists(kind)) continue;
+      const bi = Math.min(cm.h - 1, Math.max(0, ty)) * cm.w + Math.min(cm.w - 1, Math.max(0, tx));
       const h = cellHash(tx, ty, seed, 0x51ab);
+      if (forestKind && cm.forest?.[bi]) {
+        if ((tx & 1) || !(ty & 1)) continue;
+        const key = `${forestKind}_mass${['', '~1', '~2'][(h >>> 16) % 3]}`;
+        if (!scene.textures.exists(key)) continue;
+        out.push({ key, x: tx * TILE_PX + TILE_PX + (((h >>> 8) % 13) - 6), y: (ty + 1) * TILE_PX + ((h >>> 12) % 5) - 2, flip: (h & 1) === 1, tint: FOREST_TINTS[3] });
+        continue;
+      }
+      const kind = kindAt.get(bi);
+      if (!kind || !scene.textures.exists(kind)) continue;
       if (h % 100 >= 82) continue;
       const looks = [kind, ...(PROP_VARIANTS[kind] ?? []).filter((k) => scene.textures.exists(k))];
-      const x = tx * TILE_PX + TILE_PX / 2 + (((h >>> 8) % 7) - 3);
-      const y = (ty + 1) * TILE_PX + ((h >>> 12) % 3);
-      out.push(scene.add.image(x, y, looks[(h >>> 16) % looks.length]).setOrigin(0.5, 1).setDepth(ySort(y, Y_BIAS.PROP)));
+      const key = looks[(h >>> 16) % looks.length];
+      out.push({ key, frame: scene.textures.get(key).has('0') ? 0 : undefined, x: tx * TILE_PX + TILE_PX / 2 + (((h >>> 8) % 7) - 3), y: (ty + 1) * TILE_PX + ((h >>> 12) % 3) });
     }
   }
   return out;
 }
+
+/** Multiply tints of a tree line's rows: front row untinted, each row back a step darker and cooler. */
+export const FOREST_TINTS: readonly number[] = [0xffffff, 0xb9c4c8, 0x97a6b0, 0x7d8d9c, 0x6a7a8c];

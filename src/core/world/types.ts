@@ -195,12 +195,31 @@ export type PropKind =
   | 'mushroom'
   | 'duskwillow'
   | 'basalt_spire'
-  | 'reeds';
+  | 'reeds'
+  | 'menhir'
+  | 'log';
+
+/** Size tier of a prop (SPEC-v4 §11.2 B; the hero is 40 px tall): S under a tile · M one tile · L 64–104 px · XL 104–160 px. */
+export type PropTier = 'S' | 'M' | 'L' | 'XL';
 
 export interface PropInst {
   kind: PropKind;
+  /** Tile the prop's foot stands on (its bottom-centre is the tile's bottom-centre, moved by ox / oy). */
   tx: number;
   ty: number;
+  /** Size tier; absent = 'M' (the v2 one-tile prop, whose look the renderer picks per tile). */
+  tier?: PropTier;
+  /** Drawn look 0..2 of that kind and tier, chosen so neighbours differ (absent: the renderer picks per tile). */
+  look?: number;
+  /** Whole-pixel offset of the foot from the tile's bottom-centre (half-tile staggers, group spread). */
+  ox?: number;
+  oy?: number;
+  /** Depth step into a forest for the darker back rows: 0 front (default), 1 second row, 2+ interior. */
+  shade?: number;
+  /** A trunkless canopy mass of the forest interior (drawn with the '<kind>_mass' looks). */
+  mass?: boolean;
+  /** Mirrored (organic props only). Absent: the renderer decides per tile. */
+  flip?: boolean;
 }
 
 /** Collision bitflags on CompiledMap.coll. */
@@ -220,6 +239,16 @@ export interface CompiledMap {
   /** COLL bitflags per cell. */
   coll: Uint8Array;
   props: PropInst[];
+  /**
+   * Forest depth per cell (row-major): 0 = not forest, 1 = the front row beside open ground, 2 = the second row,
+   * 3+ = interior. Only tree-line borders ('T' in a biome whose tree is a tree) carry it; absent on older data.
+   */
+  forest?: Uint8Array;
+  /**
+   * Clearing strength per cell, 0..2 (row-major): 2 = inside a monster clearing (clean ground), 1 = its dressed rim.
+   * Derived from the spawn entries until maps carry `zones` (SPEC-v4 §11.2 D).
+   */
+  clearing?: Uint8Array;
   /** Arrival position (px) for each portal id in THIS map. */
   arrivals: Record<string, { x: number; y: number }>;
   /** Default spawn (px): first waystone, else the map centre's nearest walkable tile. */

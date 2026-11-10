@@ -53,11 +53,27 @@
 // VFX World lane additions (docs/VFX.md §8.9):
 //   monsterSpawn        a monster respawned at its spawn (Combat.respawn): the spawn pop
 //   monsterTelegraph    + `live` (the exact live geometry MonsterSkills hit-tests) and `phases` (follow-up swings)
+// v4 Phase 1 additions (docs/SPEC-v4.md §6.1, §3.6; append-only):
+//   objectSpawn         a player skill placed something in the world (a zone): where, how big, how long, its ticks
+//   objectTick          a placed object ticks (a zone pulses), before the hits of that tick
+//   objectEnd           a placed object is gone: expire / cap (the 12-object cap) / replaced / consumed / clear
+//   blink               the player vanished at `from` and appeared at `to` (an arrival hit follows when `radius`)
+//   mend                a mend skill healed the player (each pulse of a heal over time; `first` on the cast)
+//   shieldUp            a shield skill raised a shell; shieldHit: it soaked a blow; shieldEnd: broken / expired /
+//                       replaced (a burst of `burst` px follows when the skill has one)
+//   weaponChanged       the held weapon changed (bag, the "Needs a sword — Equip" line, becoming a class)
+//   mechanic            the worn class's mechanic did something worth showing: `type` is the core MechanicEffect
+//                       type (full, spent, comboStep, comboBreak, finisher, marked, cashIn, markEnd, stance, placed,
+//                       expired, levelUp, consumed); the HUD widget itself reads GameController.mechanicView()
+//   statusApplied       + kinds root / launch / expose / lure (monsters and the player)
+//   hit / castFire      + `boost` (what the class mechanic added to this cast), `finisher` (its name)
+//   heal                + source 'mend'
 // Fields marked "(VFX request)" are filled where the emitter knows them (castId on castStart, projectile id / index /
 // count, telegraph id / timing / tell / rank, untilMs, source, via / from, spreadTo, heal.from, spark x / y,
 // death.killer, playerHurt attacker / skill); they stay optional, so listeners must cope with them missing.
 import type Phaser from 'phaser';
-import type { BuffStat, ElementId, MonsterDef, MonsterRank, ShapeKind, SkillDef, StatusKind } from '../core/types';
+import type { MechanicEffect, MechanicView } from '../core/mechanics';
+import type { BuffStat, CastBoost, ElementId, MonsterDef, MonsterRank, ShapeKind, SkillDef, StatusKind, WeaponType } from '../core/types';
 import type { NodeKind } from '../core/world/types';
 import type { Monster } from './entities/Monster';
 
@@ -116,6 +132,12 @@ export interface HitEvent extends SkillRef, Pt {
   via?: 'arc' | 'pierce' | 'return';
   /** Arc rider: where the zap came from (VFX request). */
   from?: Pt;
+  /** v4: what the class mechanic added to the cast this hit belongs to (absent: nothing). */
+  boost?: CastBoost;
+  /** v4: the cast is a combo finisher of this name ("Finisher", "Roadhouse"). */
+  finisher?: string;
+  /** v4: the placed object (objectSpawn id) whose tick landed this hit. */
+  objectId?: number;
 }
 
 export interface DotTickEvent extends Pt {
@@ -150,6 +172,14 @@ export interface CastFireEvent extends SkillRef, Pt {
   basic: boolean;
   /** Map id the cast happened in (quest `cast` objectives). */
   map: string;
+  /** v4: what the class mechanic added to this cast (absent: nothing). */
+  boost?: CastBoost;
+  /** v4: this cast is a combo finisher of this name. */
+  finisher?: string;
+  /** v4: the bar skill that was pressed, when a stance cast another skill in its place. */
+  barId?: string;
+  /** v4: the cast was paid with HP (percent of max HP) instead of SP. */
+  hpCostPct?: number;
 }
 
 export interface ProjectileSpawnEvent extends SkillRef, Pt {
@@ -244,7 +274,7 @@ export interface ComboEvent extends SkillRef, Pt {
 
 export interface HealEvent extends Pt {
   amount: number;
-  source: 'leech' | 'smite';
+  source: 'leech' | 'smite' | 'mend';
   /** The struck target the heal streams from (VFX request). */
   from?: Pt;
 }
@@ -345,6 +375,7 @@ export interface ClassChangedEvent {
   prev: string | null;
   reason: 'wear' | 'discovered';
 }
+
 
 export interface SkillLearnedEvent extends SkillRef {
   /** SkillBook learn source ('lesson:…', 'quest:…', 'spark:…', 'echo:…', 'class:…', 'debug', …). */
@@ -465,6 +496,122 @@ export interface MonsterSpawnEvent extends Pt {
   rank: MonsterRank;
 }
 
+// ------------------------------------------------------------------ v4 Phase 1 payloads
+
+/** A placed world object as events show it. `obj` is the live record (x / y / radius / level / alive every frame). */
+export interface ObjectRef {
+  /** Unique for the run; objectSpawn / objectTick / objectEnd / hit.objectId carry the same id. */
+  id: number;
+  kind: 'zone';
+  /** Live record owned by SkillSystem (never keep it past objectEnd). */
+  obj: { readonly x: number; readonly y: number; readonly radius: number; readonly level: number; readonly alive: boolean; readonly line?: { x0: number; y0: number; x1: number; y1: number } };
+}
+
+export interface ObjectSpawnEvent extends SkillRef, Pt, ObjectRef {
+  owner: Actor;
+  /** Circle radius, or half the width of a lane. */
+  radius: number;
+  /** A lane (zone `line`) instead of a circle: its two ends on the ground. */
+  line?: { x0: number; y0: number; x1: number; y1: number };
+  /** It moves with the caster. */
+  follow: boolean;
+  /** How long it stands (ms; Infinity: until replaced, used up or the map changes) and the scene time it ends. */
+  durationMs: number;
+  untilMs: number;
+  /** Ms between ticks and how many it lands in all. */
+  tickMs: number;
+  ticks: number;
+  /** The class mechanic's object (Hearth, Runestone): its name. */
+  mechanic?: string;
+}
+
+export interface ObjectTickEvent extends SkillRef, Pt, ObjectRef {
+  /** 0-based tick index of `ticks`. */
+  index: number;
+  ticks: number;
+  radius: number;
+}
+
+export interface ObjectEndEvent extends SkillRef, Pt, ObjectRef {
+  reason: 'expire' | 'cap' | 'replaced' | 'consumed' | 'clear';
+}
+
+export interface BlinkEvent extends SkillRef {
+  owner: Actor;
+  from: Pt;
+  to: Pt;
+  /** Shape `to`: a point ahead, the target, in place, or one of the player's own objects. */
+  mode: 'point' | 'target' | 'self' | 'object';
+  /** Arrival hit radius (px) when the skill has one. */
+  radius?: number;
+}
+
+export interface MendEvent extends SkillRef, Pt {
+  /** HP restored by this pulse. */
+  amount: number;
+  /** The first pulse (the cast); later pulses of a heal over time are false. */
+  first: boolean;
+  /** Heal over time: its whole length (ms). */
+  overMs?: number;
+  /** Resting circle (px) the heal over time needs you to stay in. */
+  radius?: number;
+}
+
+export interface ShieldUpEvent extends SkillRef, Pt {
+  /** HP the shell soaks. */
+  amount: number;
+  durationMs: number;
+  untilMs: number;
+  /** Burst radius when it ends (px), if any. */
+  burst?: number;
+}
+
+export interface ShieldHitEvent extends Pt {
+  /** Damage soaked by this blow and what the shell has left. */
+  absorbed: number;
+  left: number;
+  /** Where the blow came from, when known. */
+  origin?: Pt;
+}
+
+export interface ShieldEndEvent extends SkillRef, Pt {
+  reason: 'broken' | 'expired' | 'replaced' | 'clear';
+  /** Burst radius (px) when the shell bursts as it ends. */
+  burst?: number;
+}
+
+export interface WeaponChangedEvent {
+  weapon: WeaponType;
+  prev: WeaponType;
+  /** Why: a swap by the player, becoming a class, or a weapon just bought. */
+  reason: 'swap' | 'class' | 'buy';
+}
+
+/**
+ * The worn class's mechanic did something (docs/SPEC-v4.md §3.6): VFX / audio feedback. `type` is the core effect's
+ * type; `effect` the effect itself. Positions: the player's feet, unless `target` / `at` says otherwise.
+ */
+export interface MechanicEventPayload extends Pt {
+  classId: string;
+  /** Mechanic kind: gauge | combo | marks | stance | zone. */
+  kind: string;
+  /** The name shown: the mechanic's, or the finisher's / stance's own. */
+  name: string;
+  type: MechanicEffect['type'];
+  effect: MechanicEffect;
+  /** The widget after this effect. */
+  view: MechanicView | null;
+  /** marked / markEnd: the foe; cashIn: every foe that held marks. */
+  target?: Monster;
+  targets?: { target: Monster; marks: number; stored: number }[];
+  /** spent / finisher / cashIn / consumed: the skill. */
+  skillId?: string;
+  /** placed / expired / levelUp / consumed: where the object stands (or stood). */
+  at?: Pt;
+  /** placed / expired / levelUp: the world object id (objectSpawn id), when it exists. */
+  objectId?: number;
+}
+
 /** Every game event and its payload. */
 export interface GameEvents {
   hit: HitEvent;
@@ -507,6 +654,17 @@ export interface GameEvents {
   chainLaunch: ChainLaunchEvent;
   // VFX World lane additions (docs/VFX.md §8.9): append-only.
   monsterSpawn: MonsterSpawnEvent;
+  // v4 Phase 1 (docs/SPEC-v4.md §6.1, §3.6): append-only.
+  objectSpawn: ObjectSpawnEvent;
+  objectTick: ObjectTickEvent;
+  objectEnd: ObjectEndEvent;
+  blink: BlinkEvent;
+  mend: MendEvent;
+  shieldUp: ShieldUpEvent;
+  shieldHit: ShieldHitEvent;
+  shieldEnd: ShieldEndEvent;
+  weaponChanged: WeaponChangedEvent;
+  mechanic: MechanicEventPayload;
 }
 
 export type GameEventName = keyof GameEvents;

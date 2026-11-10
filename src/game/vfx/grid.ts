@@ -49,6 +49,11 @@ export const DEFAULTS: { readonly [C in ComponentId]: ComponentParams[C] } = {
   aura: { motif: 'edge', phase: 'loop', activation: 'ring', body: 'M', halo: false },
   tell: { piece: 'chevron', danger: true },
   afterimage: { mode: 'ghost', steps: [0.6, 0.4, 0.2] },
+  field: { size: 's' },
+  warp: { phase: 'out', body: 'M' },
+  mend: { phase: 'pulse', body: 'M' },
+  shell: { phase: 'loop', body: 'M' },
+  emblem: { kind: 'full', n: 1 },
 };
 
 const ELEMENTS: readonly ElementId[] = ['fire', 'water', 'earth', 'wind', 'lightning', 'shadow', 'holy', 'ice', 'magma', 'storm', 'twilight'];
@@ -81,7 +86,7 @@ const AXES: { readonly [C in ComponentId]: { readonly [K in keyof ComponentParam
   },
   bolt: { dx: [24, 96, 240, 470], dy: [0, -60, 90], strength: [1, 0.7], seq: ['chain', 'zap'], seed: [1, 2, 3] },
   burst: {
-    cls: ['slash', 'pierce', 'blunt', 'magic', 'ki', 'crit', 'tick', 'strong', 'resist', 'immune', 'muzzle', 'split', 'glint', 'fizzle', 'star'],
+    cls: ['slash', 'pierce', 'blunt', 'magic', 'ki', 'crit', 'tick', 'strong', 'resist', 'immune', 'muzzle', 'split', 'glint', 'fizzle', 'star', 'jab', 'hook', 'palm', 'kick', 'slam'],
     size: ['s', 'm', 'l'],
   },
   motes: {
@@ -131,8 +136,8 @@ const AXES: { readonly [C in ComponentId]: { readonly [K in keyof ComponentParam
     scale: ['s', 'm', 'l'],
   },
   status: {
-    kind: ['burn', 'slow', 'soak', 'stun', 'knockback', 'shock', 'bleed', 'smite', 'freeze', 'poison', 'pull'],
-    unit: ['tongue', 'drip', 'puddle', 'chevron', 'star', 'microarc', 'crystal', 'icicle', 'bubble', 'drop', 'splash', 'beam', 'speedline', 'spiral', 'pip'],
+    kind: ['burn', 'slow', 'soak', 'stun', 'knockback', 'shock', 'bleed', 'smite', 'freeze', 'poison', 'pull', 'root', 'launch', 'expose', 'lure'],
+    unit: ['tongue', 'drip', 'puddle', 'chevron', 'star', 'microarc', 'crystal', 'icicle', 'bubble', 'drop', 'splash', 'beam', 'speedline', 'spiral', 'pip', 'shackle', 'updraft', 'breach', 'beckon'],
     body: ['S', 'M', 'L', 'W'],
   },
   aura: {
@@ -144,6 +149,11 @@ const AXES: { readonly [C in ComponentId]: { readonly [K in keyof ComponentParam
   },
   tell: { piece: ['chevron', 'arrow', 'bead', 'lock', 'edge', 'fizzle'], danger: [false, true] },
   afterimage: { mode: ['ghost', 'blink', 'mirror'] },
+  field: { size: ['s', 'm'] },
+  warp: { phase: ['out', 'in'], body: ['S', 'M', 'L', 'W'] },
+  mend: { phase: ['pulse', 'loop'], body: ['S', 'M', 'L', 'W'] },
+  shell: { phase: ['form', 'loop', 'absorb', 'break'], body: ['S', 'M', 'L', 'W'] },
+  emblem: { kind: ['full', 'finisher', 'cashIn', 'stance', 'step', 'mark'], n: [1, 2, 3, 4, 5] },
 };
 
 /** Grid params for one component (defaults first, then one axis at a time; duplicates removed). */
@@ -172,7 +182,7 @@ export function gridParams<C extends ComponentId>(c: C): ComponentParams[C][] {
 /** The grid as pieces for one family (the motif equals the family). Aura and ring add back / front halves. */
 export function gridPieces(c: ComponentId, family: FamilyId): VfxPiece[] {
   const out: VfxPiece[] = gridParams(c).map((p) => piece(c, p as never, family));
-  if (c === 'ring' || c === 'aura')
+  if (c === 'ring' || c === 'aura' || c === 'mend' || c === 'shell')
     for (const half of ['back', 'front'] as const) out.push(piece(c, DEFAULTS[c] as never, family, { anchor: { to: 'caster', dy: 0, half } }));
   return out;
 }

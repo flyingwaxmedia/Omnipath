@@ -1,6 +1,6 @@
 import type Phaser from 'phaser';
 import { type Ctx, rgba, scratch } from './common';
-import { PAL, artRng, disc, keySeed, line as seg, outline, pixelTex, px } from './pixel';
+import { RAMPS, WORLD_OUTLINE, artRng, disc, keySeed, line as seg, outline, pixelTex, px } from './pixel';
 
 // Ground dressing (docs/ART-DIRECTION.md §3 "Dressing"): small, non-blocking, purely visual decor scattered by
 // src/game/render/dressing.ts. Every texture is keyed 'dr_<name>', anchored bottom-centre (origin 0.5, 1), drawn in
@@ -8,14 +8,14 @@ import { PAL, artRng, disc, keySeed, line as seg, outline, pixelTex, px } from '
 // Flat decals (pebbles, ember cracks, bones, cobwebs) carry no shadow and are placed below every sprite.
 
 type Ramp = readonly string[];
-const OUT = PAL.outline;
+const OUT = WORLD_OUTLINE;
 
 const R = {
-  grass: ['#2e4420', '#3f5a26', '#56772f', '#6c8f3a', '#86a64a', '#a2bd62'],
-  leaf: ['#1f3519', '#2b4a22', '#3d6630', '#548540', '#74a655', '#a2c46a'],
-  bark: ['#2e1d10', '#3d2817', '#5c3d22', '#7d5530', '#9c6d3e', '#b8874f'],
+  grass: RAMPS.grass,
+  leaf: RAMPS.foliage,
+  bark: RAMPS.wood,
   crate: ['#3a2412', '#5a3a1e', '#7a5430', '#9a6e40', '#b88a54', '#d0a670'],
-  stone: ['#33353c', '#4a4d55', '#666a73', '#878b93', '#a9adb3', '#cfd2d5'],
+  stone: RAMPS.stone,
   warm: ['#3a342e', '#544c43', '#70665a', '#8f8475', '#aea290', '#ccc2ae'],
   iron: ['#24252b', '#3a3c44', '#565a64', '#7c818c', '#a8adb6'],
   gold: ['#6a4818', '#a0702c', '#d0a048', '#e9c46a', '#f8e6a8'],
@@ -35,7 +35,6 @@ const R = {
   shroomBrown: ['#3a2414', '#5c3a20', '#7e5430', '#a07244', '#c49464'],
 } as const;
 
-const SHADOW = 'rgba(36,24,15,0.28)';
 
 // ------------------------------------------------------------------ kit
 
@@ -85,10 +84,6 @@ function sprite(c: Ctx, w: number, h: number, draw: (b: Ctx) => void, color: str
   draw(s.c);
   outline(s.c, w, h, color);
   c.drawImage(s.el, 0, 0);
-}
-
-function shadow(c: Ctx, cx: number, cy: number, rx: number, ry: number): void {
-  disc(c, cx, cy, rx, ry, SHADOW);
 }
 
 function halo(c: Ctx, cx: number, cy: number, r: number, color: string, a = 0.3, steps = 3): void {
@@ -305,7 +300,6 @@ function flowerClump(scene: Phaser.Scene, color: keyof typeof FLOWERS, size: key
       }
     }
     pts.sort((p, q) => p[1] - q[1]);
-    shadow(c, cx, base + 0.5, S.w * 0.36, 1.6);
     // 1) outlined leaf fan
     sprite(c, S.w, S.h, (b) => {
       for (let i = 0; i < S.leaves; i++) {
@@ -330,7 +324,6 @@ function flowerClump(scene: Phaser.Scene, color: keyof typeof FLOWERS, size: key
 
 function mushrooms(scene: Phaser.Scene, key: string, cap: Ramp): void {
   tex(scene, key, 20, 15, (c) => {
-    shadow(c, 10, 13, 8, 1.6);
     sprite(c, 20, 15, (b) => {
       const one = (x: number, y: number, rx: number, ry: number, stemH: number, spots: boolean) => {
         box(b, x - 1, y, 3, stemH, R.cream[3]);
@@ -364,7 +357,6 @@ function tallGrass(scene: Phaser.Scene, key: string, ramp: Ramp, wide: boolean, 
     const wind = swayLean(f) * 1.6;
     const cx = w / 2;
     const base = h - 2;
-    shadow(c, cx, base + 0.5, w * 0.36, 1.6);
     sprite(c, w, h, (b) => {
       const n = wide ? 11 : 7;
       // back blades first (darker), front blades last (lighter)
@@ -412,7 +404,6 @@ function drawGroundBits(scene: Phaser.Scene): void {
     ),
   );
   tex(scene, 'dr_stone', 16, 12, (c) => {
-    shadow(c, 8, 10.5, 7, 1.5);
     sprite(c, 16, 12, (b) => {
       rockLump(b, 2, 10, 12, 8, R.stone);
       box(b, 4, 4, 3, 1, R.leaf[3]);
@@ -420,7 +411,6 @@ function drawGroundBits(scene: Phaser.Scene): void {
     });
   });
   tex(scene, 'dr_rubble', 22, 13, (c) => {
-    shadow(c, 11, 11.5, 9, 1.5);
     sprite(c, 22, 13, (b) => {
       rockLump(b, 1, 11, 7, 6, R.warm);
       rockLump(b, 12, 11, 8, 7, R.warm);
@@ -430,7 +420,6 @@ function drawGroundBits(scene: Phaser.Scene): void {
     });
   });
   tex(scene, 'dr_stump', 22, 19, (c) => {
-    shadow(c, 11, 17, 10, 2);
     sprite(c, 22, 19, (b) => {
       const B = R.bark;
       fpoly(b, [3, 17, 5, 13, 5, 6, 17, 6, 17, 13, 19, 17], B[3]);
@@ -450,7 +439,6 @@ function drawGroundBits(scene: Phaser.Scene): void {
     });
   });
   tex(scene, 'dr_log', 34, 15, (c) => {
-    shadow(c, 17, 13, 16, 2);
     sprite(c, 34, 15, (b) => {
       const B = R.bark;
       box(b, 6, 4, 26, 9, B[3]);
@@ -616,11 +604,9 @@ function bannerBody(b: Ctx, cloth: Ramp, h: number, frame = 0): void {
 
 function drawFurniture(scene: Phaser.Scene): void {
   tex(scene, 'dr_crate', 18, 20, (c) => {
-    shadow(c, 9, 18, 9, 2);
     sprite(c, 18, 20, (b) => crateBody(b, 1, 19, 15));
   });
   tex(scene, 'dr_crates', 30, 32, (c) => {
-    shadow(c, 15, 30, 15, 2.5);
     sprite(c, 30, 32, (b) => {
       crateBody(b, 1, 31, 14);
       crateBody(b, 15, 31, 14);
@@ -628,20 +614,16 @@ function drawFurniture(scene: Phaser.Scene): void {
     });
   });
   tex(scene, 'dr_barrel', 16, 20, (c) => {
-    shadow(c, 8, 18, 7.5, 2);
     sprite(c, 16, 20, (b) => barrelBody(b, 3, 19, 10, 15));
   });
   idleTex(scene, 'dr_banner_blue', 14, 40, 3, (c, _r, f) => {
-    shadow(c, 7, 38.5, 6, 1.5);
     sprite(c, 14, 40, (b) => bannerBody(b, R.blue, 39, f));
   });
   idleTex(scene, 'dr_banner_red', 14, 40, 3, (c, _r, f) => {
-    shadow(c, 7, 38.5, 6, 1.5);
     sprite(c, 14, 40, (b) => bannerBody(b, R.red, 39, f));
   });
   // flicker: 0 the still look, 1 a brighter flare (hot core, wider halo), 2 a dip (the flame sinks a pixel)
   idleTex(scene, 'dr_lantern', 16, 40, 3, (c, _r, f) => {
-    shadow(c, 7, 38.5, 5, 1.5);
     halo(c, 11, 12, [9, 10, 8][f], '#ffcf6a', [0.4, 0.46, 0.32][f]);
     sprite(c, 16, 40, (b) => {
       box(b, 5, 6, 3, 33, R.bark[3]);
@@ -727,7 +709,6 @@ function drawFences(scene: Phaser.Scene): void {
   // Horizontal segment: one tile wide; posts at x 0 and 16, rails run edge to edge so segments chain seamlessly.
   // The right end of a run is closed with dr_fence_post placed at the next tile's left edge.
   tex(scene, 'dr_fence_h', 32, H, (c) => {
-    for (const x of [2, 18]) disc(c, x + 2, foot, 4, 1.2, SHADOW);
     box(c, 0, foot, 32, 1, 'rgba(36,24,15,0.16)');
     sprite(c, 32, H, (b) => {
       rail(b, 0, 32, foot - 15);
@@ -759,7 +740,6 @@ function drawFences(scene: Phaser.Scene): void {
   tex(scene, 'dr_fence_v', 12, 52, (c) => {
     const vf = 51;
     const B = R.bark;
-    for (const f of [vf, vf - 16]) disc(c, 6, f, 5, 1.5, SHADOW);
     sprite(c, 12, 52, (b) => {
       box(b, 5, 9, 2, vf - 13, B[3]);
       px(b, 5, 9, B[5]);
@@ -769,11 +749,9 @@ function drawFences(scene: Phaser.Scene): void {
     });
   });
   tex(scene, 'dr_fence_v_end', 12, 16, (c) => {
-    disc(c, 6, 15, 5, 1.5, SHADOW);
     sprite(c, 12, 16, (b) => vpost(b, 15));
   });
   tex(scene, 'dr_fence_post', 8, H, (c) => {
-    disc(c, 4, foot, 4, 1.2, SHADOW);
     sprite(c, 8, H, (b) => post(b, 2, foot, 18));
   });
 }
@@ -784,7 +762,6 @@ function drawAccents(scene: Phaser.Scene): void {
   // sway cells 1 / 2: blade tips and the cattail heads a pixel downwind / the mirrored way
   idleTex(scene, 'dr_reeds', 16, 22, SWAY_CELLS, (c, _r, cell) => {
     const f = swayLean(cell);
-    shadow(c, 8, 20.5, 6, 1.4);
     sprite(c, 16, 22, (b) => {
       for (const [x0, lean, len, tone] of [
         [5, -4, 12, 4],
@@ -807,7 +784,6 @@ function drawAccents(scene: Phaser.Scene): void {
     });
   });
   tex(scene, 'dr_ice_shards', 18, 18, (c) => {
-    shadow(c, 9, 16.5, 7, 1.4);
     disc(c, 9, 10, 8, 7, 'rgba(200,240,255,0.12)');
     sprite(c, 18, 18, (b) => {
       const I = R.ice;
@@ -847,7 +823,6 @@ function drawAccents(scene: Phaser.Scene): void {
       px(c, x, y, 'rgba(220,200,255,0.9)');
   });
   tex(scene, 'dr_dusk_blossom', 20, 20, (c, rnd) => {
-    shadow(c, 10, 18.5, 7, 1.4);
     halo(c, 10, 8, 9, '#ffb0e8', 0.3);
     sprite(c, 20, 20, (b) => {
       for (let i = 0; i < 6; i++) {

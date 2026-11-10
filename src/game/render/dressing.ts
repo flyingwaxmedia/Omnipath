@@ -93,12 +93,10 @@ const TOWN_GREEN: Table = {
 
 /** What stands along a plaza's rim (town and outpost cobble with grass or a wall beside it). */
 const PLAZA_RIM: readonly Pick[] = [
-  ['dr_crates', 5],
+  ['dr_crates', 6],
   ['dr_barrel', 6],
   ['dr_crate', 5],
   ['banner', 2],
-  ['dr_lantern', 2],
-  ['dr_fence_post', 3],
 ];
 const STONY: Table = {
   density: 0.14,
@@ -288,6 +286,146 @@ const WALL_TILES: ReadonlySet<number> = new Set([T.CAVE_WALL, T.CRYPT_WALL, T.CL
 const FENCE_BIOMES: ReadonlySet<Biome> = new Set<Biome>(['meadow', 'town']);
 const SHORE_REED_BIOMES: ReadonlySet<Biome> = new Set<Biome>(['meadow', 'lake', 'town', 'grove', 'glade', 'dusk', 'storm', 'hill']);
 
+// ------------------------------------------------------------------ zones
+
+/** Dressing zone of a cell. NONE: nothing grows (blocked, water, path, plaza). */
+export const ZONE = { NONE: 0, CALM: 1, MEDIUM: 2, DENSE: 3 } as const;
+/** Poisson spacing between dressing anchors, in tiles (SPEC-v4 §11.2 D). */
+export const SPACING = { calm: 5, medium: 2.5, dense: 1.2 } as const;
+/** Tables dressed by the ecology rules (the green outdoor ones); the others keep plain picks from their table. */
+const ECOLOGY: ReadonlySet<Table> = new Set<Table>([GREEN, TOWN_GREEN, GROVE, GLADE, DUSK, STONY]);
+
+export interface DressingZones {
+  /** ZONE per cell (row-major). */
+  zones: Uint8Array;
+  /** 1 where the cell lies under or beside a tree (within 2 tiles of a tree prop or a tree line). */
+  underTree: Uint8Array;
+  /** 1 on the sunlit side of a wood: 2 – 4 tiles from a tree line, not under a tree. */
+  sunEdge: Uint8Array;
+  /** 1 at a cliff's or wall's foot (a wall within 1 tile). */
+  wallFoot: Uint8Array;
+}
+
+/**
+ * Splits a map's ground into calm, medium and dense cells (about 60 / 30 / 10 by area outdoors). Dense: within 3 tiles
+ * of a border (tree line, cliff, water), a structure or a big prop, where the map's low-frequency mask allows. Calm:
+ * paths (+1 tile), plazas, portal arrivals (+2), monster clearings, and wherever the mask says so. Pure per map.
+ */
+export function planZones(cm: CompiledMap): DressingZones {
+  const { w, h, ground, coll, def } = cm;
+  const n = w * h;
+  const seed = def.seed >>> 0;
+  const zones = new Uint8Array(n);
+  const underTree = new Uint8Array(n);
+  const sunEdge = new Uint8Array(n);
+  const wallFoot = new Uint8Array(n);
+  const inB = (x: number, y: number) => x >= 0 && y >= 0 && x < w && y < h;
+  // distance (Chebyshev, capped) to the nearest source cell, by repeated dilation
+  const spreadFrom = (src: (i: number) => boolean, max: number): Uint8Array => {
+    const d = new Uint8Array(n).fill(255);
+    let frontier: number[] = [];
+    for (let i = 0; i < n; i++)
+      if (src(i)) {
+        d[i] = 0;
+        frontier.push(i);
+      }
+    for (let step = 1; step <= max && frontier.length; step++) {
+      const next: number[] = [];
+      for (const i of frontier) {
+        const x = i % w;
+        const y = (i - x) / w;
+        for (let dy = -1; dy <= 1; dy++)
+          for (let dx = -1; dx <= 1; dx++) {
+            const nx = x + dx;
+            const ny = y + dy;
+            if (!inB(nx, ny)) continue;
+            const j = ny * w + nx;
+            if (d[j] !== 255) continue;
+            d[j] = step;
+            next.push(j);
+          }
+      }
+      frontier = next;
+    }
+    return d;
+  };
+  const treeAt = new Uint8Array(n);
+  const bigAt = new Uint8Array(n);
+  const TREES = new Set(['tree', 'darktree', 'deadtree', 'pine', 'frostpine', 'duskwillow', 'log']);
+  for (const p of cm.props) {
+    const i = p.ty * w + p.tx;
+    if (TREES.has(p.kind) && p.tier !== 'S') treeAt[i] = 1;
+    if (p.tier === 'L' || p.tier === 'XL') bigAt[i] = 1;
+  }
+  for (const s of def.structures ?? []) {
+    const fp = STRUCTURE_FOOTPRINT[s.kind];
+    if (!fp) continue;
+    for (let y = s.ty; y < s.ty + fp.h; y++) for (let x = s.tx; x < s.tx + fp.w; x++) if (inB(x, y)) bigAt[y * w + x] = 1;
+  }
+  const forest = cm.forest;
+  const dForest = spreadFrom((i) => !!forest?.[i], 4);
+  const dTree = spreadFrom((i) => !!treeAt[i] || !!forest?.[i], 2);
+  const dWall = spreadFrom((i) => WALL_TILES.has(ground[i]), 3);
+  const dWater = spreadFrom((i) => WATER_TILES.has(ground[i]), 3);
+  const dBig = spreadFrom((i) => !!bigAt[i], 3);
+  const dPath = spreadFrom((i) => PATH_TILES.has(ground[i]), 1);
+  const calm = new Uint8Array(n);
+  const mark = (x0: number, y0: number, x1: number, y1: number) => {
+    for (let y = Math.max(0, y0); y <= Math.min(h - 1, y1); y++) for (let x = Math.max(0, x0); x <= Math.min(w - 1, x1); x++) calm[y * w + x] = 1;
+  };
+  for (const a of [...Object.values(cm.arrivals), cm.spawn]) {
+    const ax = Math.floor(a.x / TILE);
+    const ay = Math.floor(a.y / TILE);
+    mark(ax - 2, ay - 2, ax + 2, ay + 2);
+  }
+  // low-frequency mask (9-tile cells)
+  const CELLM = 9;
+  const mv = (cx: number, cy: number) => mulberry32(hashSeed(seed, 'zone', cx, cy))();
+  const mask = (x: number, y: number) => {
+    const fx = x / CELLM;
+    const fy = y / CELLM;
+    const x0 = Math.floor(fx);
+    const y0 = Math.floor(fy);
+    const sx = (fx - x0) ** 2 * (3 - 2 * (fx - x0));
+    const sy = (fy - y0) ** 2 * (3 - 2 * (fy - y0));
+    const a = mv(x0, y0) + (mv(x0 + 1, y0) - mv(x0, y0)) * sx;
+    const b = mv(x0, y0 + 1) + (mv(x0 + 1, y0 + 1) - mv(x0, y0 + 1)) * sx;
+    return a + (b - a) * sy;
+  };
+  for (let y = 0; y < h; y++)
+    for (let x = 0; x < w; x++) {
+      const i = y * w + x;
+      if (coll[i] & COLL.BLOCK || PATH_TILES.has(ground[i]) || WATER_TILES.has(ground[i])) continue;
+      const m = mask(x, y);
+      const clear = cm.clearing?.[i] ?? 0;
+      const border = Math.min(dForest[i], dWall[i], dWater[i], dBig[i]);
+      underTree[i] = dTree[i] <= 2 ? 1 : 0;
+      sunEdge[i] = dForest[i] >= 2 && dForest[i] <= 4 && dTree[i] > 1 ? 1 : 0;
+      wallFoot[i] = dWall[i] <= 1 ? 1 : 0;
+      if (clear === 2 || calm[i] || dPath[i] <= 1) zones[i] = ZONE.CALM;
+      else if (border <= 1 && m > 0.55) zones[i] = ZONE.DENSE;
+      else if (border <= 2 && m > 0.42) zones[i] = ZONE.MEDIUM;
+      else if (clear === 1 || m > 0.74) zones[i] = ZONE.MEDIUM;
+      else zones[i] = ZONE.CALM;
+    }
+  return { zones, underTree, sunEdge, wallFoot };
+}
+
+/** Share of a map's dressable cells in each zone (the 60 / 30 / 10 rule; tests and validateWorld V13). */
+export function zoneMix(cm: CompiledMap): { calm: number; medium: number; dense: number } {
+  const { zones } = planZones(cm);
+  let c = 0;
+  let m = 0;
+  let d = 0;
+  for (const z of zones) {
+    if (z === ZONE.CALM) c++;
+    else if (z === ZONE.MEDIUM) m++;
+    else if (z === ZONE.DENSE) d++;
+  }
+  const t = Math.max(1, c + m + d);
+  return { calm: c / t, medium: m / t, dense: d / t };
+}
+
 // ------------------------------------------------------------------ planner
 
 /**
@@ -371,29 +509,8 @@ export function planDressing(cm: CompiledMap): DressingItem[] {
     if (tx >= 0 && ty >= 0 && inB(tx, ty)) used[idx(tx, ty)] = 1;
   };
 
-  // --- patch noise: smooth density field + a dominant flower colour per 5x5-tile cell
+  // a dominant flower colour per 5x5-tile cell
   const CELL = 5;
-  const cw = Math.ceil(w / CELL) + 2;
-  const cells = new Float32Array(cw * (Math.ceil(h / CELL) + 2));
-  for (let i = 0; i < cells.length; i++) cells[i] = mulberry32(hashSeed(seed, 'patch', i % cw, Math.floor(i / cw)))();
-  const cellVal = (cx: number, cy: number) => cells[cy * cw + cx];
-  const noise = (x: number, y: number) => {
-    const fx = x / CELL;
-    const fy = y / CELL;
-    const x0 = Math.floor(fx);
-    const y0 = Math.floor(fy);
-    const tx = fx - x0;
-    const ty = fy - y0;
-    const sx = tx * tx * (3 - 2 * tx);
-    const sy = ty * ty * (3 - 2 * ty);
-    const a = cellVal(x0, y0) + (cellVal(x0 + 1, y0) - cellVal(x0, y0)) * sx;
-    const b = cellVal(x0, y0 + 1) + (cellVal(x0 + 1, y0 + 1) - cellVal(x0, y0 + 1)) * sx;
-    return a + (b - a) * sy;
-  };
-  const patchMul = (x: number, y: number) => {
-    const v = noise(x, y);
-    return v < 0.3 ? 0.5 : 0.72 + (v - 0.3) * 1.6;
-  };
   const flowerKey = (table: Table, x: number, y: number, r: () => number, color?: FlowerColor): string => {
     const cols = table.flowers ?? ['cream'];
     const c = color ?? cols[Math.floor(mulberry32(hashSeed(seed, 'fcol', Math.floor(x / CELL), Math.floor(y / CELL)))() * cols.length)];
@@ -418,6 +535,9 @@ export function planDressing(cm: CompiledMap): DressingItem[] {
     if (key.startsWith('flower:')) return flowerKey(GREEN, x, y, r, key.slice(7) as FlowerColor);
     return key;
   };
+
+  // --- zones (SPEC-v4 §11.2 D): calm / medium / dense per cell, and what grows where
+  const { zones, underTree, sunEdge, wallFoot } = planZones(cm);
 
   // --- 1) fences and lanterns along roads (town / meadow / camp areas)
   const fenced = FENCE_BIOMES.has(def.biome) || def.kind === 'outpost' || town;
@@ -535,16 +655,19 @@ export function planDressing(cm: CompiledMap): DressingItem[] {
   }
 
   function planLanterns(): void {
-    // Lanterns at plaza rims and along roads, spaced at least 5 tiles apart.
+    // Lanterns line the ROADS in a rhythm (one about every 6 tiles, alternating gaps), and one stands where a road
+    // meets a plaza. Never a ring round a plaza's rim (SPEC-v4 §11.2 D "road lining").
     const placed: [number, number][] = [];
     for (let y = 1; y < h - 1; y++) {
       for (let x = 1; x < w - 1; x++) {
         if (!free(x, y) || fenceBan[idx(x, y)]) continue;
-        const nearRoad = isPath(x, y - 1) || isPath(x, y + 1) || isPath(x - 1, y) || isPath(x + 1, y);
-        if (!nearRoad) continue;
-        const plaza = [tileAt(x, y - 1), tileAt(x, y + 1), tileAt(x - 1, y), tileAt(x + 1, y)].includes(T.COBBLE);
-        if (!plaza && rng('lamp?', x, y)() > 0.35) continue;
-        if (placed.some(([px, py]) => Math.abs(px - x) + Math.abs(py - y) < (plaza ? 5 : 7))) continue;
+        const sides = [tileAt(x, y - 1), tileAt(x, y + 1), tileAt(x - 1, y), tileAt(x + 1, y)];
+        if (!sides.includes(T.PATH)) continue;
+        // a road mouth: dirt road beside the tile and cobble within 2 tiles
+        let mouth = false;
+        for (let dy = -2; dy <= 2 && !mouth; dy++) for (let dx = -2; dx <= 2; dx++) if (tileAt(x + dx, y + dy) === T.COBBLE) mouth = true;
+        if (!mouth && rng('lamp?', x, y)() > 0.3) continue;
+        if (placed.some(([px, py]) => Math.abs(px - x) + Math.abs(py - y) < (mouth ? 5 : 7))) continue;
         placed.push([x, y]);
         const toRight = isPath(x + 1, y);
         put('dr_lantern', x * TILE + (toRight ? 24 : 8), (y + 1) * TILE - 6, !toRight, x, y, [0, 3]);
@@ -666,8 +789,12 @@ export function planDressing(cm: CompiledMap): DressingItem[] {
         const W = tileAt(x - 1, y) !== T.COBBLE;
         if (!(N || S || E || W) || roadNear(x, y)) continue;
         const r = rng('rim', x, y);
-        if (r() > 0.4 * Math.max(0.5, scale)) continue;
-        if (placed.some(([px, py]) => Math.abs(px - x) <= 2 && Math.abs(py - y) <= 2)) continue;
+        // goods stand in a few STACKS (two or three pieces on neighbouring rim tiles), six or more tiles apart:
+        // a rim dotted every other tile reads as a ring
+        const near = placed.filter(([px, py]) => Math.abs(px - x) <= 6 && Math.abs(py - y) <= 6);
+        const stack = near.filter(([px, py]) => Math.abs(px - x) <= 1 && Math.abs(py - y) <= 1);
+        if (near.length && (!stack.length || near.length >= 3 || near.length !== stack.length)) continue;
+        if (!near.length && r() > 0.3 * Math.max(0.5, scale)) continue;
         placed.push([x, y]);
         const pickKey = pick(PLAZA_RIM, r);
         const key = pickKey === 'banner' ? banner : pickKey;
@@ -724,42 +851,143 @@ export function planDressing(cm: CompiledMap): DressingItem[] {
     }
   }
 
+  /**
+   * Rule dressing (SPEC-v4 §11.2 D). No density target: every walkable cell is calm, medium or dense, anchors keep a
+   * Poisson spacing per zone (5 / 2.5 / 1.2 tiles) and each anchor grows the cluster its surroundings call for —
+   * mushrooms, stumps and logs under trees, a drift of one flower colour on a sunlit wood edge, tall grass at cliff
+   * feet and fences, a lone tuft or stone in the open. Clearings (monster ground) stay clean with a dressed rim.
+   */
   function planScatter(): void {
-    for (let y = 0; y < h; y++) {
-      for (let x = 0; x < w; x++) {
-        if (!free(x, y)) continue;
-        const table = tableFor(ground[idx(x, y)], def.biome, town);
-        if (!table) continue;
-        const r = rng('s', x, y);
-        const edge = isPath(x, y - 1) || isPath(x, y + 1) || isPath(x - 1, y) || isPath(x + 1, y);
-        const chance = table.density * scale * patchMul(x, y) * (edge ? 1.6 : 1);
-        if (r() >= chance) continue;
-        const key = resolve(pick(table.items, r), x, y, r);
-        // position inside the tile, nudged toward an adjacent road so road edges read as dressed
-        let ox = 6 + r() * 20;
-        let oy = 12 + r() * 18;
-        if (isPath(x, y + 1)) oy = 26 + r() * 4;
-        else if (isPath(x, y - 1)) oy = 12 + r() * 4;
-        if (isPath(x + 1, y)) ox = 22 + r() * 6;
-        else if (isPath(x - 1, y)) ox = 4 + r() * 6;
-        put(key, x * TILE + ox, y * TILE + oy, r() < 0.5, x, y);
-        // flowers and grass come in little clusters: a smaller companion in a free neighbour, sometimes a sprig
-        // sharing the tile
-        const clumpy = key.startsWith('dr_flower_') || key.startsWith('dr_tallgrass') || key === 'dr_dusk_blossom';
-        if (!clumpy) continue;
-        const small = key.startsWith('dr_flower_') ? key.replace(/_(s|m|l)$/, r() < 0.6 ? '_s' : '_m') : key;
-        if (r() < 0.6) {
-          const nx = x + (r() < 0.5 ? -1 : 1);
-          const ny = y + (r() < 0.6 ? 0 : 1);
-          if (free(nx, ny) && tableFor(tileAt(nx, ny), def.biome, town) === table)
-            put(small, nx * TILE + 6 + r() * 20, ny * TILE + 12 + r() * 16, r() < 0.5, nx, ny);
+    const zone = zones;
+    const accepted: [number, number, number][] = []; // x, y (tiles, fractional), radius
+    const GRID = 5;
+    const gw = Math.ceil(w / GRID);
+    const buckets: number[][] = Array.from({ length: gw * Math.ceil(h / GRID) }, () => []);
+    const farEnough = (x: number, y: number, r: number) => {
+      const gx = Math.floor(x / GRID);
+      const gy = Math.floor(y / GRID);
+      for (let yy = gy - 1; yy <= gy + 1; yy++)
+        for (let xx = gx - 1; xx <= gx + 1; xx++) {
+          if (xx < 0 || yy < 0 || xx >= gw || yy * gw + xx >= buckets.length) continue;
+          for (const k of buckets[yy * gw + xx]) {
+            const [ax, ay, ar] = accepted[k];
+            const need = Math.min(r, ar);
+            if ((ax - x) ** 2 + (ay - y) ** 2 < need * need) return false;
+          }
         }
-        if (r() < 0.3) {
-          const sx = ox < 16 ? ox + 9 + r() * 5 : ox - 9 - r() * 5;
-          put(small, x * TILE + sx, y * TILE + Math.min(31, oy + 3 + r() * 4), r() < 0.5);
-        }
-      }
+      return true;
+    };
+    // visit the tiles in a seeded shuffle, so the darts land without a scan-line bias
+    const order = new Uint32Array(n);
+    for (let i = 0; i < n; i++) order[i] = i;
+    const sh = rng('order');
+    for (let i = n - 1; i > 0; i--) {
+      const j = Math.floor(sh() * (i + 1));
+      const t = order[i];
+      order[i] = order[j];
+      order[j] = t;
     }
+    for (let o = 0; o < n; o++) {
+      const i = order[o];
+      const x = i % w;
+      const y = (i - x) / w;
+      if (!free(x, y)) continue;
+      const table = tableFor(ground[i], def.biome, town);
+      if (!table) continue;
+      const z = zone[i];
+      if (z === ZONE.NONE) continue;
+      const r = rng('s', x, y);
+      // clearings hold at most a fifth of the medium dressing
+      if (cm.clearing?.[i] === 2 && r() > 0.2) continue;
+      const radius = (z === ZONE.DENSE ? SPACING.dense : z === ZONE.MEDIUM ? SPACING.medium : SPACING.calm) / Math.max(0.5, Math.sqrt(scale * table.density / 0.18));
+      const fx = x + 0.2 + r() * 0.6;
+      const fy = y + 0.3 + r() * 0.6;
+      if (!farEnough(fx, fy, radius)) continue;
+      accepted.push([fx, fy, radius]);
+      buckets[Math.floor(fy / GRID) * gw + Math.floor(fx / GRID)].push(accepted.length - 1);
+      grow(table, x, y, z, r);
+    }
+  }
+
+  /** Where a cluster may reach: the anchor tile, then its neighbours in a seeded order. */
+  function around(x: number, y: number, r: () => number, reach = 1): [number, number][] {
+    const out: [number, number][] = [];
+    for (let dy = -reach; dy <= reach; dy++) for (let dx = -reach; dx <= reach; dx++) if (dx || dy) out.push([x + dx, y + dy]);
+    for (let i = out.length - 1; i > 0; i--) {
+      const j = Math.floor(r() * (i + 1));
+      [out[i], out[j]] = [out[j], out[i]];
+    }
+    return out;
+  }
+
+  /** Grows the cluster an anchor's surroundings call for (the ecology rules). */
+  function grow(table: Table, x: number, y: number, z: number, r: () => number): void {
+    const i = idx(x, y);
+    const has = (k: string) => table.items.some(([key]) => key === k);
+    const at = (key: string, tx: number, ty: number, low = false) => {
+      const edgeS = isPath(tx, ty + 1);
+      const edgeN = isPath(tx, ty - 1);
+      const ox = isPath(tx + 1, ty) ? 22 + r() * 6 : isPath(tx - 1, ty) ? 4 + r() * 6 : 6 + r() * 20;
+      const oy = edgeS ? 26 + r() * 4 : edgeN ? 12 + r() * 4 : (low ? 20 : 12) + r() * (low ? 10 : 18);
+      put(key, tx * TILE + ox, ty * TILE + oy, r() < 0.5, tx, ty);
+    };
+    const spread = (keys: readonly string[], count: number, reach = 1) => {
+      let k = 0;
+      at(keys[k++ % keys.length], x, y);
+      for (const [nx, ny] of around(x, y, r, reach)) {
+        if (k >= count) break;
+        if (!free(nx, ny) || zones[idx(nx, ny)] === ZONE.NONE || cm.clearing?.[idx(nx, ny)] === 2) continue;
+        if (tableFor(tileAt(nx, ny), def.biome, town) !== table) continue;
+        at(keys[k++ % keys.length], nx, ny);
+      }
+    };
+    if (!ECOLOGY.has(table)) {
+      // dungeons, ember, frost, storm and the like keep their own tables: one piece in the calm, two or three where dense
+      const count = z === ZONE.DENSE ? 3 : z === ZONE.MEDIUM ? 2 : 1;
+      const keys: string[] = [];
+      for (let k = 0; k < count; k++) keys.push(resolve(pick(table.items, r), x, y, r));
+      spread(keys, count);
+      return;
+    }
+    const grass = has('dr_tallgrass_b') && r() < 0.6 ? 'dr_tallgrass_b' : has('dr_tallgrass_dusk') ? 'dr_tallgrass_dusk' : 'dr_tallgrass_a';
+    const shrooms = ['dr_mushrooms_red', 'dr_mushrooms_brown', 'dr_spores'].filter(has);
+    if (underTree[i] && r() < 0.75) {
+      // under trees and beside logs: mushrooms, a stump or a fallen log, ferny grass
+      const v = r();
+      if (v < 0.5 && shrooms.length) spread([shrooms[Math.floor(r() * shrooms.length)], shrooms[Math.floor(r() * shrooms.length)], grass], z === ZONE.CALM ? 2 : 3);
+      else if (v < 0.75 && has('dr_log')) spread(['dr_log', shrooms[0] ?? grass, grass], 3);
+      else if (has('dr_stump')) spread(['dr_stump', grass], 2);
+      else spread([grass, grass], 2);
+      return;
+    }
+    if (sunEdge[i] && table.flowers && r() < 0.7) {
+      // a drift of ONE colour along the sunlit edge of a wood: 8 – 20 blooms over a few tiles
+      const cols = table.flowers;
+      const col = cols[Math.floor(mulberry32(hashSeed(seed, 'drift', Math.floor(x / 7), Math.floor(y / 7)))() * cols.length)];
+      const n = 3 + Math.floor(r() * 3);
+      const keys: string[] = [];
+      for (let k = 0; k < n; k++) keys.push(`dr_flower_${col}_${k === 0 ? 'l' : r() < 0.5 ? 'm' : 's'}`);
+      spread(keys, n, 2);
+      return;
+    }
+    if (wallFoot[i] && r() < 0.8) {
+      // tall grass along cliff feet and fences; pebbles at a cliff's foot
+      spread([grass, grass, has('dr_pebbles') ? 'dr_pebbles' : grass], z === ZONE.CALM ? 2 : 3);
+      return;
+    }
+    if (z === ZONE.CALM) {
+      // open ground stays quiet: one low tuft, a stone or a few pebbles
+      const v = r();
+      at(v < 0.55 ? 'dr_tallgrass_a' : v < 0.8 && has('dr_stone') ? 'dr_stone' : has('dr_pebbles') ? 'dr_pebbles' : 'dr_tallgrass_a', x, y, true);
+      return;
+    }
+    const v = r();
+    if (v < 0.5) spread([grass, 'dr_tallgrass_a', grass], z === ZONE.DENSE ? 3 : 2);
+    else if (v < 0.75 && table.flowers) {
+      const key = flowerKey(table, x, y, r);
+      spread([key, key.replace(/_(s|m|l)$/, '_s'), grass], z === ZONE.DENSE ? 3 : 2);
+    } else if (has('dr_stone')) spread(['dr_stone', has('dr_pebbles') ? 'dr_pebbles' : grass, grass], 2);
+    else spread([grass, grass], 2);
   }
 
   function planPathEdges(): void {

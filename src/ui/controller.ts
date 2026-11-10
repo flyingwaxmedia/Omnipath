@@ -57,6 +57,49 @@ export interface BarSlotView {
   maxRank?: number;
   element?: ElementId;
   transformReady?: boolean;
+  /**
+   * v4 (SPEC-v4 §2.2): the skill needs another weapon. Grey the slot and show `line` + "— Equip" (→ equipFor);
+   * `owned` false = the player does not own that weapon yet.
+   */
+  lock?: WeaponLockView;
+  /** v4: a class skill its meter has not unlocked yet — one line ("Needs more Vow."). */
+  waiting?: string;
+  /** v4: the class mechanic would add something to this skill if cast right now (glow). */
+  boosted?: boolean;
+  /** v4: in the current stance this slot casts another skill (show its icon and name). */
+  castsAs?: { skillId: string; name: string };
+}
+
+/** v4: why a skill is locked by the held weapon, and what "Equip" would equip. */
+export interface WeaponLockView {
+  /** Core weaponLockLine: "Needs a sword" / "Needs a dagger" / "Needs a rod" / "Needs bare hands". The UI adds "— Equip". */
+  line: string;
+  weapon: WeaponType;
+  /** The player owns that weapon (Bare Hands always). False: Equip cannot work yet. */
+  owned: boolean;
+}
+
+/**
+ * v4 (SPEC-v4 §3.6): the ONE mechanic widget above the class slots. Its only label is `name`.
+ * widget: 'bar' (a meter: value of max, max null = open-ended), 'pips' (combo steps, marks), 'sides' (a two-sided
+ * stance icon: `stance` 0 / 1, `names` both sides), 'count' (placed objects: value of max).
+ */
+export interface MechanicHudView {
+  classId: string;
+  kind: 'gauge' | 'combo' | 'marks' | 'stance' | 'zone';
+  name: string;
+  widget: 'bar' | 'pips' | 'sides' | 'count';
+  value: number;
+  max: number | null;
+  /** The next fitting skill gets something (meter at its threshold, combo one step from its finisher, marks at max). */
+  ready: boolean;
+  stance?: 0 | 1;
+  /** Stance only: the names of both sides. */
+  names?: [string, string];
+  /** The widget is a button: tapping it swaps the stance (mechanicTap). */
+  tap: boolean;
+  /** The class colour, '#rrggbb'. */
+  color: string;
 }
 
 /** One choice in the own-slot picker grid (docs/UX-SIMPLE.md §3). */
@@ -445,4 +488,20 @@ export interface GameController {
   portraitUrl(): string;
   /** Outfit preview of a class with the current weapon (null = no class); the Class screen and class cards. */
   outfitUrl(classId: string | null): string;
+
+  // -------------------------------------------------------------------- v4: weapons & the class mechanic
+  // (optional members: added while lanes run in parallel; MapScene implements all of them)
+
+  /** The one mechanic widget of the worn class, or null (no class, or a class without one). Read it on every tick. */
+  mechanicView?(): MechanicHudView | null;
+  /** The stance button: swaps the stance when the worn class has a tap / hold stance. */
+  mechanicTap?(): Outcome;
+  /** Why the held weapon locks a skill ("Needs a sword"), or null when it does not. */
+  weaponLock?(skillId: string): WeaponLockView | null;
+  /** The lock line's one action: equips the weapon the skill needs (swap cooldown applies). */
+  equipFor?(skillId: string): Outcome;
+  /** Puts every weapon away: Bare Hands (the same as equipWeapon('fists')). */
+  unequipWeapon?(): Outcome;
+  /** Ms until the next weapon swap is allowed (0 = now). */
+  weaponSwapIn?(): number;
 }

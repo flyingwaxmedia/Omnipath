@@ -156,6 +156,23 @@ function budget(p: VfxPiece): [number, number] {
       return [17, 17];
     case 'afterimage':
       return [0, 0];
+    // v4 components (docs/VFX.md §5): cells as their templates document them.
+    case 'field':
+      return p.params.size === 'm' ? [31, 26] : [22, 18];
+    case 'warp': {
+      const bh = BODY_PX[p.params.body];
+      return [Math.round(bh * 0.8) + 28, bh + 16];
+    }
+    case 'mend': {
+      const bh = BODY_PX[p.params.body];
+      return [Math.round(bh * 0.8) + 24, bh + 26];
+    }
+    case 'shell': {
+      const bh = BODY_PX[p.params.body];
+      return [Math.round(bh * 0.8) + 30, bh + 30];
+    }
+    case 'emblem':
+      return ({ full: [27, 40], finisher: [45, 45], cashIn: [41, 41], stance: [51, 23], step: [41, 11], mark: [21, 21] } as const)[p.params.kind] as [number, number];
   }
 }
 

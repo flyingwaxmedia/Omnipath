@@ -68,7 +68,7 @@ export function chipTint(hide: number): number {
 }
 
 const DANGER: Ink = { ramp: 'danger', motif: 'danger', lut: 'base' };
-const STATUS_PRIORITY: readonly StatusKind[] = ['freeze', 'stun', 'shock', 'burn', 'poison', 'bleed', 'soak', 'slow'];
+const STATUS_PRIORITY: readonly StatusKind[] = ['freeze', 'stun', 'launch', 'root', 'shock', 'burn', 'poison', 'bleed', 'expose', 'lure', 'soak', 'slow'];
 const ONE_SHOT: ReadonlySet<StatusKind> = new Set<StatusKind>(['knockback', 'smite', 'pull']);
 const inkOf = (f: FamilyId, lut: Ink['lut'] = 'base'): Ink => ({ ramp: f as RampId, motif: f, lut });
 const feet = (dy = 0) => ({ to: 'body' as const, dy });

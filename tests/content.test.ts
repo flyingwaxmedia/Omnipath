@@ -1,14 +1,19 @@
-// Content integrity over the real data bundle (docs/SPEC-v2.md §4, §8; docs/CLIENT-v2.md §5/§6):
-// - reachability: every authored skill except monster-only techniques (tag 'monster') can be obtained;
-// - weapon trees: 13 nodes each, tiers 0/1/2/3 = 1/3/6/3, 2 T2 per T1 branch and 1 capstone per branch;
+// Content integrity over the real data bundle (docs/SPEC-v2.md §4, §8; docs/SPEC-v4.md §2, §3, §14; docs/CLIENT-v2.md §5/§6):
+// - the registry: Registry.validate with the weapon rule on (every bound skill has its grip, SPEC-v4 §2.2) is clean;
+// - reachability: every authored skill except monster-only techniques (tag 'monster') can be obtained — weapon
+//   basics, class kits, lessons, echoes, tomes, Transforms and fusions;
+// - weapon trees: 13 nodes each (sword, dagger, rod and Bare Hands), tiers 0/1/2/3 = 1/3/6/3, 2 T2 per T1 branch and
+//   1 capstone per branch;
+// - class skills: every `classOf` skill is in exactly its class's kit, bound to the class weapon, and no recipe or
+//   Transform touches it;
 // - sparks: never on capstones (tier 3) nor on morphs whose parent is a buff (a buff never lands a hit);
 // - flags: every flag a Requirement (morph, recipe, lesson, class) or portal gate reads is one the game sets;
 // - hybrids: an any-weapon attack built only from techniques/echoes keeps max(ATK, MATK) scaling.
 import { describe, expect, it } from 'vitest';
 import { isHybrid } from '../src/core/combat';
 import { parseRef } from '../src/core/refs';
-import { VISITED_FLAG_PREFIX } from '../src/core/requirements';
-import { WEAPON_TYPES, type Requirement, type SkillDef } from '../src/core/types';
+import { GRIP_TAGS, VISITED_FLAG_PREFIX, gripWeapons, weaponOk } from '../src/core/requirements';
+import { GRIP_TAG, WEAPON_TYPES, type Requirement, type SkillDef } from '../src/core/types';
 import { GAME_DATA, createRegistry } from '../src/data';
 import { NPCS } from '../src/data/npcs';
 import { WEAPONS } from '../src/data/weapons';
@@ -52,8 +57,8 @@ function obtainableEssences(): Set<string> {
 // ------------------------------------------------------------------ reachability
 
 /**
- * Every skill id a player can obtain, with the first source found. Seeds: weapon basics, class grants
- * and tree skill nodes, lesson grants of trainers placed on a map, echo techniques of spawned monsters,
+ * Every skill id a player can obtain, with the first source found. Seeds: weapon basics, class kits (a class
+ * teaches its 5 skills as its Class Level rises), lesson grants of trainers placed on a map, echo techniques of spawned monsters,
  * tomes that drop or sit in a chest. Closure: a morph target once its parent is obtainable; a recipe
  * result once every skill ingredient is obtainable (element ingredients must exist, essence
  * ingredients must be obtainable).
@@ -66,10 +71,7 @@ function obtainableSkills(): Map<string, string> {
     return true;
   };
   for (const w of WEAPON_TYPES) add(WEAPONS[w].basic, `basic attack of the ${w}`);
-  for (const c of reg.classes) {
-    for (const g of c.grants ?? []) add(g, `granted by class ${c.id}`);
-    for (const n of c.tree ?? []) if (n.kind === 'skill') add(n.ref, `tree node of class ${c.id}`);
-  }
+  for (const c of reg.classes) for (const id of c.kit ?? []) add(id, `kit of class ${c.id}`);
   for (const t of REACHABLE_TRAINERS) for (const l of t.lessons) if ('skill' in l.grants) add(l.grants.skill, `lesson ${l.id}`);
   for (const m of MONSTER_LIST) {
     if (!SPAWNED.has(m.id)) continue;
@@ -96,6 +98,86 @@ function obtainableSkills(): Map<string, string> {
   }
   return got;
 }
+
+// ------------------------------------------------------------------ the registry, weapons and grips
+
+describe('the registry', () => {
+  it('validates with the weapon rule on: no errors', () => {
+    expect(reg.validate({ grip: true })).toEqual([]);
+  });
+
+  it('the retag pass landed: rod spells, fist skills, free elemental spells and body moves (SPEC-v4 §2.2)', () => {
+    const tagged = (tag: string): string[] => reg.authoredSkills().filter((s) => s.tags.includes(tag)).map((s) => s.id);
+    // Thrown through the rod.
+    for (const id of ['bolt', 'arcane_orb', 'arcane_nova', 'singularity', 'prism_orb', 'arcane_barrage', 'resonant_pulse', 'starfall_lattice', 'arcane_deluge']) {
+      expect(reg.skill(id)!.tags, id).toContain(GRIP_TAG.staff);
+      expect(reg.skill(id)!.weapons, id).toEqual(['staff']);
+    }
+    // Free: elemental spells keep `arcane` (MATK), gain `spell`, and work with any weapon.
+    const spells = ['firebolt', 'meteor', 'aqua_lance', 'lightning_bolt', 'wind_cutter', 'holy_light', 'quake', 'inferno_ring', 'glacial_orb', 'thunderstorm', 'plasma_lance', 'tidal_ripple', 'dawn_prism', 'featherstorm', 'geode_maw', 'thunder_peal', 'tangle_orb', 'cinder_blink'];
+    for (const id of spells) {
+      const s = reg.skill(id)!;
+      expect(s.weapons, id).toBeUndefined();
+      expect(s.tags, id).toEqual(expect.arrayContaining(['arcane', 'spell']));
+      for (const w of WEAPON_TYPES) expect(weaponOk(s, w), `${id} with ${w}`).toBe(true);
+    }
+    for (const id of ['focus', 'quicken', 'arcane_ward', 'astral_form', 'smoke_veil', 'gloom_shroud', 'moonveil']) expect(reg.skill(id)!.weapons, id).toBeUndefined();
+    expect(reg.skill('shadowstep')!.tags).toContain(GRIP_TAG.dagger);
+    // A Rod cannot Whirlwind; Ember Dart casts with a sword (acceptance check 2).
+    expect(weaponOk(reg.skill('whirlwind')!, 'staff')).toBe(false);
+    expect(weaponOk(reg.skill('firebolt')!, 'sword')).toBe(true);
+    // Body moves: free, stronger bare-handed.
+    expect(tagged('body').sort()).toEqual(
+      ['crown_slam', 'palm_strike', 'pressure_point', 'quakestride', 'rippling_palm', 'rising_kick', 'shoulder_charge', 'soaring_heel', 'static_palm'],
+    );
+    for (const id of tagged('body')) expect(reg.skill(id)!.weapons, id).toBeUndefined();
+    // Every fist skill is for bare hands only.
+    for (const id of tagged(GRIP_TAG.fists)) expect(reg.skill(id)!.weapons, id).toEqual(['fists']);
+    expect(tagged(GRIP_TAG.fists).length).toBeGreaterThanOrEqual(13 + 5);
+  });
+
+  it('a bound skill lists exactly the weapons whose grip it carries (tier-0 basics included)', () => {
+    for (const s of reg.authoredSkills()) {
+      if (s.tags.includes(MONSTER_TAG)) continue;
+      const grips = gripWeapons(s);
+      if (s.weapons) expect([...s.weapons].sort(), s.id).toEqual([...grips].sort());
+      else expect(s.tags.filter((t) => GRIP_TAGS.includes(t)), s.id).toEqual([]);
+    }
+  });
+});
+
+describe('class skills', () => {
+  const kitOf = (c: { kit?: readonly string[] }): readonly string[] => c.kit ?? [];
+  const own = reg.authoredSkills().filter((s) => s.classOf !== undefined);
+
+  it("every class skill is in exactly its class's kit and bound to the class weapon", () => {
+    expect(own.length).toBeGreaterThanOrEqual(40);
+    for (const s of own) {
+      const cls = reg.classDef(s.classOf!)!;
+      expect(cls, s.id).toBeDefined();
+      expect(reg.classes.filter((c) => kitOf(c).includes(s.id)).map((c) => c.id), s.id).toEqual([cls.id]);
+      expect(s.weapons, s.id).toEqual([cls.weapon]);
+      if (cls.source !== 'physical' && cls.source !== 'none' && cls.source !== 'prism') expect(s.element, s.id).toBe(cls.source);
+      else expect(s.element, s.id).toBeUndefined();
+    }
+  });
+
+  it('no Transform or fusion recipe touches a class skill', () => {
+    const ids = new Set(own.map((s) => s.id));
+    expect(reg.morphs.filter((m) => ids.has(m.from) || ids.has(m.to)).map((m) => `${m.from}>${m.to}`)).toEqual([]);
+    const refs = reg.recipeList.flatMap((r) => [r.a, r.b, r.result]).map(parseRef);
+    expect(refs.filter((p) => p.kind === 'skill' && ids.has(p.id)).map((p) => p.id)).toEqual([]);
+  });
+
+  it('the two old signatures that outlived their classes are ordinary dagger skills, made by fusion', () => {
+    for (const [id, a, b] of [['phantom_sig', 'el:shadow', 'skill:phantom_rush'], ['vortex_dancer_sig', 'el:wind', 'skill:blade_storm']] as const) {
+      const s = reg.skill(id)!;
+      expect(s.classOf, id).toBeUndefined();
+      expect(s.weapons, id).toEqual(['dagger']);
+      expect(reg.recipe(a, b)?.result, id).toBe(`skill:${id}`);
+    }
+  });
+});
 
 describe('reachability', () => {
   const got = obtainableSkills();
@@ -147,8 +229,7 @@ function weaponTree(basic: string): string[] {
 
 describe('weapon trees', () => {
   for (const w of WEAPON_TYPES) {
-    // A weapon whose basic attack is not authored yet (Bare Hands until its tree lands) is skipped, not failed.
-    it.skipIf(!reg.skill(WEAPONS[w].basic))(`${w}: 13 nodes, tiers 0/1/2/3 = 1/3/6/3, 2 T2 per T1 branch, 1 capstone per branch`, () => {
+    it(`${w}: 13 nodes, tiers 0/1/2/3 = 1/3/6/3, 2 T2 per T1 branch, 1 capstone per branch`, () => {
       const basic = WEAPONS[w].basic;
       const tree = weaponTree(basic);
       expect(tree).toHaveLength(13);
@@ -213,10 +294,22 @@ const STATIC_FLAGS = new Set([
   'mastered_any',
   'class_worn',
   'brann_gift',
+  // SPEC-v4 Phase 1 (game lane): a warden beaten bare-handed.
+  'warden_bare',
 ]);
+
+/** v4 counters (SPEC-v4 §15.2 lane C): `hits:<weapon>`, `kills:<weapon>` and `kills:<weapon>:<element>`. */
+function weaponCounter(id: string): boolean {
+  const [kind, weapon, element, ...rest] = id.split(':');
+  if (rest.length > 0 || !(WEAPON_TYPES as readonly string[]).includes(weapon ?? '')) return false;
+  if (kind === 'hits') return element === undefined;
+  if (kind === 'kills') return element === undefined || reg.elements.has(element as never);
+  return false;
+}
 
 function knownFlag(id: string): boolean {
   if (STATIC_FLAGS.has(id)) return true;
+  if (id.includes(':') && !id.startsWith(VISITED_FLAG_PREFIX)) return weaponCounter(id);
   if (id.startsWith('kill_')) return reg.monster(id.slice('kill_'.length)) !== undefined;
   if (id.startsWith(VISITED_FLAG_PREFIX)) return MAPS.some((m) => m.id === id.slice(VISITED_FLAG_PREFIX.length));
   if (id.startsWith('warden_')) return reg.monster(id.slice('warden_'.length))?.rank === 'warden';
@@ -232,7 +325,7 @@ function allRequirements(): { where: string; req: Requirement }[] {
   for (const m of reg.morphs) push(`morph ${m.from}>${m.to}`, m.requires);
   for (const r of reg.recipeList) push(`recipe ${r.a} + ${r.b}`, r.requires);
   for (const t of GAME_DATA.trainers) for (const l of t.lessons) push(`lesson ${l.id}`, l.requires);
-  for (const c of reg.classes) push(`class ${c.id}`, c.requires);
+  for (const c of reg.classes) push(`class ${c.id}`, c.discover?.requires ?? c.requires);
   return out;
 }
 
@@ -245,6 +338,8 @@ describe('flags', () => {
     expect(knownFlag(`${VISITED_FLAG_PREFIX}vale.moonlit_glade`)).toBe(true);
     expect(knownFlag(`${VISITED_FLAG_PREFIX}vale.nowhere`)).toBe(false);
     expect(knownFlag('ore_minned')).toBe(false);
+    expect(knownFlag('hits:sword') && knownFlag('kills:fists') && knownFlag('kills:staff:fire') && knownFlag('warden_bare')).toBe(true);
+    expect(knownFlag('hits:bow') || knownFlag('kills:sword:plasma') || knownFlag('hits:sword:fire')).toBe(false);
   });
 
   it('every flag a requirement reads is one the game sets', () => {

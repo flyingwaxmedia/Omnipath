@@ -1,6 +1,8 @@
-// Signature patches (docs/VFX.md §6.7): 40 bespoke tunings keyed by the authored ROOT id, so every infusion, essence
+// Signature patches (docs/VFX.md §6.7): 49 bespoke tunings keyed by the authored ROOT id, so every infusion, essence
 // variant and merge whose root is the signature skill inherits it. Each patch reuses the §5 components with tuned
 // params and compositions and runs last in deriveVfx. Package R; Phaser-free and pure.
+// v4 re-authored several signature skills as zones and shields (same ids): their patches read the carrier and dress
+// the zone (per-tick units, a standing centrepiece) or the shell instead of the old spin / nova / projectile.
 import type { SkillDef, SkillShape } from '../../core/types';
 import { familyOf, lookOf } from './families';
 import { aftermathR, cellFor, piece, reink, type Ink } from './pieces';
@@ -37,6 +39,13 @@ const novaDelay = (r: VfxRecipe, s: SkillDef): number => {
   const d = (s.shape as Nova).delay;
   return r.owner === 'monster' ? Math.max(500, d ?? 0) + (s.castMs ?? 0) : (d ?? 200);
 };
+
+type Zone = Extract<SkillShape, { kind: 'zone' }>;
+const isZone = (r: VfxRecipe): boolean => r.carrier.kind === 'zone';
+/** A zone's standing time. */
+const zoneLife = (s: SkillDef): number => (s.shape as Zone).durationMs;
+/** Adds pieces to every tick of a zone (riders.zone.tick; 'firstHitOnly' / 'laterHits' pick the tick). */
+const addTick = (r: VfxRecipe, ...pieces: VfxPiece[]): VfxRecipe => (r.riders.zone ? { ...r, riders: { ...r.riders, zone: { ...r.riders.zone, tick: [...r.riders.zone.tick, ...pieces] } } } : r);
 
 const phase = (r: VfxRecipe, id: PhaseId): readonly VfxPiece[] => r.phases[id] ?? [];
 const setPhase = (r: VfxRecipe, id: PhaseId, pieces: readonly VfxPiece[]): VfxRecipe => ({ ...r, phases: { ...r.phases, [id]: pieces } });
@@ -112,12 +121,21 @@ function funnel(r: VfxRecipe, lift = 1): VfxPiece[] {
     }),
   );
 }
-/** The funnel replaces the vortex's swirl; its collapsing pull rings stay. */
-const vortex = (r: VfxRecipe, lift = 1): VfxRecipe => swap(r, 'cast', (p) => p.component === 'ring' && p.params.anim === 'sweep', funnel(r, lift));
+/** The funnel replaces the vortex's swirl; its collapsing pull rings stay. A zone turns the funnel on every tick. */
+const vortex = (r: VfxRecipe, lift = 1): VfxRecipe => {
+  if (!isZone(r)) return swap(r, 'cast', (p) => p.component === 'ring' && p.params.anim === 'sweep', funnel(r, lift));
+  const spiral = piece('motes', { kind: lookOf(r.family).spin.mote ?? 'chip', size: 2 }, inkOf(r), { anchor: at('aim', 0), place: { pattern: 'spiral', count: 8, radius: radiusOf(r), aspect: aspectOf(r) } });
+  return addTick(add(r, 'area', ...funnel(r, lift)), ...funnel(r, lift), spiral);
+};
 
 /** Shadow-cloud nova: cloud core + drifting smoke sheets instead of the implode. */
 function shroud(r: VfxRecipe, f: FamilyId): VfxRecipe {
   const R = radiusOf(r);
+  if (isZone(r)) {
+    // The standing cloud: sheets roll in when the zone opens and again on every tick.
+    const sheets = (count: number): VfxPiece => piece('erupt', { unit: 'smoke-sheet', scale: 'm' }, inkOf(r, f), { anchor: at('aim', 0), place: { pattern: 'poisson', count, radius: round(R * 0.8), aspect: aspectOf(r), spacing: 18, wave: true }, lifeMs: 1000 });
+    return addTick(add(r, 'area', sheets(6)), sheets(3));
+  }
   let out = edit(r, 'area', 'nova', (p) => reink({ ...p, params: { ...p.params, core: 'cloud' } } as VfxPiece, { ramp: f, motif: f }));
   out = swap(out, 'area', (p) => p.component === 'erupt', [
     piece('erupt', { unit: 'smoke-sheet', scale: 'm' }, inkOf(r, f), { anchor: at('aim', 0), place: { pattern: 'poisson', count: 6, radius: R, aspect: aspectOf(r), spacing: 18, wave: true }, lifeMs: 1000 }),
@@ -142,6 +160,17 @@ function well(r: VfxRecipe, s: SkillDef): VfxRecipe {
 /** Storm head: 4 stacked cloud puffs over the zone during the delay, 3 staggered sky-bolts with one flash, rain. */
 function storm(r: VfxRecipe, s: SkillDef): VfxRecipe {
   const R = radiusOf(r);
+  if (isZone(r)) {
+    // A standing storm: the cloud head hangs over the field while it lasts, and every tick drops one sky-bolt (only
+    // the first carries white: one flash transition) and a sheet of rain.
+    const ink0 = inkOf(r);
+    const calm: LutVariant = lutOf(r) === 'base' ? 'reduceFlash' : lutOf(r);
+    const life = zoneLife(s);
+    const bolt = (lut: LutVariant, tags: readonly PieceTag[]): VfxPiece =>
+      piece('erupt', { unit: 'sky-bolt', scale: 'l' }, { ...ink0, lut }, { anchor: at('aim', 0), place: { pattern: 'poisson', count: 1, radius: round(R * 0.6), aspect: aspectOf(r) }, tags });
+    const out = add(r, 'aura', piece('puff', { kind: 'cloud', r: 10 }, ink0, { anchor: at('aim', -64), place: { pattern: 'stack', count: 4, radius: round(R * 0.5), staggerMs: 160 }, lifeMs: life }));
+    return addTick(out, bolt(ink0.lut, ['hero', 'firstHitOnly']), bolt(calm, ['laterHits']), piece('motes', { kind: 'line', size: 2 }, inkOf(r, 'storm'), { anchor: at('aim', -48), place: { pattern: 'fall', count: 10, radius: R, aspect: aspectOf(r) } }));
+  }
   const delay = novaDelay(r, s);
   const aim = at('aim', 0);
   const ink = inkOf(r);
@@ -169,11 +198,41 @@ function crust(r: VfxRecipe): VfxRecipe {
   );
 }
 
-const aura = (motif: Extract<VfxPiece, { component: 'aura' }>['params']['motif'], halo = false, ramp?: FamilyId): SignaturePatch => (r) => {
+/** A burning glob falls onto the nova centre over the delay with smoke; its shadow grows; blast c56 + flame columns. */
+function meteor(r: VfxRecipe, s: SkillDef): VfxRecipe {
+  const delay = novaDelay(r, s);
+  const fall = { from: { x: -60, y: -160 }, ms: delay, ease: 'in' as const };
+  let out = add(
+    r,
+    'telegraph',
+    piece('missile', { form: 'glob', cell: 24, halo: false, pose: 'fly' }, inkOf(r), { anchor: at('aim', 0), move: fall, lifeMs: delay }),
+    piece('puff', { kind: 'smoke', r: 3 }, inkOf(r), { anchor: at('aim', 0), move: fall, place: { pattern: 'trail', everyPx: 10 }, lifeMs: delay }),
+    piece('decal', { kind: 'shadow', r: 32, aspect: aspectOf(r), density: 0.25, shape: 'disc' }, inkOf(r), { anchor: at('aim', 0), layer: 'ground', lifeMs: delay }),
+  );
+  out = edit(out, 'area', 'nova', (p) => ({ ...p, params: { ...p.params, c: 56 } }) as VfxPiece);
+  return swap(out, 'area', (p) => p.component === 'erupt', [units(out, 'flame-column', r.family === 'magma' ? 'magma' : r.family, 8)]);
+}
+
+const aura = (motif: Extract<VfxPiece, { component: 'aura' }>['params']['motif'], halo = false, ramp?: FamilyId): SignaturePatch => (r, s) => {
+  // A shield wears the aura over its shell for as long as it holds (Measured Guard: three orbiting blades).
+  if (r.carrier.kind === 'shield') {
+    const life = (s.shape as Extract<SkillShape, { kind: 'shield' }>).durationMs;
+    return add(r, 'aura', piece('aura', { motif, phase: 'loop', activation: 'ring', body: 'M', halo }, inkOf(r, ramp ?? r.family), { anchor: at('caster', 0), lifeMs: life }));
+  }
+  // A ground ward (halo_ward as a zone): a pillar of light where it is placed and a rune circle while it stands.
+  if (isZone(r)) {
+    const ink = inkOf(r, ramp ?? r.family);
+    return add(
+      add(r, 'area', piece('erupt', { unit: 'light-pillar', scale: 'm' }, ink, { anchor: at('aim', 0), place: { pattern: 'single', count: 1 } })),
+      'aura',
+      piece('sigil', { r: 32, points: 6, glyphs: 8, anim: 'static' }, ink, { anchor: at('aim', 0), layer: 'preview', lifeMs: zoneLife(s) }),
+    );
+  }
   const re = (p: Extract<VfxPiece, { component: 'aura' }>): VfxPiece => {
     const q = { ...p, params: { ...p.params, motif, halo } } as VfxPiece;
     return ramp ? reink(q, { ramp, motif: ramp }) : q;
   };
+  if (r.carrier.kind !== 'buff') return r;
   return withCarrier(edit(edit(r, 'cast', 'aura', re), 'aura', 'aura', re), { kind: 'buff', motif });
 };
 
@@ -226,7 +285,14 @@ const DEFS: readonly [string, string, SignaturePatch][] = [
   ['gloom_shroud', 'cloud core + 6 shadow smoke sheets drifting 1 s (not an implode)', (r) => shroud(r, r.family === 'shadow' ? 'shadow' : r.family)],
   ['moonveil', 'the gloom shroud in the stealth ramp + 4 holy moon motes', (r) => add(shroud(r, 'stealth'), 'area', units(r, 'moon-mote', 'holy', 4))],
   ['arcane_orb', 'orb with orbiting glyphs, cell 48', (r, s) => orbBody(r, s, 'orb', { cell: 48, orbit: 'glyphs' })],
-  ['glacial_orb', 'ice orb with orbiting shards, cell 48 (not a missile shard)', (r, s) => orbBody(r, s, 'orb', { cell: 48, orbit: 'shards' })],
+  [
+    'glacial_orb',
+    'an ice orb with orbiting shards (cell 48) hovering over the middle of its frost field',
+    (r, s) =>
+      isZone(r)
+        ? add(r, 'aura', piece('orb', { form: 'orb', cell: 48, halo: false, mode: 'fly', orbit: 'shards' }, inkOf(r), { anchor: at('aim', -22), lifeMs: zoneLife(s) }))
+        : orbBody(r, s, 'orb', { cell: 48, orbit: 'shards' }),
+  ],
   ['undertow_orb', 'water orb with a spiral', (r, s) => orbBody(r, s, 'orb', { orbit: 'spiral' })],
   ['tangle_orb', 'orb with orbiting vines in the wind (leaf) ramp', (r, s) => orbBody(r, s, 'orb', { orbit: 'vines', ramp: 'wind' })],
   ...(['prism_orb', 'dawn_prism', 'prism_sage_sig'] as const).map(
@@ -271,23 +337,7 @@ const DEFS: readonly [string, string, SignaturePatch][] = [
     'the singularity + 10 crystal spikes on the rim; release burst blunt l',
     (r, s) => add(swap(well(r, s), 'area', (p) => p.component === 'erupt', [units(r, 'crystal-spike', r.family, 10, 'rim')]), 'area', piece('burst', { cls: 'blunt', size: 'l' }, inkOf(r), { anchor: at('aim', 0) })),
   ],
-  [
-    'meteor',
-    'a burning glob falls from (-60, -160) over the delay with smoke; its shadow grows; blast c56 + flame columns',
-    (r, s) => {
-      const delay = novaDelay(r, s);
-      const fall = { from: { x: -60, y: -160 }, ms: delay, ease: 'in' as const };
-      let out = add(
-        r,
-        'telegraph',
-        piece('missile', { form: 'glob', cell: 24, halo: false, pose: 'fly' }, inkOf(r), { anchor: at('aim', 0), move: fall, lifeMs: delay }),
-        piece('puff', { kind: 'smoke', r: 3 }, inkOf(r), { anchor: at('aim', 0), move: fall, place: { pattern: 'trail', everyPx: 10 }, lifeMs: delay }),
-        piece('decal', { kind: 'shadow', r: 32, aspect: aspectOf(r), density: 0.25, shape: 'disc' }, inkOf(r), { anchor: at('aim', 0), layer: 'ground', lifeMs: delay }),
-      );
-      out = edit(out, 'area', 'nova', (p) => ({ ...p, params: { ...p.params, c: 56 } }) as VfxPiece);
-      return swap(out, 'area', (p) => p.component === 'erupt', [units(out, 'flame-column', r.family === 'magma' ? 'magma' : r.family, 8)]);
-    },
-  ],
+  ['meteor', 'a burning glob falls from (-60, -160) over the delay with smoke; its shadow grows; blast c56 + flame columns', (r, s) => meteor(r, s)],
   ['thunderstorm', 'stacked clouds during the delay; 3 sky-bolts at 0 / 117 / 233 ms, one flash; rain', (r, s) => storm(r, s)],
   [
     'ascendant_sig',
@@ -296,20 +346,19 @@ const DEFS: readonly [string, string, SignaturePatch][] = [
   ],
   [
     'starfall_lattice',
-    '10 star shards fall onto lattice points joined by bead lines during the delay, over the r48 rune circle',
+    'star shards fall onto lattice points joined by bead lines: on every tick of the zone',
     (r, s) => {
-      const delay = novaDelay(r, s);
       const R = radiusOf(r);
-      return add(
-        r,
-        'telegraph',
-        piece('erupt', { unit: 'star-shard', scale: 'm' }, inkOf(r), { anchor: at('aim', 0), place: { pattern: 'lattice', count: 10, radius: R }, move: { from: { x: 0, y: -48 }, ms: delay, ease: 'in' }, lifeMs: delay }),
-        // The r48 rune circle at the centre is the arcane nova marker every staff nova already draws (no second sigil).
-        piece('motes', { kind: 'bead', size: 2 }, inkOf(r), { anchor: at('aim', 0), place: { pattern: 'path', count: 20, radius: R }, lifeMs: delay }),
-      );
+      const shards = (count: number, ms: number): VfxPiece =>
+        piece('erupt', { unit: 'star-shard', scale: 'm' }, inkOf(r), { anchor: at('aim', 0), place: { pattern: 'lattice', count, radius: R }, move: { from: { x: 0, y: -48 }, ms, ease: 'in' }, lifeMs: ms });
+      const beads = (ms: number): VfxPiece => piece('motes', { kind: 'bead', size: 2 }, inkOf(r), { anchor: at('aim', 0), place: { pattern: 'path', count: 20, radius: R }, lifeMs: ms });
+      if (isZone(r)) return addTick(add(r, 'area', beads(600)), shards(5, 250));
+      const delay = novaDelay(r, s);
+      // The r48 rune circle at the centre is the arcane nova marker every staff nova already draws (no second sigil).
+      return add(r, 'telegraph', shards(10, delay), beads(delay));
     },
   ],
-  ['halo_ward', 'a hex ward aura with a holy halo', aura('ward', true)],
+  ['halo_ward', 'a holy ground ward: a pillar where it is placed, a rune circle while it stands (as a buff: a hex ward with a halo)', aura('ward', true)],
   [
     'astral_form',
     'a runes aura with twinkling star motes',
@@ -319,7 +368,7 @@ const DEFS: readonly [string, string, SignaturePatch][] = [
       return add(out, 'aura', piece('motes', { kind: 'star', size: 1 }, inkOf(r), { anchor: at('caster', -20), place: { pattern: 'orbit', count: 4, radius: 16 }, lifeMs: dur }));
     },
   ],
-  ['blade_aura', 'three orbiting spectral blades', aura('blades')],
+  ['blade_aura', 'Measured Guard: three orbiting spectral blades over the guard shell', aura('blades')],
   ['searing_edge', 'a weapon flame (edge aura in the fire ramp)', aura('edge', false, 'fire')],
   ['shade_cloak', 'a veil aura of rising wisps (the actor alpha 0.55 is runtime)', aura('veil')],
   [
@@ -435,6 +484,73 @@ const DEFS: readonly [string, string, SignaturePatch][] = [
       return add(add(r, 'cast', rift('caster', 0)), 'area', rift('aim', dur));
     },
   ],
+  // ---- v4: the rebuilt classes' kit skills whose look the spec names (docs/SPEC-v4.md §3.6)
+  [
+    'high_toss',
+    'Knife Juggler: five knives tossed high spin down onto the spot through the delay',
+    (r, s) => {
+      if (r.carrier.kind !== 'nova') return r;
+      const delay = novaDelay(r, s);
+      return add(
+        r,
+        'telegraph',
+        piece('missile', { form: 'blade', cell: 16, halo: false, pose: 'fly' }, inkOf(r, 'steel'), { anchor: at('aim', 0), place: { pattern: 'poisson', count: 5, radius: round(radiusOf(r) * 0.55), aspect: aspectOf(r) }, move: { from: { x: 0, y: -150 }, ms: delay, ease: 'in' }, lifeMs: delay }),
+      );
+    },
+  ],
+  [
+    'thread_bolt',
+    'Spellwright: the bolt pays out a thread (a bead wake) behind it',
+    (r) => (r.carrier.kind === 'projectile' ? add(r, 'trail', piece('motes', { kind: 'bead', size: 1 }, inkOf(r), { anchor: at('body', 0), place: { pattern: 'trail', everyPx: 4 } })) : r),
+  ],
+  [
+    'dust_kick',
+    'Wayfarer: the kick throws a fan of road dust across its arc',
+    (r) => {
+      if (r.geometry.kind !== 'sector') return r;
+      const g = r.geometry;
+      return add(r, 'cast', piece('puff', { kind: 'dust', r: 5 }, { ramp: 'dust', motif: r.family, lut: lutOf(r) }, { anchor: at('caster', 0), layer: 'ground', place: { pattern: 'burst', count: 5, radius: g.r, spreadDeg: Math.min(160, g.arcDeg), speed: round(g.r / 0.25) } }));
+    },
+  ],
+  [
+    'slag_arc',
+    'Pyroblade: a flying crescent of molten slag (orb wave, cell 48) shedding crust chips',
+    (r, s) => (r.carrier.kind === 'projectile' ? add(orbBody(r, s, 'wave', { cell: 48 }), 'trail', piece('motes', { kind: 'chip', size: 1 }, inkOf(r, 'magma'), { anchor: at('body', 0), place: { pattern: 'trail', everyPx: 12 } })) : r),
+  ],
+  [
+    'white_heat',
+    'Pyroblade: the execute chop lands in a column of flame and leaves a scorch',
+    (r) => {
+      if (r.geometry.kind !== 'sector') return r;
+      const tip = at('caster', 0, r.geometry.r * 0.6);
+      return add(
+        r,
+        'area',
+        piece('erupt', { unit: 'flame-column', scale: 's' }, inkOf(r, 'fire'), { anchor: tip, place: { pattern: 'single', count: 1 } }),
+        piece('decal', { kind: 'scorch', r: 16, aspect: 1, density: 0.5, shape: 'disc' }, inkOf(r, 'fire'), { anchor: tip, layer: 'ground', blend: 'multiply', lifeMs: 800 }),
+      );
+    },
+  ],
+  [
+    'shadow_pin',
+    'Shadowstalker: the needle stays stuck in the foe it pins for 600 ms',
+    (r) => (r.carrier.kind === 'projectile' ? add(r, 'impact', piece('missile', { form: 'needle', cell: 16, halo: false, pose: 'wrap' }, inkOf(r, 'steel'), { anchor: at('target', -10), lifeMs: 600 })) : r),
+  ],
+  [
+    'kindle_hearth',
+    'Pyromancer: the Hearth itself, a cluster of tall tongues burning at the middle of its field',
+    (r, s) => {
+      if (!isZone(r)) return r;
+      const fire = inkOf(r, r.family);
+      return add(
+        add(r, 'area', piece('erupt', { unit: lookOf(r.family).unit, scale: 's' }, fire, { anchor: at('aim', 0), place: { pattern: 'single', count: 1 } })),
+        'aura',
+        piece('status', { kind: 'burn', unit: 'tongue', body: 'L' }, fire, { anchor: at('aim', 0), place: { pattern: 'rim', count: 3 }, lifeMs: zoneLife(s) }),
+      );
+    },
+  ],
+  ['hurl_hearth', 'Pyromancer: the Hearth thrown as a meteor (the falling glob, its shadow, blast c56 + flame columns)', (r, s) => (r.carrier.kind === 'nova' ? meteor(r, s) : r)],
+  ['tidal_hand', 'Tidereader: a reaching wave of water (orb wave, cell 32)', (r, s) => (r.carrier.kind === 'projectile' ? orbBody(r, s, 'wave', { cell: 32 }) : r)],
 ];
 
 /** Signature patches by authored root id (docs/VFX.md §6.7). */

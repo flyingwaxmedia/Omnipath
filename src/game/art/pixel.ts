@@ -2,16 +2,39 @@
 // Everything draws on integer pixels with flat colours; `outline()` adds the 1 px dark rim every sprite needs.
 import Phaser from 'phaser';
 
-/** Palette anchors (docs/ART-DIRECTION.md §2). Ramps run dark -> light. */
+/**
+ * The v4 material ramps (SPEC-v4 §11.2 H, docs/ART-DIRECTION.md §2): six steps each, HUE-SHIFTED — shadows lean cool
+ * and violet, lights lean warm and yellow — with shared darks, so no material shades toward grey or black.
+ */
+export const RAMPS = {
+  grass: ['#1f3b33', '#2f5435', '#47702f', '#6a8f36', '#93ab45', '#c4c765'],
+  foliage: ['#17302f', '#23483a', '#32663a', '#4f8a3c', '#86ad45', '#c9cf6a'],
+  dirt: ['#4a3340', '#6e4f48', '#94714f', '#b8955f', '#d9bd7c', '#efdc9e'],
+  stone: ['#2b2a40', '#454660', '#69708a', '#959aa6', '#c2c2b4', '#e8e2c6'],
+  wood: ['#2e1a26', '#4d2a2a', '#74432d', '#9c6534', '#c48e48', '#e3bb6c'],
+  water: ['#1b2f5a', '#23508a', '#2f7fa8', '#4fb0b8', '#9adcc8', '#e4f6e0'],
+  roofTerracotta: ['#4a1f33', '#7a2f33', '#a8472f', '#cf6b38', '#e89a52'],
+  roofSlate: ['#232a4a', '#34466e', '#4d6c8f', '#7a9cab'],
+  roofThatch: ['#5a4326', '#86682f', '#b3923f', '#d9bd5e'],
+  roofVerdigris: ['#173b40', '#23605a', '#3a8a72', '#74b890'],
+} as const;
+
+/** Cast and contact shadows: this violet, multiplied at SHADOW_ALPHA — never black alpha (SPEC-v4 §11.2 A). */
+export const SHADOW_COLOR = '#3a3560';
+/** Outline of world props and buildings: the shared dark of the ramps, so the world sits back and actors
+ *  (outlined in PAL.outline) pop. Sprites made of one material use the darkest step of that ramp instead. */
+export const WORLD_OUTLINE = '#2b2a40';
+
+/** Palette anchors (docs/ART-DIRECTION.md §2). Ramps run dark -> light; shorter cuts of RAMPS for older call sites. */
 export const PAL = {
   outline: '#24180f',
-  grass: ['#3f5a26', '#56772f', '#6c8f3a', '#86a64a', '#a2bd62'],
-  dirt: ['#7a6446', '#96805c', '#ad9a74', '#c2b18a'],
-  foliage: ['#2b4a22', '#3d6630', '#548540', '#74a655'],
-  wood: ['#3d2817', '#5c3d22', '#7d5530', '#9c6d3e'],
-  stone: ['#4a4d55', '#666a73', '#878b93', '#a9adb3'],
-  water: ['#25507a', '#2f6fa3', '#4a92c4', '#8cc6e6'],
-  foam: '#d8eef6',
+  grass: ['#2f5435', '#47702f', '#6a8f36', '#93ab45', '#c4c765'],
+  dirt: ['#94714f', '#b8955f', '#d9bd7c', '#efdc9e'],
+  foliage: ['#23483a', '#32663a', '#4f8a3c', '#86ad45'],
+  wood: ['#4d2a2a', '#74432d', '#9c6534', '#c48e48'],
+  stone: ['#454660', '#69708a', '#959aa6', '#c2c2b4'],
+  water: ['#23508a', '#2f7fa8', '#4fb0b8', '#9adcc8'],
+  foam: '#e4f6e0',
   crimson: '#b8323a',
   rose: '#e0788a',
   cream: '#efe6c8',

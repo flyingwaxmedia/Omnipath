@@ -239,7 +239,8 @@ describe('vfx pipeline: atlas budget (docs/VFX.md §8.5, §9)', () => {
       ...(['solid', 'dashed'] as const).flatMap((style) =>
         ([1, 2, 3] as const).flatMap((thick) => (['hot', 'lit', 'mid', 'dim'] as const).map((ink) => gridPiece('ring', { ...DEFAULTS.ring, r: 96, style, thick, ink }, 'danger'))),
       ),
-      ...gridPieces('burst', 'steel').filter((p) => p.component === 'burst' && p.params.cls !== 'strong'),
+      // (the fist impact set is not boot: bare-handed skills bake it with their loadout, in the spirit ramp)
+      ...gridPieces('burst', 'steel').filter((p) => p.component === 'burst' && p.params.cls !== 'strong' && !['jab', 'hook', 'palm', 'kick', 'slam'].includes(p.params.cls)),
       ...gridPieces('tell', 'danger'),
     ];
     const warm = [

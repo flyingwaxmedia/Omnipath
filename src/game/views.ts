@@ -1,7 +1,8 @@
 // GameController v3 views (game lane; docs/INTEGRATION-v3.md §5). MapScene delegates every v3 controller method
 // here in one line, so the scene stays a thin host. Everything returned is plain data in plain words
 // (docs/UX-SIMPLE.md): ids only as keys. The one-step wording lives in ./steps.ts, the bar rules in ./loadout.ts.
-import { CLASS_SLOTS, barEligible, canBuyNode, classMaxRank, classXpNeed } from '../core/classes';
+import { CLASS_SLOTS, barEligible, canBuyNode, classMaxRank, classXpNeed, ownSlotEligible } from '../core/classes';
+import { weaponLockLine } from '../core/requirements';
 import type { QuestView } from '../core/skillbook';
 import type { ElementId, QuestDef, QuestReward, Requirement } from '../core/types';
 import { NPCS } from '../data/npcs';
@@ -12,7 +13,9 @@ import type {
   BarSlotView,
   ChangeKind,
   ClassCardView,
+  MechanicHudView,
   MenuBadgesView,
+  WeaponLockView,
   ClassScreenView,
   NpcQuestView,
   NpcQuestsView,
@@ -35,6 +38,7 @@ import { article, objectiveWords, seen } from '../ui/words';
 import { classColor } from './art/icons';
 import { gameBus } from './events';
 import { becomeRefill, classSlotsFor, noteWorn, refillClassSlots, wornFlag } from './loadout';
+import { classWeapon, equipFor } from './systems/weapons';
 import { classGoal, elementStep, firstStep, learnStep, tagWords, transformStep } from './steps';
 import type { MapScene } from './scenes/MapScene';
 import { cellExplored, compiled, fogBits, fogDims, FOG_CELL } from './world/runtime';
@@ -66,6 +70,9 @@ export function onChange(s: MapScene, fn: (what: ChangeKind) => void): () => voi
     s.book.events.on('morphed', () => fn('skills')),
     s.book.events.on('fused', () => fn('skills')),
     s.book.events.on('charge', () => fn('skills')),
+    // v4: a weapon swap greys / ungreys bound skills; a stance swap changes what the slots cast.
+    gameBus.on('weaponChanged', () => fn('bar')),
+    gameBus.on('mechanic', (e) => e.type === 'stance' && fn('bar')),
   ];
   return () => offs.forEach((off) => off());
 }
@@ -80,8 +87,24 @@ export function classSlotCount(s: MapScene): number {
 export function barSlots(s: MapScene): BarSlotView[] {
   const worn = s.book.state.worn;
   const n = classSlotCount(s);
+  const rt = s.session.mechanic;
+  const weapon = s.session.player.weapon;
+  const ctx = { weapon, target: s.combat?.target?.alive ? String(s.combat.target.uid) : undefined, nearLevel: s.combat?.nearLevel() ?? null };
   return s.session.player.hotbar.map((skillId, index) => {
     const sk = skillId ? s.reg.skill(skillId) : undefined;
+    // v4: what the held weapon and the class mechanic do to this slot right now.
+    const v4: Partial<BarSlotView> = {};
+    if (sk && skillId) {
+      const lock = weaponLock(s, skillId);
+      if (lock) v4.lock = lock;
+      const mech = rt.mech();
+      if (mech) {
+        if (rt.locked(skillId)) v4.waiting = `Needs more ${rt.view()?.name ?? 'power'}.`;
+        const cast = s.reg.skill(rt.resolve(skillId));
+        if (cast && cast.id !== skillId) v4.castsAs = { skillId: cast.id, name: cast.name };
+        if (!lock && !v4.waiting && Object.keys(rt.preview(rt.useOf(skillId, cast ?? sk), ctx)).length > 0) v4.boosted = true;
+      }
+    }
     return {
       index,
       skillId,
@@ -97,8 +120,51 @@ export function barSlots(s: MapScene): BarSlotView[] {
             transformReady: s.book.has(sk.id) && s.book.canMorph(sk.id),
           }
         : {}),
+      ...v4,
     };
   });
+}
+
+// ====================================================================== v4: weapons & the class mechanic
+
+/** Why the held weapon locks a skill (core weaponLockLine) and what "Equip" would equip; null when it does not. */
+export function weaponLock(s: MapScene, skillId: string): WeaponLockView | null {
+  const sk = s.reg.skill(skillId);
+  const pl = s.session.player;
+  const line = sk ? weaponLockLine(sk, pl.weapon) : null;
+  const need = sk && line ? equipFor(sk, pl.ownedWeapons, pl.weapon) : null;
+  return line && need ? { line, weapon: need.weapon, owned: need.owned } : null;
+}
+
+/** The lock line's one action: equips the weapon the skill needs. */
+export function equipForSkill(s: MapScene, skillId: string): Outcome {
+  const lock = weaponLock(s, skillId);
+  if (!lock) return { ok: true, message: 'Ready.' };
+  if (!lock.owned) return { ok: false, message: `You do not own ${article(WEAPONS[lock.weapon].name.toLowerCase())}.` };
+  return s.equipWeapon(lock.weapon);
+}
+
+/** The one mechanic widget of the worn class (SPEC-v4 §3.6), or null. */
+export function mechanicHud(s: MapScene): MechanicHudView | null {
+  const rt = s.session.mechanic;
+  const cls = rt.cls();
+  const mech = rt.mech();
+  const t = s.combat?.target;
+  const v = rt.view(t?.alive ? String(t.uid) : undefined);
+  if (!cls || !mech || !v) return null;
+  return {
+    classId: cls.id,
+    kind: v.kind,
+    name: v.name,
+    widget: v.widget,
+    value: v.value,
+    max: v.max,
+    ready: v.ready,
+    ...(v.stance !== undefined ? { stance: v.stance } : {}),
+    ...(mech.kind === 'stance' ? { names: [mech.names[0], mech.names[1]] as [string, string] } : {}),
+    tap: rt.canSwap(),
+    color: classColor(cls.id),
+  };
 }
 
 /** Whether a skill may sit on the bar at all. */
@@ -110,6 +176,11 @@ function eligible(s: MapScene, id: string): boolean {
 export function equipSkill(s: MapScene, skillId: string, slot?: number): Outcome {
   const sk = s.reg.skill(skillId);
   if (!sk || !eligible(s, skillId)) return { ok: false, message: sk ? `${sk.name} can't go on the bar.` : 'Unknown skill.' };
+  // A class skill only ever sits in a class slot of its class: the class places it by itself.
+  if (!ownSlotEligible(sk)) {
+    const owner = sk.classOf ? s.reg.classDef(sk.classOf) : undefined;
+    return { ok: false, message: owner ? `Only ${article(owner.name)} can use that.` : `${sk.name} can't go in your slots.` };
+  }
   const bar = s.session.player.hotbar;
   const first = classSlotCount(s);
   const at = bar.indexOf(skillId);
@@ -146,7 +217,7 @@ export function slotPicker(s: MapScene, slot: number): SlotPickerView {
   const now = s.book.now();
   const choices = s.book
     .known()
-    .filter((sk) => barEligible(sk))
+    .filter((sk) => ownSlotEligible(sk))
     .map((sk) => ({ sk, at: s.book.progress(sk.id)?.learnedAt ?? 0 }))
     .sort((a, b) => b.at - a.at || (a.sk.name < b.sk.name ? -1 : 1))
     .map(({ sk, at }) => {
@@ -196,7 +267,11 @@ export function skillCard(s: MapScene, id: string): SkillCardView {
     const to = opts.find((o) => o.available && !o.owned && o.skill)!;
     action = { kind: 'transform', to: to.morph.to, toName: to.skill!.name };
   } else if (slot >= 0) action = { kind: 'equipped', slot, ...(slot < classSlotCount(s) && worn ? { byClass: worn.name } : {}) };
-  else if (barEligible(sk)) action = { kind: 'equip' };
+  else if (ownSlotEligible(sk)) action = { kind: 'equip' };
+  else if (barEligible(sk)) {
+    const owner = sk.classOf ? s.reg.classDef(sk.classOf) : undefined;
+    action = { kind: 'step', text: owner ? `Become ${article(owner.name)} to use it.` : 'Your class places this one.' };
+  }
   else action = { kind: 'step', text: 'Your weapon swings this by itself.' };
   // The one next step toward a transform ("Reach rank 10 to transform.").
   if (known && !ready) next = transformStep(s.reg, book, id) ?? undefined;
@@ -322,6 +397,8 @@ export function becomeClass(s: MapScene, id: string | null): Outcome {
   if (id === null) {
     if (prev === null) return { ok: true, message: 'You have no class.' };
     book.unwear();
+    // Class-only skills leave the bar with their class (they never sit in your slots).
+    refillClassSlots(s.session, 'class');
     s.afterClassChange();
     // A class that became discoverable just now is worn at once (the book's own rule): its discovery path ran.
     const now = book.state.worn ? s.reg.classDef(book.state.worn) : undefined;
@@ -339,6 +416,10 @@ export function becomeClass(s: MapScene, id: string | null): Outcome {
   // your most recently used skills that are not on the bar (auto-equip on every change of class).
   becomeRefill(s.session);
   noteWorn(book);
+  // SPEC-v4 §2.2: becoming a class equips its weapon in the same tap, when the player owns it (no swap cooldown).
+  const pl = s.session.player;
+  const weapon = classWeapon(cls, pl.ownedWeapons, pl.weapon);
+  if (weapon) s.equipWeapon(weapon, 'class');
   gameBus.emit('classChanged', { classId: id, prev, reason: 'wear' });
   s.afterClassChange();
   return { ok: true, message: `You are now ${article(cls.name)}.` };

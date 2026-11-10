@@ -112,7 +112,7 @@ export const ITEMS: ItemDef[] = [
     icon: '🌩️',
     kind: 'relic',
     flag: 'relic_storm',
-    desc: "A horn still crackling with Thunderhoof's storm. The deepest staff arts answer to its charge.",
+    desc: "A horn still crackling with Thunderhoof's storm. The deepest rod arts answer to its charge.",
   },
 
   // ---------------------------------------------------------------- shard

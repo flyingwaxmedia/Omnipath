@@ -113,6 +113,86 @@ describe('audio bridge', () => {
     expect(r.plays[4].o.rate).toBeGreaterThan(1); // hops climb in pitch
   });
 
+  it('v4: voices zones, blinks, mends and shields by their own events, in the element', () => {
+    const r = rig();
+    const ref = { skillId: 'x', element: 'water' as const };
+    const zone = skill({ element: 'water', shape: { kind: 'zone', radius: 80, range: 100, durationMs: 4000, tickMs: 1000 } });
+    const obj = { x: 60, y: 16, radius: 80, level: 1, alive: true };
+    r.bus.emit('castFire', { ...ref, skill: zone, x: 48, y: 16, shape: 'zone', aim: { x: 60, y: 16 }, target: null, rank: 1, basic: false, map: 'm' });
+    r.bus.emit('objectTick', { ...ref, skill: zone, id: 1, kind: 'zone', obj, x: 60, y: 16, radius: 80, index: 0, ticks: 4 });
+    r.bus.emit('objectTick', { ...ref, skill: zone, id: 1, kind: 'zone', obj, x: 60, y: 16, radius: 80, index: 1, ticks: 4 });
+    r.bus.emit('objectEnd', { ...ref, skill: zone, id: 1, kind: 'zone', obj, x: 60, y: 16, reason: 'expire' });
+    r.bus.emit('objectEnd', { ...ref, skill: zone, id: 2, kind: 'zone', obj, x: 60, y: 16, reason: 'clear' });
+    r.bus.emit('objectEnd', { ...ref, skill: zone, id: 3, kind: 'zone', obj, x: 60, y: 16, reason: 'consumed' });
+    expect(r.take()).toEqual(['cast_zone_water', 'zone_tick', 'zone_tick', 'zone_end']);
+    const blink = skill({ element: 'water', shape: { kind: 'blink', distance: 100, to: 'point' } });
+    r.bus.emit('castFire', { ...ref, skill: blink, x: 48, y: 16, shape: 'blink', aim: { x: 60, y: 16 }, target: null, rank: 1, basic: false, map: 'm' });
+    r.bus.emit('blink', { ...ref, skill: blink, owner: 'player', from: { x: 48, y: 16 }, to: { x: 148, y: 16 }, mode: 'point' });
+    expect(r.take()).toEqual(['cast_blink_water']);
+    const mend = skill({ element: 'water', power: 0, shape: { kind: 'mend', pct: 20, overMs: 3000 } });
+    r.bus.emit('mend', { ...ref, skill: mend, x: 48, y: 16, amount: 10, first: true, overMs: 3000 });
+    r.bus.emit('mend', { ...ref, skill: mend, x: 48, y: 16, amount: 3, first: false });
+    // A mend's heal event does not double the sound; leech still chimes.
+    r.bus.emit('heal', { x: 48, y: 16, amount: 3, source: 'mend' as never });
+    r.bus.emit('heal', { x: 48, y: 16, amount: 3, source: 'leech' });
+    expect(r.take()).toEqual(['cast_mend_water', 'mend_tick', 'heal']);
+    const shield = skill({ element: 'water', shape: { kind: 'shield', pct: 15, durationMs: 5000, burst: { radius: 80 } } });
+    r.bus.emit('shieldUp', { ...ref, skill: shield, x: 48, y: 16, amount: 20, durationMs: 5000, untilMs: 5000, burst: 80 });
+    r.bus.emit('shieldHit', { x: 48, y: 16, absorbed: 5, left: 15, origin: { x: 200, y: 16 } });
+    expect(r.plays[1].o.pan!).toBeGreaterThan(0);
+    r.bus.emit('shieldEnd', { ...ref, skill: shield, x: 48, y: 16, reason: 'broken', burst: 80 });
+    r.bus.emit('shieldEnd', { ...ref, skill: shield, x: 48, y: 16, reason: 'replaced' });
+    expect(r.take()).toEqual(['cast_shield_water', 'shield_absorb', 'shield_break', 'nova_m']);
+    for (const n of ['cast_zone_water', 'zone_tick', 'zone_end', 'cast_blink_water', 'cast_mend_water', 'mend_tick', 'cast_shield_water', 'shield_absorb', 'shield_break']) expect(SOUNDS[n], n).toBeDefined();
+  });
+
+  it('v4: bare hands swing and land by the blow (jab, hook, palm, kick, slam), new statuses speak', () => {
+    const r = rig();
+    (r.scene.session.player as { weapon: string }).weapon = 'fists';
+    const base = { skillId: 'x', owner: 'player' as const, count: 1, ang: 0, x: 48, y: 16, index: 0 };
+    const jab = skill({ tags: ['fist', 'melee', 'basic'], shape: { kind: 'strike', range: 40, arc: 70 }, delivery: 'punch' });
+    const hay = skill({ tags: ['fist', 'melee', 'heavy'], power: 2.1, shape: { kind: 'strike', range: 46, arc: 90 }, delivery: 'punch' });
+    r.bus.emit('skillPulse', { ...base, skill: jab });
+    r.bus.emit('skillPulse', { ...base, skill: hay });
+    expect(r.take()).toEqual(['swing_fists_light', 'swing_fists_heavy']);
+    const blows: [SkillDef, string][] = [
+      [jab, 'fist_jab'],
+      [hay, 'fist_hook'],
+      [skill({ tags: ['fist', 'spirit'], shape: { kind: 'strike', range: 40, arc: 70 } }), 'fist_palm'],
+      [skill({ tags: ['fist', 'spin'], shape: { kind: 'spin', radius: 70 }, delivery: 'kick' }), 'fist_kick'],
+      [skill({ tags: ['fist', 'dash', 'heavy', 'aoe'], power: 3, shape: { kind: 'dash', distance: 200, width: 80 } }), 'fist_slam'],
+    ];
+    for (const [s, name] of blows) {
+      r.bus.emit('hit', hit({ skill: s, element: undefined }));
+      expect(r.take(), name).toEqual(['hit_physical', name]);
+      expect(SOUNDS[name], name).toBeDefined();
+    }
+    for (const kind of ['root', 'launch', 'expose', 'lure'] as const) r.bus.emit('statusApplied', { target: monster(), kind, x: 60, y: 20 });
+    expect(r.take()).toEqual(['status_root', 'status_launch', 'status_expose', 'status_lure']);
+  });
+
+  it('v4: class mechanics speak once per effect: full, finisher, cash-in, stance; steps climb in pitch', () => {
+    const r = rig();
+    const ev = (type: GameEvents['mechanic']['type'], effect: GameEvents['mechanic']['effect'], extra: Partial<GameEvents['mechanic']> = {}): GameEvents['mechanic'] => ({ classId: 'c', kind: 'gauge', name: 'n', type, effect, view: null, x: 48, y: 16, ...extra });
+    r.bus.emit('mechanic', ev('full', { type: 'full', name: 'Heat' }));
+    r.bus.emit('mechanic', ev('finisher', { type: 'finisher', name: 'Finisher', skill: 'x' }));
+    r.bus.emit('mechanic', ev('cashIn', { type: 'cashIn', name: 'Pin', skill: 'x', targets: [], resetCooldown: false }));
+    r.bus.emit('mechanic', ev('stance', { type: 'stance', name: 'Low Tide', stance: 1 }));
+    r.bus.emit('mechanic', ev('comboStep', { type: 'comboStep', name: 'Cadence', step: 1, length: 3 }));
+    r.bus.emit('mechanic', ev('comboStep', { type: 'comboStep', name: 'Cadence', step: 2, length: 3 }));
+    r.bus.emit('mechanic', ev('comboBreak', { type: 'comboBreak', name: 'Cadence' }));
+    r.bus.emit('mechanic', ev('marked', { type: 'marked', name: 'Pin', target: 'a', marks: 2 }, { target: monster() }));
+    r.bus.emit('mechanic', ev('levelUp', { type: 'levelUp', name: 'Hearth', object: 1, level: 2 }, { at: { x: 60, y: 16 } }));
+    // Silent: the cast or the object already spoke.
+    r.bus.emit('mechanic', ev('spent', { type: 'spent', name: 'Heat', amount: 10, skill: 'x' }));
+    r.bus.emit('mechanic', ev('placed', { type: 'placed', name: 'Hearth', object: 1, count: 1 }));
+    r.bus.emit('mechanic', ev('expired', { type: 'expired', name: 'Hearth', object: 1, level: 1 }));
+    r.bus.emit('mechanic', ev('consumed', { type: 'consumed', name: 'Hearth', skill: 'x', objects: [1] } as never));
+    expect(r.names()).toEqual(['mech_full', 'mech_finisher', 'mech_cashin', 'mech_stance', 'mech_step', 'mech_step', 'mech_break', 'mech_mark', 'mech_grow']);
+    expect(r.plays[5].o.rate!).toBeGreaterThan(r.plays[4].o.rate!);
+    for (const n of new Set(r.names())) expect(SOUNDS[n], n).toBeDefined();
+  });
+
   it('warns on telegraphs, roars once per warden, and sizes monster deaths', () => {
     const r = rig();
     const w = monster(60, 20, 'warden');

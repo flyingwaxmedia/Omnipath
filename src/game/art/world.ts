@@ -1,6 +1,6 @@
 import type Phaser from 'phaser';
 import { type Ctx, canvasTex, rgba, scratch, shade } from './common';
-import { PAL, artRng, disc, keySeed, line as seg, outline, px } from './pixel';
+import { PAL, RAMPS, WORLD_OUTLINE, artRng, disc, keySeed, line as seg, outline, px } from './pixel';
 import { drawTiles } from './tiles';
 import { type IdleAnim, SWAY_CELLS, stripTex, swayLean } from './dressing';
 
@@ -18,18 +18,18 @@ export const TILE_SPACING = 2;
 // Shared by props, structures, objects, nodes and portals. Bodies are painted on a scratch canvas by sprite(),
 // which then adds the 1 px PAL.outline rim and composites over whatever (shadows, halos) is already on the texture.
 
-const OUT = PAL.outline;
+const OUT = WORLD_OUTLINE;
 type Ramp = readonly string[];
 
 /** Material ramps, darkest -> lightest. Anchors from docs/ART-DIRECTION.md §2, extended by a shade either side. */
 const R = {
-  leaf: ['#1f3519', '#2b4a22', '#3d6630', '#548540', '#74a655', '#a2c46a'],
-  bark: ['#2e1d10', '#3d2817', '#5c3d22', '#7d5530', '#9c6d3e', '#b8874f'],
-  stone: ['#33353c', '#4a4d55', '#666a73', '#878b93', '#a9adb3', '#cfd2d5'],
+  leaf: RAMPS.foliage,
+  bark: RAMPS.wood,
+  stone: RAMPS.stone,
   warmStone: ['#3a342e', '#544c43', '#70665a', '#8f8475', '#aea290', '#ccc2ae'],
-  dirt: ['#5a4a34', '#7a6446', '#96805c', '#ad9a74', '#c2b18a'],
-  grass: ['#3f5a26', '#56772f', '#6c8f3a', '#86a64a', '#a2bd62'],
-  moss: ['#2b4a22', '#3d6630', '#548540', '#74a655'],
+  dirt: RAMPS.dirt.slice(1),
+  grass: RAMPS.grass.slice(1),
+  moss: RAMPS.foliage.slice(1, 5),
   gold: ['#6a4818', '#a0702c', '#d0a048', '#e9c46a', '#f8e6a8'],
   iron: ['#24252b', '#3a3c44', '#565a64', '#7c818c', '#a8adb6'],
   crimson: ['#4a1418', '#7a1f26', '#b8323a', '#d85a58', '#f09080'],
@@ -41,7 +41,6 @@ const R = {
   flame: ['#7a1e0c', '#c8401a', '#f07a28', '#ffc04a', '#fff0a8'],
 } as const;
 
-const SHADOW = 'rgba(36,24,15,0.30)';
 
 /** Integer rectangle (rounded), the workhorse of every sprite. */
 function box(c: Ctx, x: number, y: number, w: number, h: number, color: string): void {
@@ -96,11 +95,6 @@ function brush(c: Ctx, pts: readonly number[], w: number, color: string): void {
       c.fillRect(Math.round(x - w / 2), Math.round(y - w / 2), w, w);
     }
   }
-}
-
-/** Flat pixel ground shadow (hard-edged, translucent, warm). */
-function shadow(c: Ctx, cx: number, cy: number, rx: number, ry: number, a = 0.3): void {
-  disc(c, cx, cy, rx, ry, a === 0.3 ? SHADOW : `rgba(36,24,15,${a})`);
 }
 
 /** Stepped (banded) light halo — reads as pixel light, never a smooth gradient. */
@@ -233,7 +227,6 @@ function broadTree(scene: Phaser.Scene, key: string, leaf: Ramp, bark: Ramp, ext
   stripTex(scene, key, 48, 64, SWAY_CELLS, (c, cell) => {
     const f = swayLean(cell);
     const rnd = artRng(keySeed(key));
-    shadow(c, 24, 60, 18, 4);
     sprite(c, 48, 64, (b) => {
       trunkPx(b, 24, 30, 61, 8, bark, rnd);
       brush(b, [22, 42, 15 + (v === 2 ? -1 : 0), 33], 2, bark[3]);
@@ -290,7 +283,13 @@ function pineTier(b: Ctx, cx: number, top: number, bottom: number, hw: number, r
 function pineTree(scene: Phaser.Scene, key: string, ramp: Ramp, snow: boolean, v = 0): void {
   // tier [top, bottom, half width] × 3, bottom tier first; variant 1 is slimmer and taller in the middle
   const tiers =
-    v === 1
+    v === 2
+      ? ([
+          [30, 51, 15],
+          [18, 39, 12],
+          [8, 28, 9],
+        ] as const)
+      : v === 1
       ? ([
           [27, 51, 16],
           [13, 37, 14],
@@ -304,7 +303,6 @@ function pineTree(scene: Phaser.Scene, key: string, ramp: Ramp, snow: boolean, v
   // frame 1: the top tier and the tip a pixel downwind (sway strip, see broadTree; pines are never mirrored by
   // render/stage.ts PROP_NO_FLIP, so they need no mirrored cell)
   stripTex(scene, key, 40, 64, 2, (c, f) => {
-    shadow(c, 20, 60, 14, 4);
     if (snow) disc(c, 20, 60, 12, 3, 'rgba(238,244,250,0.75)');
     sprite(c, 40, 64, (b) => {
       box(b, 17, 48, 6, 13, DEAD_BARK[3]);
@@ -438,9 +436,10 @@ function drawProps(scene: Phaser.Scene): void {
   broadTree(scene, 'darktree~2', LEAF_DARK, DEAD_BARK, darkMotes, 2);
   pineTree(scene, 'pine~1', PINE, false, 1);
   pineTree(scene, 'frostpine~1', FROST_PINE, true, 1);
+  pineTree(scene, 'pine~2', PINE, false, 2);
+  pineTree(scene, 'frostpine~2', FROST_PINE, true, 2);
 
   canvasTex(scene, 'deadtree', 40, 56, (c) => {
-    shadow(c, 20, 52, 13, 3.5);
     sprite(c, 40, 56, (b) => {
       const B = DEAD_BARK;
       fpoly(b, [14, 53, 17, 47, 17, 24, 23, 22, 23, 47, 27, 53], B[3]);
@@ -470,7 +469,6 @@ function drawProps(scene: Phaser.Scene): void {
 
   canvasTex(scene, 'bush', 32, 28, (c) => {
     const rnd = artRng(keySeed('bush'));
-    shadow(c, 16, 25, 13, 3);
     sprite(c, 32, 28, (b) => {
       leafMass(b, 16, 16, 14, 10, R.leaf, rnd, false, 3.6);
       for (const [x, y] of [
@@ -490,7 +488,6 @@ function drawProps(scene: Phaser.Scene): void {
   canvasTex(scene, 'bush~1', 32, 28, (c) => {
     // two round lobes, cream blossoms instead of berries
     const rnd = artRng(keySeed('bush~1'));
-    shadow(c, 16, 25, 13, 3);
     sprite(c, 32, 28, (b) => {
       leafMass(b, 11, 17, 9, 8, R.leaf, rnd, false, 3.4);
       leafMass(b, 21, 15, 9, 9, R.leaf, rnd, true, 3.4);
@@ -510,7 +507,6 @@ function drawProps(scene: Phaser.Scene): void {
   canvasTex(scene, 'bush~2', 32, 28, (c) => {
     // a low, wide shrub with grass at its foot
     const rnd = artRng(keySeed('bush~2'));
-    shadow(c, 16, 25, 14, 2.6);
     sprite(c, 32, 28, (b) => {
       leafMass(b, 16, 19, 14, 7, R.leaf, rnd, false, 3.2);
       for (const [x, y] of [
@@ -527,7 +523,6 @@ function drawProps(scene: Phaser.Scene): void {
 
   canvasTex(scene, 'rock', 34, 30, (c) => {
     const rnd = artRng(keySeed('rock'));
-    shadow(c, 17, 26, 15, 3.5);
     sprite(c, 34, 30, (b) => {
       rockPx(b, 2, 3, 1, R.stone, true, rnd);
       tuft(b, 2, 28);
@@ -537,7 +532,6 @@ function drawProps(scene: Phaser.Scene): void {
 
   canvasTex(scene, 'boulder', 48, 40, (c) => {
     const rnd = artRng(keySeed('boulder'));
-    shadow(c, 24, 35, 22, 4.5);
     sprite(c, 48, 40, (b) => {
       rockPx(b, 1, 2, 1.32, R.stone, true, rnd);
       rockPx(b, 29, 21, 0.58, R.stone, false, rnd);
@@ -551,7 +545,6 @@ function drawProps(scene: Phaser.Scene): void {
   canvasTex(scene, 'rock~1', 34, 30, (c) => {
     // two stones, the small one in front on the right
     const rnd = artRng(keySeed('rock~1'));
-    shadow(c, 16, 26, 15, 3.5);
     sprite(c, 34, 30, (b) => {
       rockPx(b, 1, 8, 0.72, R.stone, true, rnd);
       rockPx(b, 19, 17, 0.45, R.stone, false, rnd);
@@ -561,7 +554,6 @@ function drawProps(scene: Phaser.Scene): void {
   canvasTex(scene, 'rock~2', 34, 30, (c) => {
     // a low flat slab half sunk in the grass
     const rnd = artRng(keySeed('rock~2'));
-    shadow(c, 17, 26, 16, 3);
     sprite(c, 34, 30, (b) => {
       slabPx(b, 2, 12, 1, R.stone, false, rnd);
       tuft(b, 0, 29);
@@ -572,7 +564,6 @@ function drawProps(scene: Phaser.Scene): void {
   canvasTex(scene, 'boulder~1', 48, 40, (c) => {
     // a split boulder: two halves leaning together, a dark crevice between them
     const rnd = artRng(keySeed('boulder~1'));
-    shadow(c, 24, 35, 22, 4.5);
     sprite(c, 48, 40, (b) => {
       rockPx(b, 20, 11, 0.92, R.stone, false, rnd);
       rockPx(b, 0, 13, 0.88, R.stone, true, rnd);
@@ -586,7 +577,6 @@ function drawProps(scene: Phaser.Scene): void {
   canvasTex(scene, 'boulder~2', 48, 40, (c) => {
     // a low mossy slab with a small stone in front on the left
     const rnd = artRng(keySeed('boulder~2'));
-    shadow(c, 24, 35, 22, 4);
     sprite(c, 48, 40, (b) => {
       slabPx(b, 2, 14, 1.45, R.stone, true, rnd);
       rockPx(b, 3, 25, 0.42, R.stone, false, rnd);
@@ -597,7 +587,6 @@ function drawProps(scene: Phaser.Scene): void {
   });
 
   canvasTex(scene, 'crystal', 32, 44, (c) => {
-    shadow(c, 16, 41, 12, 3);
     halo(c, 16, 28, 16, '#8ce0f4', 0.32);
     sprite(c, 32, 44, (b) => {
       shard(b, 9, 38, 17, 4, -2, R.violet);
@@ -613,7 +602,6 @@ function drawProps(scene: Phaser.Scene): void {
   });
 
   canvasTex(scene, 'stalagmite', 28, 44, (c) => {
-    shadow(c, 14, 41, 11, 3);
     sprite(c, 28, 44, (b) => {
       const cone = (x: number, base: number, top: number, w: number, ramp: Ramp) => {
         fpoly(b, [x - w, base, x - 1, top, x + 1, top, x + w, base], ramp[2]);
@@ -633,7 +621,6 @@ function drawProps(scene: Phaser.Scene): void {
   });
 
   canvasTex(scene, 'tombstone', 28, 36, (c) => {
-    shadow(c, 14, 33, 11, 3);
     sprite(c, 28, 36, (b) => {
       const S = ['#2e2c38', '#46434f', '#625e6c', '#7f7a8a', '#9d98a8', '#bdb8c6'];
       // side thickness (right), then the face
@@ -666,7 +653,6 @@ function drawProps(scene: Phaser.Scene): void {
   const TOMB = ['#2e2c38', '#46434f', '#625e6c', '#7f7a8a', '#9d98a8', '#bdb8c6'];
   canvasTex(scene, 'tombstone~1', 28, 36, (c) => {
     // a stone grave cross, a chip off one arm, moss at its foot
-    shadow(c, 14, 33, 11, 3);
     sprite(c, 28, 36, (b) => {
       const S = TOMB;
       box(b, 16, 9, 2, 24, S[1]); // side thickness
@@ -692,7 +678,6 @@ function drawProps(scene: Phaser.Scene): void {
   canvasTex(scene, 'tombstone~2', 28, 36, (c) => {
     // an old square-topped stone, leaning, its top corner broken off; rubble at its foot
     const rnd = artRng(keySeed('tombstone~2'));
-    shadow(c, 14, 33, 11, 3);
     sprite(c, 28, 36, (b) => {
       const S = TOMB;
       fpoly(b, [19, 12, 22, 14, 21, 33, 18, 33], S[1]);
@@ -716,7 +701,6 @@ function drawProps(scene: Phaser.Scene): void {
   });
 
   canvasTex(scene, 'mushroom', 28, 30, (c) => {
-    shadow(c, 14, 27, 11, 2.5);
     sprite(c, 28, 30, (b) => {
       shroom(b, 19, 19, 5, 4, 7, R.crimson);
       shroom(b, 10, 15, 7, 6, 11, ['#4a1c10', '#7a3218', '#a84a24', '#c86a38', '#e8a070']);
@@ -729,7 +713,6 @@ function drawProps(scene: Phaser.Scene): void {
   stripTex(scene, 'duskwillow', 56, 72, SWAY_CELLS, (c, cell) => {
     const f = swayLean(cell);
     const rnd = artRng(keySeed('duskwillow'));
-    shadow(c, 28, 68, 21, 4.5);
     halo(c, 13, 47, 9, '#ffb0e8', 0.35);
     halo(c, 43, 43, 9, '#9fe8ff', 0.35);
     sprite(c, 56, 72, (b) => {
@@ -760,7 +743,6 @@ function drawProps(scene: Phaser.Scene): void {
   });
 
   canvasTex(scene, 'basalt_spire', 32, 60, (c) => {
-    shadow(c, 16, 56, 14, 3.5);
     halo(c, 15, 54, 12, '#ff6a20', 0.3);
     sprite(c, 32, 60, (b) => {
       const col = (x: number, top: number, base: number, w: number) => {
@@ -789,7 +771,6 @@ function drawProps(scene: Phaser.Scene): void {
   // sway strip: cell 1 bends the upper blades and the cattails a pixel downwind (cell 2: mirrored lean)
   stripTex(scene, 'reeds', 28, 34, SWAY_CELLS, (c, cell) => {
     const f = swayLean(cell);
-    shadow(c, 14, 31, 10, 2.5);
     sprite(c, 28, 34, (b) => {
       const blades: [number, number, number, number][] = [
         [5, 31, -4, 1],
@@ -820,6 +801,495 @@ function drawProps(scene: Phaser.Scene): void {
       }
     });
   });
+  drawBigProps(scene);
+}
+
+// ================================================================== size tiers (SPEC-v4 §11.2 B)
+// The hero is 40 px tall. S: under a tile, 8–24 px · M: one tile, 32–64 px (the keys above) · L: 64–104 px ·
+// XL: 104–160 px. Texture keys: propKey(kind, tier, look). Every tier of the tree and rock families has three
+// drawn looks: different silhouettes, never a recolour or a mirror. Trees are outlined in the darkest foliage step,
+// rocks in the darkest stone step, so the world sits back behind the actors' warm-black outline.
+
+export type PropTier = 'S' | 'M' | 'L' | 'XL';
+
+/** Texture key of a prop look: M keeps the v2 keys ('tree', 'tree~1'); other tiers are '<kind>_<tier>[~n]'. */
+export function propKey(kind: string, tier: PropTier = 'M', look = 0): string {
+  const base = tier === 'M' ? kind : `${kind}_${tier}`;
+  return look > 0 ? `${base}~${look}` : base;
+}
+
+/** Looks drawn per '<kind>_<tier>' (M tiers: PROP_VARIANTS + 1). */
+export const PROP_TIER_LOOKS: Readonly<Record<string, number>> = {
+  tree_S: 3, tree_L: 3, tree_XL: 3, tree_mass: 3,
+  darktree_S: 3, darktree_L: 3, darktree_XL: 3, darktree_mass: 3,
+  duskwillow_S: 3, duskwillow_L: 3, duskwillow_XL: 3, duskwillow_mass: 3,
+  pine_S: 3, pine_L: 3, pine_XL: 3, pine_mass: 3,
+  frostpine_S: 3, frostpine_L: 3, frostpine_XL: 3, frostpine_mass: 3,
+  deadtree_L: 3, deadtree_XL: 3,
+  rock_S: 3, rock_L: 3, rock_XL: 3,
+  menhir_L: 3,
+  log_L: 3,
+};
+
+/** Canvas size (px) of each tiered look; the foot (origin 0.5, 1) is the bottom-centre. */
+export const PROP_TIER_SIZE: Readonly<Record<string, readonly [w: number, h: number]>> = {
+  tree_S: [28, 36], tree_L: [96, 108], tree_XL: [136, 156], tree_mass: [104, 84],
+  pine_S: [24, 36], pine_L: [64, 112], pine_XL: [84, 152], pine_mass: [104, 88],
+  deadtree_L: [76, 104], deadtree_XL: [104, 140],
+  rock_S: [22, 16], rock_L: [84, 64], rock_XL: [120, 88],
+  menhir_L: [44, 88],
+  log_L: [112, 46],
+};
+
+/** A ramp one step darker (the darkest step repeats): back canopy layers, second forest rows, canopy masses. */
+const darker = (r: Ramp): Ramp => [r[0], ...r.slice(0, r.length - 1)];
+
+type MassDef = readonly [cx: number, cy: number, rx: number, ry: number];
+interface BroadDef {
+  /** [trunk centre x, trunk top y, trunk width] (+ a second trunk for forked trees). */
+  trunks: readonly (readonly [number, number, number])[];
+  /** Boughs as brush polylines [x0, y0, x1, y1, width]. */
+  boughs: readonly (readonly [number, number, number, number, number])[];
+  /** Canopy layers back to front: the back layer is drawn one step darker. */
+  back: readonly MassDef[];
+  front: readonly MassDef[];
+}
+
+// Three grown-tree silhouettes in a 96 x 108 box: a round oak, a tall narrow elm and a forked tree with two crowns.
+const BROAD_L: readonly BroadDef[] = [
+  {
+    trunks: [[48, 56, 12]],
+    boughs: [[45, 70, 30, 54, 3], [51, 66, 66, 52, 3]],
+    back: [[48, 50, 34, 16], [48, 26, 28, 18]],
+    front: [[46, 26, 30, 20], [22, 46, 18, 14], [72, 44, 19, 14], [48, 58, 22, 9]],
+  },
+  {
+    trunks: [[48, 50, 10]],
+    boughs: [[46, 66, 36, 52, 3], [50, 60, 60, 46, 2]],
+    back: [[48, 44, 24, 18], [48, 20, 18, 14]],
+    front: [[48, 18, 20, 15], [38, 36, 19, 13], [60, 40, 18, 13], [47, 54, 18, 9]],
+  },
+  {
+    trunks: [[44, 60, 12]],
+    boughs: [[42, 66, 26, 50, 4], [48, 74, 64, 50, 5], [62, 54, 72, 40, 3]],
+    back: [[30, 42, 24, 16], [68, 34, 22, 16]],
+    front: [[28, 34, 23, 17], [70, 24, 21, 16], [50, 50, 20, 10], [78, 44, 12, 9]],
+  },
+];
+// Hero trees in a 136 x 156 box: 128–152 px tall, three to four heroes.
+const BROAD_XL: readonly BroadDef[] = [
+  {
+    trunks: [[68, 86, 18]],
+    boughs: [[62, 106, 38, 82, 5], [74, 100, 100, 78, 5], [68, 90, 66, 66, 4]],
+    back: [[68, 74, 52, 24], [68, 40, 44, 28], [68, 20, 30, 14]],
+    front: [[64, 34, 44, 28], [30, 68, 26, 20], [106, 64, 27, 20], [68, 86, 32, 12], [84, 18, 22, 12]],
+  },
+  {
+    trunks: [[66, 78, 16]],
+    boughs: [[62, 100, 46, 78, 4], [70, 92, 90, 70, 4]],
+    back: [[66, 62, 38, 26], [66, 28, 28, 22]],
+    front: [[66, 22, 30, 20], [48, 48, 28, 19], [88, 54, 26, 18], [62, 74, 28, 12], [96, 30, 16, 12]],
+  },
+  {
+    trunks: [[60, 92, 18]],
+    boughs: [[54, 104, 30, 78, 5], [66, 112, 90, 76, 7], [88, 80, 106, 60, 4], [58, 96, 64, 70, 4]],
+    back: [[38, 62, 34, 22], [96, 50, 32, 24], [66, 30, 26, 18]],
+    front: [[34, 50, 32, 24], [100, 36, 30, 22], [66, 24, 24, 16], [68, 78, 28, 12], [112, 66, 18, 12]],
+  },
+];
+
+/** A big broad-leaf tree: forked trunks, boughs, a darker back canopy and a lit front canopy of several masses. */
+function bigBroad(scene: Phaser.Scene, key: string, w: number, h: number, d: BroadDef, leaf: Ramp, bark: Ramp, pr: number, extra?: (b: Ctx, rnd: () => number) => void): void {
+  // the crown hangs low: about a third of the trunk shows (a bare pole under a ball reads as a lollipop)
+  const drop = Math.round(h * 0.1);
+  canvasTex(scene, key, w, h, (c) => {
+    const rnd = artRng(keySeed(key));
+    sprite(
+      c,
+      w,
+      h,
+      (b) => {
+        for (const [cx, top, tw] of d.trunks) {
+          trunkPx(b, cx, top, h - 4, tw, bark, rnd);
+          // the crown's shade on the trunk (the leaves below cover its upper part)
+          const shadeTo = Math.min(h - 22, top + drop + Math.round(h * 0.16));
+          box(b, cx - tw / 2, top, tw, shadeTo - top, bark[2]);
+          box(b, cx - tw / 2, top, tw, shadeTo - top - 3, bark[1]);
+        }
+        for (const [x0, y0, x1, y1, bw] of d.boughs) brush(b, [x0, y0 + drop, x1, y1 + drop], bw, bark[x1 < x0 ? 2 : 1]);
+        const back = darker(leaf);
+        for (const [cx, cy, rx, ry] of d.back) leafMass(b, cx, cy + drop, rx, ry, back, rnd, false, pr);
+        for (let i = 0; i < d.front.length; i++) {
+          const [cx, cy, rx, ry] = d.front[i];
+          leafMass(b, cx, cy + drop, rx, ry, leaf, rnd, true, pr);
+        }
+        extra?.(b, rnd);
+        tuft(b, Math.round(d.trunks[0][0] - d.trunks[0][2] / 2 - 9), h - 2);
+        tuft(b, Math.round(d.trunks[0][0] + d.trunks[0][2] / 2 + 4), h - 1);
+      },
+      leaf[0],
+    );
+  });
+}
+
+/** A trunkless canopy mass (deep forest interior): one solid, dark crown cluster. */
+function canopyMass(scene: Phaser.Scene, key: string, leaf: Ramp, v: number): void {
+  const L: readonly (readonly MassDef[])[] = [
+    [[52, 46, 48, 30], [30, 30, 24, 18], [74, 28, 26, 18], [52, 18, 22, 12]],
+    [[52, 48, 48, 28], [40, 26, 30, 20], [80, 36, 20, 16]],
+    [[52, 46, 48, 30], [24, 36, 20, 16], [62, 24, 32, 18]],
+  ];
+  canvasTex(scene, key, 104, 84, (c) => {
+    const rnd = artRng(keySeed(key));
+    const dk = darker(leaf);
+    sprite(c, 104, 84, (b) => {
+      const m = L[v % L.length];
+      leafMass(b, m[0][0], m[0][1], m[0][2], m[0][3], darker(dk), rnd, false, 6);
+      for (let i = 1; i < m.length; i++) leafMass(b, m[i][0], m[i][1], m[i][2], m[i][3], dk, rnd, true, 6);
+    }, leaf[0]);
+  });
+}
+
+/** A sapling: a thin stem and one small crown (three shapes). */
+function sapling(scene: Phaser.Scene, key: string, leaf: Ramp, bark: Ramp, v: number): void {
+  canvasTex(scene, key, 28, 36, (c) => {
+    const rnd = artRng(keySeed(key));
+    sprite(c, 28, 36, (b) => {
+      const lean = v === 1 ? 2 : v === 2 ? -1 : 0;
+      brush(b, [14, 34, 14 + lean, 18], 2, bark[3]);
+      px(b, 13, 33, bark[2]);
+      px(b, 15, 34, bark[1]);
+      if (v === 0) leafMass(b, 14, 13, 10, 9, leaf, rnd, false, 3.4);
+      else if (v === 1) {
+        leafMass(b, 16, 10, 8, 7, leaf, rnd, false, 3.2);
+        leafMass(b, 10, 19, 6, 5, leaf, rnd, true, 3);
+      } else {
+        leafMass(b, 13, 16, 11, 6, leaf, rnd, false, 3.2);
+        leafMass(b, 13, 8, 6, 5, leaf, rnd, true, 3);
+      }
+      tuft(b, 4, 35);
+    }, leaf[0]);
+  });
+}
+
+/** A tall conifer of several tiers: [top, bottom, half width] bottom tier first. */
+function bigPine(scene: Phaser.Scene, key: string, w: number, h: number, tiers: readonly (readonly [number, number, number])[], ramp: Ramp, snow: boolean, lean = 0): void {
+  canvasTex(scene, key, w, h, (c) => {
+    const cx = w / 2;
+    if (snow) disc(c, cx, h - 4, w * 0.3, 3, 'rgba(238,244,250,0.75)');
+    sprite(c, w, h, (b) => {
+      const tw = Math.max(6, Math.round(w / 9));
+      box(b, cx - tw / 2, tiers[0][1] - 6, tw, h - 3 - (tiers[0][1] - 6), DEAD_BARK[3]);
+      box(b, cx - tw / 2, tiers[0][1] - 6, 2, h - 3 - (tiers[0][1] - 6), DEAD_BARK[4]);
+      box(b, cx + tw / 2 - 3, tiers[0][1] - 6, 3, h - 3 - (tiers[0][1] - 6), DEAD_BARK[2]);
+      box(b, cx - tw / 2 - 2, h - 5, tw + 4, 2, DEAD_BARK[2]);
+      box(b, cx - tw / 2 - 1, tiers[0][1] - 6, tw + 2, 4, DEAD_BARK[0]);
+      tiers.forEach(([top, bottom, hw], i) => pineTier(b, cx + Math.round((lean * i) / tiers.length), top, bottom, hw, ramp, snow, i < tiers.length - 1));
+      const tip = tiers[tiers.length - 1];
+      box(b, cx + lean - 1, tip[0] - 2, 2, 3, snow ? SNOW[3] : ramp[4]);
+    }, ramp[0]);
+  });
+}
+
+/** A cluster of dark conifer tops with no trunks (deep pine forest). */
+function pineMass(scene: Phaser.Scene, key: string, ramp: Ramp, snow: boolean, v: number): void {
+  const tops: readonly (readonly [number, number, number])[][] = [
+    [[24, 20, 20], [78, 26, 22], [52, 6, 24]],
+    [[30, 10, 22], [80, 22, 20], [56, 30, 22]],
+    [[20, 26, 18], [50, 12, 22], [84, 8, 18]],
+  ];
+  canvasTex(scene, key, 104, 88, (c) => {
+    const dk = darker(ramp);
+    sprite(c, 104, 88, (b) => {
+      for (const [cx, top, hw] of [...tops[v % 3]].sort((p, q) => p[1] - q[1])) {
+        pineTier(b, cx, top + 26, 86, hw + 6, dk, false, true);
+        pineTier(b, cx, top + 12, top + 44, hw, dk, snow, true);
+        pineTier(b, cx, top, top + 24, Math.round(hw * 0.6), dk, snow, false);
+      }
+    }, ramp[0]);
+  });
+}
+
+/** A big dead tree grown from a seeded branching rule (three shapes per size). */
+function bigDead(scene: Phaser.Scene, key: string, w: number, h: number, v: number): void {
+  canvasTex(scene, key, w, h, (c) => {
+    const rnd = artRng(keySeed(key) + v * 977);
+    const B = DEAD_BARK;
+    sprite(c, w, h, (b) => {
+      const cx = w / 2 + (v === 1 ? -4 : v === 2 ? 5 : 0);
+      const tw = Math.round(w / 8);
+      const split = Math.round(h * 0.42);
+      fpoly(b, [cx - tw - 5, h - 3, cx - tw / 2, h - 12, cx - tw / 2, split, cx + tw / 2, split - 2, cx + tw / 2, h - 12, cx + tw + 5, h - 3], B[3]);
+      const grow = (x: number, y: number, ang: number, len: number, wd: number, depth: number): void => {
+        const x1 = x + Math.cos(ang) * len;
+        const y1 = y - Math.sin(ang) * len;
+        brush(b, [x, y, x1, y1], Math.max(1, Math.round(wd)), ang > Math.PI / 2 ? B[3] : B[2]);
+        seg(b, Math.round(x), Math.round(y - 1), Math.round(x1), Math.round(y1 - 1), B[4]);
+        if (depth <= 0 || len < 7 || y1 < 6 || x1 < 6 || x1 > w - 6) return;
+        const n = depth > 1 ? 2 : 1 + (rnd() < 0.5 ? 1 : 0);
+        for (let i = 0; i < n; i++) grow(x1, y1, ang + (i === 0 ? 0.35 + rnd() * 0.4 : -(0.3 + rnd() * 0.45)), len * (0.6 + rnd() * 0.18), wd * 0.66, depth - 1);
+      };
+      const lim = v === 0 ? [2.0, 1.15, 1.6] : v === 1 ? [2.2, 1.5, 0.95] : [1.85, 1.3, 0.8];
+      for (const a of lim) grow(cx + (a > 1.57 ? -1 : 1), split + 4, a, h * (0.2 + rnd() * 0.06), tw * 0.8, 3);
+      box(b, cx - tw / 2, split, 2, h - 12 - split, B[4]);
+      box(b, cx + tw / 2 - 2, split, 2, h - 12 - split, B[1]);
+      disc(b, cx, split + (h - split) * 0.4, tw * 0.22, tw * 0.3, B[0]);
+      for (let i = 0; i < 4; i++) box(b, Math.round(cx - tw / 2 + 2 + rnd() * (tw - 4)), Math.round(split + 6 + rnd() * (h - split - 24)), 1, 3 + Math.floor(rnd() * 4), B[1]);
+      fpoly(b, [cx - tw / 2, h - 12, cx - tw - 8, h - 2, cx - tw / 2 - 1, h - 2], B[2]);
+      fpoly(b, [cx + tw / 2, h - 12, cx + tw + 8, h - 2, cx + tw / 2 + 1, h - 2], B[1]);
+    }, B[0]);
+  });
+}
+
+function drawBigProps(scene: Phaser.Scene): void {
+  const darkMotes = (w: number, h: number) => (b: Ctx, rnd: () => number) => {
+    for (let i = 0; i < Math.round(w / 9); i++) {
+      const x = Math.round(10 + rnd() * (w - 20));
+      const y = Math.round(10 + rnd() * (h * 0.5));
+      px(b, x, y, '#b89ae8');
+      px(b, x + 1, y + 1, '#6a4ea8');
+    }
+  };
+  // weeping strands and two blossom lanterns for the dusk willows
+  const strands = (w: number, h: number) => (b: Ctx, rnd: () => number) => {
+    for (let x = 8; x < w - 8; x += 3) {
+      if (rnd() < 0.3) continue;
+      const top = Math.round(h * 0.3 + rnd() * h * 0.2);
+      const len = Math.round(10 + rnd() * h * 0.16);
+      box(b, x, top, 1, len, LEAF_DUSK[2 + (x % 3)]);
+      px(b, x, top + 2, LEAF_DUSK[5]);
+      if (x % 12 === 2) box(b, x, top + len, 1, 2, x % 24 === 2 ? '#f0a0d8' : '#a8e0ff');
+    }
+    disc(b, w * 0.24, h * 0.62, 2.5, 3, '#f8b8e8');
+    disc(b, w * 0.78, h * 0.56, 2.5, 3, '#b8ecff');
+  };
+  const broadKinds: readonly [string, Ramp, Ramp, ((w: number, h: number) => (b: Ctx, rnd: () => number) => void) | undefined][] = [
+    ['tree', R.leaf, R.bark, undefined],
+    ['darktree', LEAF_DARK, DEAD_BARK, darkMotes],
+    ['duskwillow', LEAF_DUSK, DUSK_BARK, strands],
+  ];
+  for (const [kind, leaf, bark, extra] of broadKinds) {
+    for (let v = 0; v < 3; v++) {
+      sapling(scene, propKey(kind, 'S', v), leaf, bark, v);
+      bigBroad(scene, propKey(kind, 'L', v), 96, 108, BROAD_L[v], leaf, bark, 5, extra?.(96, 108));
+      bigBroad(scene, propKey(kind, 'XL', v), 136, 156, BROAD_XL[v], leaf, bark, 6.5, extra?.(136, 156));
+      canopyMass(scene, `${kind}_mass${v ? `~${v}` : ''}`, leaf, v);
+    }
+  }
+  // conifers: [top, bottom, half width] bottom tier first
+  const PINE_S = [
+    [[14, 31, 9], [3, 19, 6]],
+    [[16, 31, 8], [6, 21, 6], [1, 11, 3]],
+    [[12, 31, 10], [2, 17, 6]],
+  ] as const;
+  const PINE_L = [
+    [[70, 100, 28], [50, 84, 24], [32, 64, 19], [16, 44, 14], [3, 26, 8]],
+    [[72, 100, 24], [54, 86, 21], [38, 68, 18], [22, 50, 14], [10, 34, 10], [2, 18, 6]],
+    [[64, 100, 30], [42, 78, 24], [22, 54, 17], [5, 32, 10]],
+  ] as const;
+  const PINE_XL = [
+    [[104, 140, 38], [82, 122, 34], [62, 102, 29], [44, 82, 24], [28, 62, 18], [14, 42, 13], [3, 24, 8]],
+    [[108, 140, 34], [88, 124, 31], [70, 106, 27], [52, 88, 23], [36, 70, 18], [22, 52, 14], [10, 34, 10], [2, 18, 6]],
+    [[98, 140, 40], [72, 116, 34], [48, 90, 27], [28, 64, 20], [12, 42, 13], [3, 22, 7]],
+  ] as const;
+  for (const [kind, ramp, snow] of [['pine', PINE, false], ['frostpine', FROST_PINE, true]] as const) {
+    for (let v = 0; v < 3; v++) {
+      bigPine(scene, propKey(kind, 'S', v), 24, 36, PINE_S[v], ramp, snow);
+      bigPine(scene, propKey(kind, 'L', v), 64, 112, PINE_L[v], ramp, snow, v === 2 ? 2 : 0);
+      bigPine(scene, propKey(kind, 'XL', v), 84, 152, PINE_XL[v], ramp, snow, v === 1 ? -2 : 0);
+      pineMass(scene, `${kind}_mass${v ? `~${v}` : ''}`, ramp, snow, v);
+    }
+  }
+  for (let v = 0; v < 3; v++) {
+    bigDead(scene, propKey('deadtree', 'L', v), 76, 104, v);
+    bigDead(scene, propKey('deadtree', 'XL', v), 104, 140, v);
+  }
+
+  // ---- rocks. S: a few small stones · L: a boulder group two tiles wide · XL: an outcrop three tiles wide.
+  const S = R.stone;
+  canvasTex(scene, 'rock_S', 22, 16, (c) => {
+    const rnd = artRng(keySeed('rock_S'));
+    sprite(c, 22, 16, (b) => {
+      rockPx(b, 1, 3, 0.42, S, false, rnd);
+      rockPx(b, 13, 8, 0.26, S, false, rnd);
+    }, S[0]);
+  });
+  canvasTex(scene, 'rock_S~1', 22, 16, (c) => {
+    const rnd = artRng(keySeed('rock_S~1'));
+    sprite(c, 22, 16, (b) => {
+      slabPx(b, 2, 7, 0.55, S, false, rnd);
+      tuft(b, 15, 15);
+    }, S[0]);
+  });
+  canvasTex(scene, 'rock_S~2', 22, 16, (c) => {
+    const rnd = artRng(keySeed('rock_S~2'));
+    sprite(c, 22, 16, (b) => {
+      rockPx(b, 6, 2, 0.36, S, true, rnd);
+      rockPx(b, 0, 9, 0.22, S, false, rnd);
+      rockPx(b, 15, 10, 0.2, S, false, rnd);
+    }, S[0]);
+  });
+  canvasTex(scene, 'rock_L', 84, 64, (c) => {
+    // one great boulder, a middle one leaning on it and a small stone in front
+    const rnd = artRng(keySeed('rock_L'));
+    sprite(c, 84, 64, (b) => {
+      rockPx(b, 3, 3, 1.72, S, true, rnd);
+      rockPx(b, 46, 26, 1.18, S, false, rnd);
+      rockPx(b, 30, 46, 0.6, S, true, rnd);
+      tuft(b, 2, 62);
+      tuft(b, 52, 63);
+      tuft(b, 76, 61);
+    }, S[0]);
+  });
+  canvasTex(scene, 'rock_L~1', 84, 64, (c) => {
+    // a split boulder: two tall halves with a dark cleft, a slab at its foot
+    const rnd = artRng(keySeed('rock_L~1'));
+    sprite(c, 84, 64, (b) => {
+      rockPx(b, 34, 6, 1.5, S, false, rnd);
+      rockPx(b, 2, 12, 1.42, S, true, rnd);
+      box(b, 41, 22, 2, 34, S[0]);
+      box(b, 43, 26, 1, 28, S[1]);
+      slabPx(b, 52, 48, 0.9, S, true, rnd);
+      tuft(b, 20, 63);
+      tuft(b, 44, 62);
+    }, S[0]);
+  });
+  canvasTex(scene, 'rock_L~2', 84, 64, (c) => {
+    // stacked slabs: a wide low ledge with a block on top
+    const rnd = artRng(keySeed('rock_L~2'));
+    sprite(c, 84, 64, (b) => {
+      slabPx(b, 2, 30, 2.6, S, true, rnd);
+      rockPx(b, 22, 4, 1.25, S, false, rnd);
+      rockPx(b, 60, 20, 0.62, S, true, rnd);
+      rockPx(b, 6, 46, 0.5, S, false, rnd);
+      tuft(b, 34, 63);
+      tuft(b, 70, 62);
+    }, S[0]);
+  });
+  canvasTex(scene, 'rock_XL', 120, 88, (c) => {
+    // an outcrop: a great crag with shoulders either side
+    const rnd = artRng(keySeed('rock_XL'));
+    sprite(c, 120, 88, (b) => {
+      rockPx(b, 62, 30, 1.7, S, false, rnd);
+      rockPx(b, 20, 2, 2.6, S, true, rnd);
+      rockPx(b, 2, 42, 1.5, S, true, rnd);
+      rockPx(b, 50, 62, 0.9, S, false, rnd);
+      mossCap(b, 74, 33, 16);
+      tuft(b, 4, 86);
+      tuft(b, 44, 87);
+      tuft(b, 98, 85);
+    }, S[0]);
+  });
+  canvasTex(scene, 'rock_XL~1', 120, 88, (c) => {
+    // a long ledge of stepped slabs with a boulder at one end
+    const rnd = artRng(keySeed('rock_XL~1'));
+    sprite(c, 120, 88, (b) => {
+      slabPx(b, 4, 44, 3.6, S, true, rnd);
+      slabPx(b, 26, 22, 2.5, S, false, rnd);
+      rockPx(b, 66, 6, 1.65, S, true, rnd);
+      rockPx(b, 6, 60, 0.8, S, false, rnd);
+      mossCap(b, 40, 24, 22);
+      tuft(b, 30, 87);
+      tuft(b, 84, 86);
+      tuft(b, 110, 84);
+    }, S[0]);
+  });
+  canvasTex(scene, 'rock_XL~2', 120, 88, (c) => {
+    // three crags in a row, the middle one tallest
+    const rnd = artRng(keySeed('rock_XL~2'));
+    sprite(c, 120, 88, (b) => {
+      rockPx(b, 2, 34, 1.6, S, true, rnd);
+      rockPx(b, 70, 28, 1.75, S, false, rnd);
+      rockPx(b, 32, 4, 2.3, S, true, rnd);
+      rockPx(b, 24, 66, 0.75, S, false, rnd);
+      rockPx(b, 84, 68, 0.6, S, true, rnd);
+      tuft(b, 2, 86);
+      tuft(b, 56, 87);
+      tuft(b, 108, 86);
+    }, S[0]);
+  });
+
+  // ---- standing stones (two heroes tall): upright, leaning and broken-topped
+  const menhir = (key: string, pts: readonly number[], lit: readonly number[], dark: readonly number[], moss: readonly [number, number, number][]) =>
+    canvasTex(scene, key, 44, 88, (c) => {
+      const rnd = artRng(keySeed(key));
+      sprite(c, 44, 88, (b) => {
+        fpoly(b, pts, S[2]);
+        fpoly(b, lit, S[3]);
+        fpoly(b, dark, S[1]);
+        // top face, foot and weathering
+        let topX = pts[0];
+        let topY = pts[1];
+        for (let i = 3; i < pts.length; i += 2) if (pts[i] < topY) [topX, topY] = [pts[i - 1], pts[i]];
+        fpoly(b, [topX - 9, topY + 7, topX - 2, topY, topX + 7, topY + 3, topX + 9, topY + 9, topX, topY + 11], S[4]);
+        seg(b, Math.round(topX - 8), Math.round(topY + 6), Math.round(topX - 2), Math.round(topY + 1), S[5]);
+        box(b, 8, 82, 28, 3, S[0]);
+        for (let i = 0; i < 7; i++) {
+          const x = Math.round(14 + rnd() * 16);
+          const y = Math.round(22 + rnd() * 52);
+          box(b, x, y, 1, 3 + Math.floor(rnd() * 5), S[1]);
+          px(b, x - 1, y + 2, S[3]);
+        }
+        for (let i = 0; i < 3; i++) {
+          const y = Math.round(30 + i * 16 + rnd() * 6);
+          box(b, 13 + i, y, 5 + Math.floor(rnd() * 5), 1, S[1]);
+        }
+        for (const [mx, my, mw] of moss) mossCap(b, mx, my, mw);
+        tuft(b, 3, 86);
+        tuft(b, 33, 87);
+      }, S[0]);
+    });
+  menhir('menhir_L', [9, 84, 11, 30, 15, 10, 23, 3, 31, 8, 35, 28, 36, 84], [9, 84, 11, 30, 15, 10, 19, 12, 17, 84], [29, 12, 31, 8, 35, 28, 36, 84, 30, 84], [[13, 9, 12], [9, 46, 7]]);
+  menhir('menhir_L~1', [6, 84, 12, 40, 20, 16, 30, 6, 36, 12, 37, 40, 34, 84], [6, 84, 12, 40, 20, 16, 24, 18, 15, 84], [32, 14, 36, 12, 37, 40, 34, 84, 28, 84], [[20, 12, 12]]);
+  menhir('menhir_L~2', [8, 84, 9, 38, 13, 22, 20, 18, 24, 26, 30, 14, 35, 34, 36, 84], [8, 84, 9, 38, 13, 22, 17, 24, 16, 84], [30, 20, 35, 34, 36, 84, 30, 84], [[10, 36, 8], [25, 22, 9]]);
+
+  // ---- a fallen giant log, three and a half tiles long
+  const W = R.bark;
+  const log = (key: string, v: number) =>
+    canvasTex(scene, key, 112, 46, (c) => {
+      const rnd = artRng(keySeed(key));
+      sprite(c, 112, 46, (b) => {
+        const y0 = 16;
+        const y1 = 40;
+        // the bole, lit along its top
+        fpoly(b, [14, y0 + 2, 96, y0 - 2 + (v === 1 ? 4 : 0), 100, y1 - 4, 14, y1], W[2]);
+        fpoly(b, [14, y0 + 2, 96, y0 - 2 + (v === 1 ? 4 : 0), 97, y0 + 5, 14, y0 + 9], W[3]);
+        box(b, 16, y0 + 3, 78, 1, W[4]);
+        fpoly(b, [14, y1 - 7, 100, y1 - 10, 100, y1 - 4, 14, y1], W[1]);
+        for (let i = 0; i < 12; i++) {
+          const x = Math.round(20 + rnd() * 72);
+          const y = Math.round(y0 + 9 + rnd() * 10);
+          box(b, x, y, 3 + Math.floor(rnd() * 6), 1, W[1]);
+        }
+        // the cut end with rings (left) and the torn root plate or broken end (right)
+        disc(b, 13, (y0 + y1) / 2 + 1, 9, 12, W[1]);
+        disc(b, 12, (y0 + y1) / 2 + 1, 7.5, 10.5, W[4]);
+        disc(b, 12, (y0 + y1) / 2 + 1, 5, 7.5, W[3]);
+        disc(b, 12, (y0 + y1) / 2 + 1, 2.5, 4, v === 2 ? W[0] : W[4]);
+        if (v === 2) disc(b, 12, (y0 + y1) / 2 + 1, 5, 8, W[0]);
+        if (v !== 1) {
+          for (const [dx, dy, len] of [[0, -12, 12], [6, -6, 12], [8, 2, 10], [2, 10, 9], [-2, -4, 8]] as const) brush(b, [98, 26, 98 + dx + len * 0.5, 26 + dy], 3, W[dy < 0 ? 3 : 1]);
+          disc(b, 99, 27, 6, 9, W[2]);
+          disc(b, 98, 25, 3, 5, W[1]);
+        } else {
+          fpoly(b, [94, y0 + 2, 104, y0 + 8, 99, y0 + 12, 106, y1 - 12, 98, y1 - 4, 94, y1 - 4], W[2]);
+          seg(b, 96, y0 + 4, 103, y0 + 8, W[4]);
+        }
+        // a broken branch stub, moss and mushrooms
+        brush(b, [58, y0 + 2, 62, y0 - 9], 3, W[3]);
+        box(b, 61, y0 - 11, 3, 2, W[4]);
+        mossCap(b, 26, y0 + 1, 22);
+        mossCap(b, 70, y0 - 1 + (v === 1 ? 3 : 0), 14);
+        shroom(b, 46, y0 + 2, 4, 3, 4, v === 0 ? R.crimson : ['#4a1c10', '#7a3218', '#a84a24', '#c86a38', '#e8a070']);
+        shroom(b, 82, y1 - 1, 3, 2, 4, R.cream, R.cream, false);
+        tuft(b, 2, 45);
+        tuft(b, 38, 45);
+        tuft(b, 86, 45);
+      }, W[0]);
+    });
+  log('log_L', 0);
+  log('log_L~1', 1);
+  log('log_L~2', 2);
 }
 
 // ================================================================== structures
@@ -1086,7 +1556,6 @@ function drawStructures(scene: Phaser.Scene): void {
   // ---- smithy 4x3: coursed stone, open forge bay with coals, anvil sign, quench barrel
   texAll(scene, ['struct_smithy', 'smithy'], 128, 128, (c) => {
     const rnd = artRng(keySeed('struct_smithy'));
-    shadow(c, 64, 123, 62, 6);
     sprite(c, 128, 128, (b) => {
       wallPx(b, 8, 72, 112, 52, 'stone', rnd);
       // forge bay
@@ -1144,7 +1613,6 @@ function drawStructures(scene: Phaser.Scene): void {
   // ---- chapel 4x4: front gable, slate planes going back, rose window, bell cote with the waystar finial
   texAll(scene, ['struct_chapel', 'chapel'], 128, 176, (c) => {
     const rnd = artRng(keySeed('struct_chapel'));
-    shadow(c, 64, 171, 60, 6);
     sprite(c, 128, 176, (b) => {
       const RB = ROOF_BLUE;
       fpoly(b, [9, 111, 64, 62, 64, 24, 9, 73], RB[3]);
@@ -1209,7 +1677,6 @@ function drawStructures(scene: Phaser.Scene): void {
   // ---- hut 3x3: stacked logs under a domed thatch
   texAll(scene, ['struct_hut', 'hut'], 96, 100, (c) => {
     const rnd = artRng(keySeed('struct_hut'));
-    shadow(c, 48, 95, 44, 5);
     sprite(c, 96, 100, (b) => {
       wallPx(b, 14, 60, 68, 36, 'log', rnd);
       doorPx(b, 52, 94, 16, 22, R.bark, true);
@@ -1248,7 +1715,6 @@ function drawStructures(scene: Phaser.Scene): void {
   // ---- hall 6x4: timber guild hall, slate roof, central gable porch, waystar banners and lanterns
   canvasTex(scene, 'struct_hall', 192, 156, (c) => {
     const rnd = artRng(keySeed('struct_hall'));
-    shadow(c, 96, 151, 92, 6);
     sprite(c, 192, 156, (b) => {
       wallPx(b, 8, 84, 176, 68, 'plaster', rnd);
       for (const wx of [20, 44, 136, 160]) windowPx(b, wx, 102, 12, 14, R.teal);
@@ -1285,7 +1751,6 @@ function drawStructures(scene: Phaser.Scene): void {
   // ---- house 3x3: timber frame cottage, tiled roof, flower box
   canvasTex(scene, 'struct_house', 96, 108, (c) => {
     const rnd = artRng(keySeed('struct_house'));
-    shadow(c, 48, 103, 44, 5);
     sprite(c, 96, 108, (b) => {
       wallPx(b, 10, 62, 76, 42, 'plaster', rnd);
       windowPx(b, 20, 72, 13, 11, R.teal);
@@ -1305,7 +1770,6 @@ function drawStructures(scene: Phaser.Scene): void {
 
   // ---- tent 3x2: striped canvas, open flap, pennant, guy ropes
   canvasTex(scene, 'struct_tent', 96, 72, (c) => {
-    shadow(c, 48, 66, 44, 5);
     sprite(c, 96, 72, (b) => {
       const CL = CANVAS;
       const ST = R.crimson;
@@ -1345,7 +1809,6 @@ function drawStructures(scene: Phaser.Scene): void {
   // ---- ruin 4x3: flagstone floor, jagged walls, a standing broken column, fallen drums, ivy, rubble
   canvasTex(scene, 'struct_ruin', 128, 104, (c) => {
     const rnd = artRng(keySeed('struct_ruin'));
-    shadow(c, 64, 98, 60, 5, 0.22);
     const S = R.warmStone;
     // floor is flat ground (no outline)
     box(c, 12, 40, 104, 56, S[1]);
@@ -1427,7 +1890,6 @@ function drawStructures(scene: Phaser.Scene): void {
   // ---- tower 2x3: round coursed tower, arrow slits, cone roof, pennant
   canvasTex(scene, 'struct_tower', 64, 160, (c) => {
     const rnd = artRng(keySeed('struct_tower'));
-    shadow(c, 32, 155, 28, 5);
     sprite(c, 64, 160, (b) => {
       const S = R.warmStone;
       for (let x = 9; x < 55; x++) {
@@ -1477,7 +1939,6 @@ function drawStructures(scene: Phaser.Scene): void {
 
   // ---- well 1x1: stone ring, plank roof, rope and bucket
   canvasTex(scene, 'struct_well', 32, 48, (c) => {
-    shadow(c, 16, 44, 14, 3);
     sprite(c, 32, 48, (b) => {
       const S = R.warmStone;
       box(b, 3, 34, 26, 9, S[3]);
@@ -1528,7 +1989,6 @@ function flamePx(b: Ctx, x: number, base: number, h: number): void {
 function waystone(lit: boolean): (c: Ctx) => void {
   return (c) => {
     const S = RUNE_STONE;
-    shadow(c, 16, 53, 13, 3);
     if (lit) halo(c, 16, 24, 22, '#6fe8ff', 0.42, 4);
     const rune = lit ? ['#2fb8d8', '#8cf0ff', '#e8ffff'] : [S[1], S[2], S[3]];
     sprite(c, 32, 56, (b) => {
@@ -1581,7 +2041,6 @@ function waystone(lit: boolean): (c: Ctx) => void {
 
 function obelisk(c: Ctx): void {
   const O = OBSIDIAN;
-  shadow(c, 18, 72, 15, 3.5);
   halo(c, 17, 40, 18, '#b08cff', 0.26);
   sprite(c, 36, 76, (b) => {
     box(b, 4, 66, 28, 7, O[2]);
@@ -1609,7 +2068,6 @@ function obelisk(c: Ctx): void {
 
 function windShrine(c: Ctx): void {
   const S = ['#4c5660', '#66717c', '#86929c', '#a6b0b8', '#c4ccd2', '#e0e6ea'];
-  shadow(c, 20, 60, 16, 3.5);
   sprite(c, 40, 64, (b) => {
     box(b, 6, 54, 28, 6, S[2]);
     box(b, 6, 54, 28, 1, S[4]);
@@ -1645,7 +2103,6 @@ function windShrine(c: Ctx): void {
 }
 
 function signpost(c: Ctx): void {
-  shadow(c, 16, 42, 8, 2.5);
   sprite(c, 32, 44, (b) => {
     const B = R.bark;
     box(b, 14, 6, 5, 36, B[3]);
@@ -1675,7 +2132,6 @@ function chest(open: boolean): (c: Ctx) => void {
     const H = open ? 32 : 28;
     const oy = open ? 4 : 0;
     const B = ['#3a2010', '#5a3218', '#7e4824', '#a0602e', '#bc7c40', '#d49a5a'];
-    shadow(c, 16, H - 3, 13, 2.5);
     if (open) halo(c, 16, 13 + oy, 14, '#ffd84d', 0.45);
     sprite(c, 32, H, (b) => {
       if (open) {
@@ -1732,7 +2188,6 @@ function chest(open: boolean): (c: Ctx) => void {
 
 function statue(c: Ctx): void {
   const S = R.warmStone;
-  shadow(c, 20, 64, 16, 3.5);
   sprite(c, 40, 68, (b) => {
     box(b, 6, 50, 28, 14, S[2]);
     box(b, 6, 48, 28, 4, S[4]);
@@ -1793,7 +2248,6 @@ const CAMPFIRE_SPARKS: readonly (readonly (readonly [number, number, number])[])
 
 function campfire(c: Ctx, frame = 0): void {
   const [dx, fh] = CAMPFIRE_FLAME[frame];
-  shadow(c, 16, 27, 13, 3, 0.25);
   halo(c, 16, 20, [17, 16, 18][frame], '#ff9a3a', 0.5);
   sprite(c, 32, 32, (b) => {
     for (let i = 0; i < 9; i++) {
@@ -1820,7 +2274,6 @@ function drawObjects(scene: Phaser.Scene): void {
   canvasTex(scene, 'obj_waystone_lit', 32, 56, waystone(true));
   // idle strip: the two candle flames flicker out of step (frame 0 the still look)
   stripTex(scene, 'obj_altar', 48, 44, 3, (c, f) => {
-    shadow(c, 24, 40, 21, 3.5);
     halo(c, 11, 10, 8, '#ffcf6a', 0.4);
     halo(c, 37, 10, 8, '#ffcf6a', 0.4);
     sprite(c, 48, 44, (b) => {
@@ -1877,7 +2330,6 @@ function drawObjects(scene: Phaser.Scene): void {
 
 function oreRock(c: Ctx): void {
   const rnd = artRng(keySeed('node_ore'));
-  shadow(c, 17, 26, 15, 3.5);
   sprite(c, 34, 30, (b) => {
     rockPx(b, 2, 3, 1, R.warmStone, false, rnd);
     const vein = (pts: number[]) => {
@@ -1929,7 +2381,6 @@ function drawNodes(scene: Phaser.Scene): void {
   });
 
   canvasTex(scene, 'node_herb', 28, 28, (c) => {
-    shadow(c, 14, 25, 10, 2.5);
     sprite(c, 28, 28, (b) => {
       const leaf = (x0: number, y0: number, x1: number, y1: number, w: number, tone: number) => {
         const dx = x1 - x0;
@@ -1959,7 +2410,6 @@ function drawNodes(scene: Phaser.Scene): void {
   });
 
   canvasTex(scene, 'node_ember_vent', 32, 32, (c) => {
-    shadow(c, 16, 28, 14, 3);
     halo(c, 16, 20, 14, '#ff7a2a', 0.5);
     sprite(c, 32, 32, (b) => {
       const E = ['#2a1a14', '#3e2820', '#56382a', '#6e4a38', '#8a604a'];
@@ -1982,7 +2432,6 @@ function drawNodes(scene: Phaser.Scene): void {
   });
 
   canvasTex(scene, 'node_wind_chime', 28, 52, (c) => {
-    shadow(c, 12, 49, 8, 2.5);
     sprite(c, 28, 52, (b) => {
       box(b, 10, 6, 4, 44, R.bark[3]);
       box(b, 10, 6, 1, 44, R.bark[4]);
@@ -2013,7 +2462,6 @@ function drawNodes(scene: Phaser.Scene): void {
 
   canvasTex(scene, 'node_storm_tree', 44, 64, (c) => {
     const rnd = artRng(keySeed('node_storm_tree'));
-    shadow(c, 22, 60, 15, 3.5);
     halo(c, 22, 22, 22, '#8fd8ff', 0.28);
     sprite(c, 44, 64, (b) => {
       const B = ['#22222e', '#30303e', '#40404f', '#545466', '#6a6a7e', '#84849a'];
@@ -2063,7 +2511,6 @@ function drawNodes(scene: Phaser.Scene): void {
   });
 
   canvasTex(scene, 'node_shadow_fungus', 28, 30, (c) => {
-    shadow(c, 14, 27, 11, 2.5);
     halo(c, 14, 20, 14, '#a060ff', 0.42);
     const CAP = ['#1e1230', '#2e1c48', '#46306c', '#6a4aa0', '#9a78d8'];
     const STEM = ['#6a5a8a', '#9888b8', '#c8b8e8', '#e8dcff'];
@@ -2089,7 +2536,6 @@ function drawNodes(scene: Phaser.Scene): void {
   });
 
   canvasTex(scene, 'node_sun_spring', 40, 36, (c) => {
-    shadow(c, 20, 32, 18, 3);
     for (const x of [13, 20, 27]) for (let y = 2; y < 26; y += 2) box(c, x - 1, y, 3, 1, `rgba(255,230,140,${0.05 + (y / 26) * 0.4})`);
     halo(c, 20, 24, 16, '#ffd860', 0.42);
     sprite(c, 40, 36, (b) => {
@@ -2117,7 +2563,6 @@ function drawNodes(scene: Phaser.Scene): void {
   });
 
   canvasTex(scene, 'node_frost_crystal', 28, 40, (c) => {
-    shadow(c, 14, 37, 11, 2.5);
     halo(c, 14, 26, 14, '#c8f0ff', 0.38);
     const ICE = ['#3a6a8a', '#5a94b8', '#8cc6e6', '#c8ecfa', '#eefaff', '#ffffff'];
     sprite(c, 28, 40, (b) => {
@@ -2133,7 +2578,6 @@ function drawNodes(scene: Phaser.Scene): void {
   });
 
   canvasTex(scene, 'node_depleted', 32, 22, (c) => {
-    shadow(c, 16, 17, 13, 3, 0.2);
     sprite(c, 32, 22, (b) => {
       disc(b, 16, 15, 12, 4, R.dirt[0]);
       disc(b, 16, 14, 10, 3, R.dirt[1]);
@@ -2190,7 +2634,6 @@ function drawPortals(scene: Phaser.Scene): void {
   // idle strip: the two torches flicker out of step (frame 0 the still look)
   stripTex(scene, 'portal_door', 64, 64, 3, (c, f) => {
     const S = R.warmStone;
-    shadow(c, 32, 60, 30, 4);
     sprite(c, 64, 64, (b) => {
       fpoly(b, [2, 61, 3, 34, 8, 18, 18, 8, 32, 4, 46, 8, 56, 18, 61, 34, 62, 61], S[2]);
       fpoly(b, [3, 40, 8, 20, 18, 10, 32, 6, 46, 10, 56, 20, 61, 40, 48, 30, 32, 26, 16, 30], S[3]);
@@ -2261,7 +2704,6 @@ function drawPortals(scene: Phaser.Scene): void {
   // Staircase rising north into a lit archway.
   canvasTex(scene, 'portal_stairs_up', 32, 40, (c) => {
     const S = R.warmStone;
-    shadow(c, 16, 38, 15, 2.5, 0.25);
     halo(c, 16, 8, 14, '#fff2c0', 0.5);
     sprite(c, 32, 40, (b) => {
       box(b, 2, 12, 28, 27, S[2]);
@@ -2300,7 +2742,6 @@ function drawPortals(scene: Phaser.Scene): void {
   // barrier/portal effect inside it.
   canvasTex(scene, 'gate_prism', PRISM_GATE_SIZE.w, PRISM_GATE_SIZE.h, (c) => {
     const S = ['#3a3648', '#55506a', '#716b88', '#8e88a6', '#aca6c2', '#ccc8de'];
-    shadow(c, 48, 107, 46, 5);
     sprite(c, 96, 112, (b) => {
       for (const x of [4, 70]) {
         box(b, x, 96, 22, 12, S[2]);
@@ -2381,7 +2822,6 @@ function drawPortals(scene: Phaser.Scene): void {
 
   canvasTex(scene, 'hide_cracked_rock', 48, 44, (c) => {
     const rnd = artRng(keySeed('hide_cracked_rock'));
-    shadow(c, 24, 39, 21, 4);
     sprite(c, 48, 44, (b) => {
       rockPx(b, 2, 4, 1.45, R.warmStone, true, rnd);
       const crack = (pts: number[]) => {
@@ -2407,7 +2847,6 @@ function drawPortals(scene: Phaser.Scene): void {
 
   canvasTex(scene, 'hide_brambles', 48, 40, (c) => {
     const rnd = artRng(keySeed('hide_brambles'));
-    shadow(c, 24, 36, 21, 3.5);
     sprite(c, 48, 40, (b) => {
       leafMass(b, 24, 25, 21, 12, ['#141e10', '#1e2c18', '#2a3c20', '#3a522a', '#4c6a34', '#6a8a48'], rnd, false, 3.4);
       for (let i = 0; i < 12; i++) {
@@ -2480,7 +2919,7 @@ export const WORLD_IDLE: Readonly<Record<string, IdleAnim>> = {
   ...Object.fromEntries(
     ['tree', 'tree~1', 'tree~2', 'darktree', 'darktree~1', 'darktree~2', 'duskwillow', 'reeds'].map((k) => [k, { frames: 2, kind: 'sway', mirror: 2 } as IdleAnim]),
   ),
-  ...Object.fromEntries(['pine', 'pine~1', 'frostpine', 'frostpine~1'].map((k) => [k, { frames: 2, kind: 'sway' } as IdleAnim])),
+  ...Object.fromEntries(['pine', 'pine~1', 'pine~2', 'frostpine', 'frostpine~1', 'frostpine~2'].map((k) => [k, { frames: 2, kind: 'sway' } as IdleAnim])),
   obj_campfire: { frames: 3, kind: 'flame' },
   obj_altar: { frames: 3, kind: 'flicker' },
   portal_door: { frames: 3, kind: 'flicker' },
@@ -2490,8 +2929,8 @@ export const WORLD_IDLE: Readonly<Record<string, IdleAnim>> = {
 export const PROP_VARIANTS: Readonly<Record<string, readonly string[]>> = {
   tree: ['tree~1', 'tree~2'],
   darktree: ['darktree~1', 'darktree~2'],
-  pine: ['pine~1'],
-  frostpine: ['frostpine~1'],
+  pine: ['pine~1', 'pine~2'],
+  frostpine: ['frostpine~1', 'frostpine~2'],
   rock: ['rock~1', 'rock~2'],
   boulder: ['boulder~1', 'boulder~2'],
   bush: ['bush~1', 'bush~2'],

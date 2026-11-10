@@ -16,9 +16,14 @@
 // moves into an empty slot of yours when there is one. A skill an active quest asks you to use is picked first and
 // never swapped out.
 //
+// v4 (docs/SPEC-v4.md §3.4, lane-A notes): a kit class lays its slots out in SkillBook.classSkills() order — kit
+// skill i sits in class slot i, and a kit skill not known yet leaves its slot to a fill. A kit skill never loses its
+// slot to a fill, whatever their tiers (`fixed`). A class-only skill (`classOf`) only ever sits in a class slot of its
+// class: it never moves, drops or is equipped into your slots (`ownOk`), and leaves the bar when its class comes off.
+//
 // The slot-fill rules are pure functions (unit-tested in tests/loadout.test.ts); the small runtime glue below applies
 // them to a Session and announces each change on the game bus (`barChanged` with its reason — src/ui/announce.ts).
-import { CLASS_SLOTS, barEligible, classSkillFit } from '../core/classes';
+import { CLASS_SLOTS, barEligible, classSkillFit, isKitClass, ownSlotEligible } from '../core/classes';
 import type { SkillBook } from '../core/skillbook';
 import type { Registry } from '../core/registry';
 import { gameBus, type BarChangedEvent } from './events';
@@ -84,6 +89,13 @@ export interface FillOptions {
   rehome?: boolean;
   /** Skills an active quest asks the player to use: they win a class slot ahead of the class's other picks. */
   prefer?: ReadonlySet<string>;
+  /**
+   * Kit classes: `fixed[i]` (a known kit skill) must sit in class slot i, whatever else wants the slot — a kit skill
+   * never loses its slot to a fill, and slot order is the kit's order. Null / missing entries are fill slots.
+   */
+  fixed?: readonly (string | null)[];
+  /** Whether a skill may sit in one of YOUR slots (class-only skills may not): gates `rehome`. Default: any. */
+  ownOk?: (id: string) => boolean;
 }
 
 /**
@@ -111,23 +123,40 @@ export function fillClassSlots(bar: Bar, picks: readonly string[], opts: FillOpt
   const unique = [...new Set(picks)];
   const before = bar.slice(0, n);
   const pulled: string[] = [];
+  const fixed = Array.from({ length: n }, (_, i) => opts.fixed?.[i] ?? null);
+  const fixedSet = new Set(fixed.filter((x): x is string => !!x));
+  const fills = unique.filter((id) => !fixedSet.has(id));
   if (opts.stable) {
-    // Keep every filled class slot the class still relates to; clear only skills it no longer picks at all.
-    const picked = new Set(unique);
-    for (let i = 0; i < n; i++) if (next[i] !== null && !picked.has(next[i]!)) next[i] = null;
+    // Kit skills take their own slot first (from wherever they sit: another class slot, or one of yours).
+    fixed.forEach((id, i) => {
+      if (!id || next[i] === id) return;
+      const at = next.indexOf(id);
+      if (at >= 0) {
+        next[at] = null;
+        if (at >= n) pulled.push(id);
+      }
+      next[i] = id;
+    });
+    // Keep every other filled class slot the class still relates to; clear only skills it no longer picks at all
+    // (and a kit skill sitting in a slot that is not its own).
+    const picked = new Set(fills);
+    for (let i = 0; i < n; i++) if (!fixed[i] && next[i] !== null && !picked.has(next[i]!)) next[i] = null;
     // Empty class slots take the best picks that are not on the bar anywhere (your slots are left alone).
     const onBar = new Set(next.filter((x): x is string => !!x));
     const empty = next.slice(0, n).filter((x) => x === null).length;
     const fresh = preferFirst(
-      unique.filter((id) => !onBar.has(id)),
+      fills.filter((id) => !onBar.has(id)),
       empty,
       opts.prefer,
     );
     let k = 0;
     for (let i = 0; i < n && k < fresh.length; i++) if (next[i] === null) next[i] = fresh[k++];
   } else {
-    const chosen = preferFirst(unique, n, opts.prefer).slice(0, n);
-    for (let i = 0; i < n; i++) next[i] = chosen[i] ?? null;
+    const free = fixed.filter((x) => !x).length;
+    const pool = preferFirst(fills, free, opts.prefer).slice(0, free);
+    let k = 0;
+    for (let i = 0; i < n; i++) next[i] = fixed[i] ?? pool[k++] ?? null;
+    const chosen = next.slice(0, n);
     // A pick that sat in one of your slots moved into the class slots: that slot is free now.
     for (let i = n; i < next.length; i++) {
       if (next[i] !== null && chosen.includes(next[i]!)) {
@@ -140,11 +169,19 @@ export function fillClassSlots(bar: Bar, picks: readonly string[], opts: FillOpt
   const displaced = before.filter((x): x is string => !!x && !after.includes(x));
   const dropped: string[] = [];
   for (const id of displaced) {
-    const at = opts.rehome ? next.indexOf(null, n) : -1;
+    const at = opts.rehome && (opts.ownOk?.(id) ?? true) ? next.indexOf(null, n) : -1;
     if (at >= n) next[at] = id;
     else dropped.push(id);
   }
   return { bar: next, changed: diffSlots(bar, next), added: after.filter((x): x is string => !!x && !before.includes(x)), pulled, dropped };
+}
+
+/**
+ * `bar` with every slot from `from` on emptied whose skill may not sit in one of YOUR slots (`ok` false: a
+ * class-only skill). Class slots (before `from`) are untouched.
+ */
+export function purgeOwn(bar: Bar, from: number, ok: (id: string) => boolean): (string | null)[] {
+  return bar.map((id, i) => (i >= from && id !== null && !ok(id) ? null : id));
 }
 
 /** Slot indexes whose content differs between two bars of the same length. */
@@ -267,13 +304,34 @@ export function questSkills(host: LoadoutHost): Set<string> {
   return out;
 }
 
+/** Whether a skill may sit in one of YOUR slots: bar-eligible and not a class-only skill (unknown ids: no). */
+export function ownOk(host: Pick<LoadoutHost, 'reg'>, id: string): boolean {
+  const s = host.reg.skill(id);
+  return !!s && ownSlotEligible(s);
+}
+
+/**
+ * Kit classes: the kit skill that owns each class slot right now (`fixed` of fillClassSlots) — slot i holds
+ * classSkills()[i] when that is a kit skill the player knows; null where a fill stands in. Undefined for classes
+ * without a kit (their slots are ranked picks, as in v3).
+ */
+export function kitFixed(host: LoadoutHost, n = CLASS_SLOTS): (string | null)[] | undefined {
+  const worn = host.book.state.worn;
+  const cls = worn ? host.reg.classDef(worn) : undefined;
+  if (!cls || !isKitClass(cls)) return undefined;
+  return host.book.classSkills(cls.id, n).map((id) => {
+    const s = host.reg.skill(id);
+    return s && classSkillFit(host.reg, cls, s) === 'match' ? id : null;
+  });
+}
+
 /** Run-wide cast order of the player's skills (castFire), for "most recently used". Not saved. */
 const castOrder = new Map<string, number>();
 let castSeq = 0;
 gameBus.on('castFire', ({ skillId }) => void castOrder.set(skillId, ++castSeq));
 
 /**
- * Known skills that may go on the bar but are not on `bar`: most recently used first (this run), then most used,
+ * Known skills that may go in YOUR slots but are not on `bar` (never class-only skills): most recently used first (this run), then most used,
  * highest rank, newest.
  */
 export function spareSkills(host: LoadoutHost, bar: Bar = host.player.hotbar): string[] {
@@ -281,7 +339,7 @@ export function spareSkills(host: LoadoutHost, bar: Bar = host.player.hotbar): s
   return Object.values(host.book.state.skills)
     .filter((p) => {
       const s = host.reg.skill(p.id);
-      return !on.has(p.id) && !!s && barEligible(s);
+      return !on.has(p.id) && !!s && ownSlotEligible(s);
     })
     .sort(
       (a, b) =>
@@ -337,13 +395,25 @@ export function refillClassSlots(
 ): number[] {
   const worn = host.book.state.worn;
   const bar = host.player.hotbar;
-  if (!worn) return [];
   const n = classSlotsFor(worn, bar.length);
-  const fill = fillClassSlots(bar, classPicks(host) ?? [], {
+  const own = (id: string) => ownOk(host, id);
+  // A class-only skill never sits in one of your slots (with no class: anywhere on the bar).
+  const clean = purgeOwn(bar, n, own);
+  if (!worn) {
+    const changed = diffSlots(bar, clean);
+    if (changed.length) {
+      setBar(host, clean);
+      emit({ slots: changed, reason });
+    }
+    return changed;
+  }
+  const fill = fillClassSlots(clean, classPicks(host) ?? [], {
     classSlots: n,
     stable: opts.stable,
     rehome: opts.rehome,
     prefer: questSkills(host),
+    fixed: kitFixed(host, n),
+    ownOk: own,
   });
   const next = opts.backfill ? backfillOwn(fill.bar, n, spareSkills(host, fill.bar)) : fill.bar;
   const changed = diffSlots(bar, next);
@@ -392,14 +462,33 @@ export function slotLearned(host: LoadoutHost, skillId: string): LearnPlacement 
   if (!skill || !barEligible(skill) || !host.book.has(skillId)) return null;
   const worn = host.book.state.worn;
   const bar = host.player.hotbar;
-  const placed = placeLearned(
-    bar,
-    skillId,
-    classPicks(host),
-    classSlotsFor(worn, bar.length),
-    classBeats(host) ?? undefined,
-    questSkills(host),
-  );
+  const n = classSlotsFor(worn, bar.length);
+  const fixed = kitFixed(host, n);
+  let placed: LearnPlacement | null;
+  if (fixed) {
+    // A kit class: kit skills take their own slot (a fill pushed out moves to an empty slot of yours); any other
+    // skill only fills an EMPTY class slot — a fill never pushes anything out.
+    if (bar.includes(skillId)) return null;
+    // A kit skill arriving re-lays the class slots in classSkills() order (kit skills in their slots, the best
+    // fills in the others; skills you put in your own slots stay there). Anything else is a plain refresh.
+    const isKit = fixed.includes(skillId);
+    const yours = new Set(bar.slice(n).filter((x): x is string => !!x));
+    const picks = (classPicks(host) ?? []).filter((id) => !isKit || !yours.has(id));
+    const fill = fillClassSlots(bar, picks, { classSlots: n, stable: !isKit, rehome: true, prefer: questSkills(host), fixed, ownOk: (id) => ownOk(host, id) });
+    const slot = fill.bar.indexOf(skillId);
+    if (slot >= 0 && slot < n) placed = { bar: fill.bar, changed: fill.changed, reason: 'classLearned', slot };
+    else {
+      const at = ownSlotEligible(skill) ? firstEmpty(bar, n) : -1;
+      if (at < 0) return null;
+      const next = [...bar];
+      next[at] = skillId;
+      placed = { bar: next, changed: [at], reason: 'learned', slot: at };
+    }
+  } else {
+    placed = placeLearned(bar, skillId, classPicks(host), n, classBeats(host) ?? undefined, questSkills(host));
+    // A class-only skill never drops into one of your slots.
+    if (placed?.reason === 'learned' && !ownSlotEligible(skill)) return null;
+  }
   if (!placed) return null;
   setBar(host, placed.bar);
   emit({ slots: placed.changed, reason: placed.reason, skillId, ...(placed.reason === 'classLearned' && worn ? { classId: worn } : {}) });

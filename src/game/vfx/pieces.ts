@@ -126,6 +126,16 @@ export function nominalMs(p: VfxPiece): number {
       return 50;
     case 'afterimage':
       return p.params.steps.length * 50;
+    case 'field':
+      return 702;
+    case 'warp':
+      return 317;
+    case 'mend':
+      return p.params.phase === 'pulse' ? 517 : 800;
+    case 'shell':
+      return p.params.phase === 'form' ? 352 : p.params.phase === 'loop' ? 936 : p.params.phase === 'absorb' ? 150 : 317;
+    case 'emblem':
+      return { full: 466, finisher: 301, cashIn: 318, stance: 351, step: 434, mark: 600 }[p.params.kind];
   }
 }
 
@@ -144,7 +154,7 @@ const ANCHORS: readonly string[] = ['caster', 'target', 'aim', 'body', 'path', '
 const PATTERNS: readonly string[] = ['single', 'burst', 'converge', 'spiral', 'orbit', 'trail', 'rise', 'fall', 'poisson', 'rim', 'lattice', 'line', 'stack', 'path'];
 const TAGS: readonly string[] = ['hero', 'firstHitOnly', 'laterHits', 'lastHit', 'echo', 'neverGoverned', 'geometryFromEvent'];
 const NO_ADD: readonly FamilyId[] = ['shadow', 'earth', 'wind', 'toxin', 'stealth', 'steel', 'danger'];
-const STATUS_KINDS: readonly StatusKind[] = ['burn', 'slow', 'soak', 'stun', 'knockback', 'shock', 'bleed', 'smite', 'freeze', 'poison', 'pull'];
+const STATUS_KINDS: readonly StatusKind[] = ['burn', 'slow', 'soak', 'stun', 'knockback', 'shock', 'bleed', 'smite', 'freeze', 'poison', 'pull', 'root', 'launch', 'expose', 'lure'];
 const ELEMENTS: readonly string[] = ['fire', 'water', 'earth', 'wind', 'lightning', 'shadow', 'holy', 'ice', 'magma', 'storm', 'twilight'];
 
 const ENUMS = {
@@ -152,7 +162,7 @@ const ENUMS = {
   orb: ['orb', 'fireball', 'shade', 'spark', 'storm', 'lightbolt', 'moon', 'prism', 'lance', 'wave', 'gust', 'spellblade', 'bubble', 'droplet'],
   orbit: ['glyphs', 'shards', 'spiral', 'vines', 'motes'],
   missile: ['blade', 'cleaver', 'hammer', 'knife', 'needle', 'dart', 'feather', 'shard', 'thorn', 'rock', 'glob', 'net', 'hook'],
-  burst: ['slash', 'pierce', 'blunt', 'magic', 'ki', 'crit', 'tick', 'strong', 'resist', 'immune', 'muzzle', 'split', 'glint', 'fizzle', 'star'],
+  burst: ['slash', 'pierce', 'blunt', 'magic', 'ki', 'crit', 'tick', 'strong', 'resist', 'immune', 'muzzle', 'split', 'glint', 'fizzle', 'star', 'jab', 'hook', 'palm', 'kick', 'slam'],
   mote: ['spark', 'ember', 'mote', 'streak', 'flake', 'droplet', 'chip', 'bubble', 'leaf', 'glint', 'glyph', 'wisp', 'line', 'bead', 'disc', 'star'],
   puff: ['smoke', 'dust', 'vapour', 'veil', 'gas', 'cloud', 'steam'],
   ringStyle: ['solid', 'double', 'gapped', 'jagged', 'dashed', 'inverted'],
@@ -161,7 +171,7 @@ const ENUMS = {
   decal: ['fill', 'scorch', 'frost', 'wet', 'ink', 'rune', 'cracks', 'pool', 'rift', 'shadow'],
   core: ['blast', 'ripple', 'implode', 'radiant', 'sky', 'rune', 'cloud', 'goo'],
   unit: ['flame-column', 'lava-geyser', 'rock-spike', 'crystal-spike', 'ice-spike', 'splash-crown', 'gust-swirl', 'sky-bolt', 'light-pillar', 'tendril', 'moon-mote', 'star-shard', 'spore-puff', 'smoke-sheet', 'debris', 'ki-ripple'],
-  statusUnit: ['tongue', 'drip', 'puddle', 'chevron', 'star', 'microarc', 'crystal', 'icicle', 'bubble', 'drop', 'splash', 'beam', 'speedline', 'spiral', 'pip'],
+  statusUnit: ['tongue', 'drip', 'puddle', 'chevron', 'star', 'microarc', 'crystal', 'icicle', 'bubble', 'drop', 'splash', 'beam', 'speedline', 'spiral', 'pip', 'shackle', 'updraft', 'breach', 'beckon'],
   auraMotif: ['edge', 'runes', 'gust', 'glint', 'bloom', 'ward', 'blades', 'veil'],
   activation: ['ring', 'pillar', 'sigil', 'shout'],
   body: ['S', 'M', 'L', 'W'],
@@ -303,6 +313,29 @@ function paramProblems(p: VfxPiece): string[] {
       need(isIn(p.params.piece, ENUMS.tell), 'tell.piece');
       need(typeof p.params.danger === 'boolean', 'tell.danger');
       break;
+    case 'field':
+      need(p.params.size === 's' || p.params.size === 'm', 'field.size');
+      break;
+    case 'warp':
+      need(p.params.phase === 'out' || p.params.phase === 'in', 'warp.phase');
+      need(isIn(p.params.body, ENUMS.body), 'warp.body');
+      break;
+    case 'mend':
+      need(p.params.phase === 'pulse' || p.params.phase === 'loop', 'mend.phase');
+      need(isIn(p.params.body, ENUMS.body), 'mend.body');
+      break;
+    case 'shell':
+      need(isIn(p.params.phase, ['form', 'loop', 'absorb', 'break']), 'shell.phase');
+      need(isIn(p.params.body, ENUMS.body), 'shell.body');
+      break;
+    case 'emblem': {
+      const q = p.params;
+      need(isIn(q.kind, ['full', 'finisher', 'cashIn', 'stance', 'step', 'mark']), 'emblem.kind');
+      need(isIn(q.n, [1, 2, 3, 4, 5]), 'emblem.n');
+      need(q.kind !== 'stance' || q.n <= 2, 'emblem.stance side');
+      need(q.of === undefined || (q.kind === 'step' && isIn(q.of, [2, 3, 4, 5]) && q.n <= q.of), 'emblem.of');
+      break;
+    }
     case 'afterimage':
       need(p.params.mode === 'ghost' || p.params.mode === 'blink' || p.params.mode === 'mirror', 'afterimage.mode');
       need(p.params.steps.length > 0 && p.params.steps.every((a, i, xs) => a > 0 && a < 1 && (i === 0 || a < xs[i - 1])), 'afterimage.steps');
@@ -375,5 +408,7 @@ export function recipePieces(r: VfxRecipe): VfxPiece[] {
   if (rd.leech) out.push(...rd.leech.stream, ...rd.leech.arrive);
   if (rd.pierce) out.push(...rd.pierce.mark);
   if (rd.merge) out.push(...rd.merge.pieces);
+  if (rd.zone) out.push(...rd.zone.tick, ...rd.zone.end);
+  if (rd.shield) out.push(...rd.shield.absorb, ...rd.shield.break, ...rd.shield.burst);
   return out;
 }

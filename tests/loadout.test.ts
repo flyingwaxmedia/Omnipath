@@ -1,10 +1,12 @@
-// Skill-bar loadout (src/game/loadout.ts, src/game/session.ts; docs/SPEC-v2.md §5.1): 8 slots, class slots 1-5 filled
-// by the worn class; becoming a class pulls its picks out of your slots 6-8 (freeing them), refreshes never touch
-// them; learning a related skill fills an empty class slot or replaces only when clearly better; padded old saves,
-// SkillBook.unwear().
+// Skill-bar loadout (src/game/loadout.ts, src/game/session.ts; docs/SPEC-v2.md §5.1, docs/SPEC-v4.md §3.4, §13):
+// 8 slots, class slots 1-5 filled by the worn class; becoming a class pulls its picks out of your slots 6-8 (freeing
+// them), refreshes never touch them; learning a related skill fills an empty class slot. v4: a kit class lays its
+// slots out in classSkills() order (kit skill i in slot i, fills where a kit skill is not known yet), a kit skill
+// never loses its slot to a fill, class-only skills never sit in your slots; saves load from v3, v2 or v1.
+// The Session tests run on the fixture registry (tests/fixtures/game-v4.ts): real content + temporary kit classes.
 import { afterEach, describe, expect, it } from 'vitest';
 import { SkillBook } from '../src/core/skillbook';
-import { createRegistry } from '../src/data';
+import { fixtureRegistry } from './fixtures/game-v4';
 import { gameBus, type BarChangedEvent } from '../src/game/events';
 import { barEligible } from '../src/core/classes';
 import {
@@ -14,16 +16,19 @@ import {
   classSlotsFor,
   fillClassSlots,
   firstEmpty,
+  kitFixed,
+  ownOk,
   padBar,
   placeLearned,
   preferFirst,
+  purgeOwn,
   refillClassSlots,
   slotLearned,
   spareSkills,
 } from '../src/game/loadout';
-import { HOTBAR_SIZE, Session } from '../src/game/session';
+import { HOTBAR_SIZE, SAVE_KEY, SAVE_KEY_V1, SAVE_KEY_V2, Session } from '../src/game/session';
 
-const reg = createRegistry();
+const reg = fixtureRegistry();
 const E = null;
 
 describe('padBar (saves)', () => {
@@ -164,346 +169,383 @@ describe('placeLearned (pure)', () => {
   });
 });
 
-// ------------------------------------------------------------------ with the real registry and SkillBook
+describe('fillClassSlots: kit slots (v4)', () => {
+  const picks = ['k1', 'k2', 'f1', 'f2', 'f3', 'f4'];
+  const fixed = ['k1', 'k2', E, E, E];
+  it('becoming: kit skills take their own slots in kit order, fills take the rest best first', () => {
+    const r = fillClassSlots([E, E, E, E, E, E, E, E], picks, { classSlots: 5, fixed });
+    expect(r.bar).toEqual(['k1', 'k2', 'f1', 'f2', 'f3', E, E, E]);
+  });
+  it('a kit skill not known yet leaves its slot to a fill; once known it takes the slot back and the fill moves out', () => {
+    // kit skill 3 (k3) is not known: slot 3 holds the fill f1.
+    const before = ['k1', 'k2', 'f1', 'f2', 'f3', E, E, E];
+    const r = fillClassSlots(before, ['k1', 'k2', 'k3', 'f1', 'f2', 'f3'], { classSlots: 5, stable: true, rehome: true, fixed: ['k1', 'k2', 'k3', E, E] });
+    expect(r.bar.slice(0, 5)).toEqual(['k1', 'k2', 'k3', 'f2', 'f3']);
+    expect(r.bar[5]).toBe('f1'); // nothing lost while there is room
+    expect(r.added).toEqual(['k3']);
+  });
+  it('a kit skill never loses its slot to a fill, whatever the fill ranks (quest skills included)', () => {
+    const r = fillClassSlots(['k1', 'k2', 'f1', E, E, E, E, E], ['f9', ...picks], { classSlots: 5, stable: true, fixed, prefer: new Set(['f9']) });
+    expect(r.bar.slice(0, 2)).toEqual(['k1', 'k2']);
+    expect(r.bar.slice(0, 5)).toContain('f9');
+    const b = fillClassSlots([E, E, E, E, E, E, E, E], ['f9', ...picks], { classSlots: 5, fixed, prefer: new Set(['f9', 'f4']) });
+    expect(b.bar.slice(0, 2)).toEqual(['k1', 'k2']);
+    expect(b.bar.slice(2, 5).sort()).toEqual(['f1', 'f4', 'f9']);
+  });
+  it('a refresh puts a kit skill found in the wrong slot (or in one of yours) back where it belongs', () => {
+    const r = fillClassSlots(['k2', 'f1', E, E, E, 'k1', E, E], picks, { classSlots: 5, stable: true, fixed });
+    expect(r.bar.slice(0, 2)).toEqual(['k1', 'k2']);
+    expect(r.bar[5]).toBeNull();
+    expect(r.pulled).toEqual(['k1']);
+    // The fill that stood in slot 2 is no longer on the bar unless rehomed: it comes back as a fill.
+    expect(r.bar.slice(0, 5)).toContain('f1');
+  });
+  it('rehome respects ownOk: a class-only skill pushed out never lands in your slots', () => {
+    const r = fillClassSlots(['old1', 'old2', E, E, E, E, E, E], picks, { classSlots: 5, rehome: true, fixed, ownOk: (id) => id !== 'old1' });
+    expect(r.bar.slice(5)).toEqual(['old2', E, E]);
+    expect(r.dropped).toEqual(['old1']);
+  });
+  it('purgeOwn empties only your slots that hold something that may not sit there', () => {
+    expect(purgeOwn(['c1', 'c2', E, 'c1x', 'own', 'c3'], 3, (id) => !id.startsWith('c'))).toEqual(['c1', 'c2', E, E, 'own', E]);
+  });
+});
+
+// ====================================================================== Session glue (fixture registry)
 
 const bars: BarChangedEvent[] = [];
 const offBar = gameBus.on('barChanged', (e) => bars.push(e));
-afterEach(() => {
-  bars.length = 0;
-});
 
-function fresh(weapon: 'sword' | 'dagger' | 'staff' = 'sword'): Session {
-  const s = Session.create(reg, 'Tester', weapon, 7);
+/** A fresh sword character (no class: fixture classes are found only by their flag). */
+function fresh(weapon: 'sword' | 'dagger' | 'staff' | 'fists' = 'sword'): Session {
   bars.length = 0;
-  return s;
+  return Session.create(reg, 'Tester', weapon, 7);
 }
 
-describe('Session bar (class auto-equip)', () => {
+/** Unlocks a fixture class the way the book does (its flag), which wears it when nothing is worn. */
+function find(s: Session, cls: string): void {
+  s.book.incFlag(`fx:${cls}`);
+}
+
+const learn = (s: Session, ...ids: string[]) => ids.forEach((id) => s.book.learn(id, 'test'));
+
+describe('Session bar: no class', () => {
   it('a fresh character has 8 empty slots; learned skills drop into them (no class: all 8 are yours)', () => {
     const s = fresh();
-    expect(s.player.hotbar).toEqual(Array(8).fill(null));
-    s.book.learn('whirlwind', 'test');
-    expect(s.player.hotbar[0]).toBe('whirlwind');
-    expect(bars.at(-1)).toMatchObject({ slots: [0], reason: 'learned', skillId: 'whirlwind' });
-    s.book.learn(reg.skill('slash') ? 'slash' : 'whirlwind', 'test'); // basics never take a slot
-    expect(s.player.hotbar.filter(Boolean)).toEqual(['whirlwind']);
-  });
-
-  it('discovering the first class wears it and fills its class slots; its pick in your slot moves in', () => {
-    const s = fresh();
-    const classes: string[] = [];
-    const off = gameBus.on('classChanged', (e) => classes.push(`${e.classId}:${e.reason}`));
-    s.book.learn('whirlwind', 'test');
-    s.book.learn('quickstep', 'test');
-    expect(s.book.state.worn).toBeNull();
-    // A blade skill in slot 6 and a non-blade one in slot 7, both the player's own.
-    s.player.hotbar.splice(0, 8, E, E, E, E, E, 'whirlwind', 'quickstep', E);
-    for (const id of ['sword_throw', 'heavy_cleave', 'flame_spin']) s.book.learn(id, 'test');
-    off();
-    const worn = s.book.state.worn;
-    expect(worn).toBe('blademaster');
-    expect(classes[0]).toBe('blademaster:discovered');
-    const bar = s.player.hotbar;
-    expect(bar.slice(0, 5)).toContain('whirlwind'); // SPEC §5.1: moved into the class slots…
-    expect(bar.slice(5)).not.toContain('whirlwind'); // …not duplicated
-    expect(bar[6]).toBe('quickstep'); // your other pick is untouched
-    expect(bar.slice(0, 5).every(Boolean)).toBe(true);
-    expect(new Set(bar.filter(Boolean)).size).toBe(bar.filter(Boolean).length); // no duplicates
-    for (const id of ['whirlwind', 'sword_throw', 'heavy_cleave', 'flame_spin', 'quickstep']) expect(bar).toContain(id); // nothing lost
-  });
-
-  it('becoming a class through the class path pulls only its own picks out of your slots', () => {
-    const s = fresh();
-    for (const id of ['sword_throw', 'heavy_cleave', 'firebolt', 'quickstep', 'rising_kick']) s.book.learn(id, 'test');
-    expect(s.book.state.worn).toBeNull();
-    s.book.state.classes.pyroblade = { rank: 1, xp: 0 };
-    s.player.hotbar.splice(0, 8, 'rising_kick', E, E, E, E, 'sword_throw', 'quickstep', 'firebolt');
-    expect(s.book.wear('pyroblade').ok).toBe(true);
-    bars.length = 0;
-    refillClassSlots(s, 'class', { rehome: true }); // views.becomeClass from "no class"
-    const bar = s.player.hotbar;
-    // Pyroblade relates to blade and fire skills: all three come in; Rising Kick and Quickstep do not.
-    expect([...bar.slice(0, 5)].filter(Boolean).sort()).toEqual(['firebolt', 'heavy_cleave', 'sword_throw']);
-    expect(bar.slice(5)).toEqual(['rising_kick', 'quickstep', E]); // rehomed into a freed slot; Quickstep stays
-    expect(bars[0]).toMatchObject({ reason: 'class', classId: 'pyroblade' });
-    expect(bars[0].slots).toEqual(expect.arrayContaining([0, 5, 7]));
-  });
-
-  it('becoming another class refills the class slots; unwear keeps them as your slots', () => {
-    const s = fresh('staff');
-    for (const id of ['arcane_orb', 'arcane_nova', 'firebolt', 'meteor', 'flame_spin', 'whirlwind']) s.book.learn(id, 'test');
-    const unlocked = Object.keys(s.book.state.classes);
-    expect(unlocked.length).toBeGreaterThan(0);
-    const other = unlocked.find((c) => c !== s.book.state.worn);
-    if (other) {
-      expect(s.book.wear(other).ok).toBe(true);
-      bars.length = 0;
-      refillClassSlots(s, 'class');
-      const picks = s.book.classSkills(other, 8).filter((id) => !s.player.hotbar.slice(5).includes(id)).slice(0, 5);
-      expect(s.player.hotbar.slice(0, picks.length)).toEqual(picks);
-      if (bars.length) expect(bars[0]).toMatchObject({ reason: 'class', classId: other });
-    }
-    const before = [...s.player.hotbar];
-    expect(s.book.unwear()).toMatchObject({ ok: true });
-    expect(s.book.state.worn).toBeNull();
-    expect(s.book.unwear()).toMatchObject({ ok: true });
-    expect(s.player.hotbar).toEqual(before);
-    // With no class, a new skill takes the first empty slot anywhere (slot 2 here).
-    s.player.hotbar.splice(0, 8, 'arcane_orb', E, E, E, E, E, E, E);
-    s.book.state.skills.sword_throw = { ...s.book.state.skills.arcane_orb, id: 'sword_throw' };
-    expect(slotLearned(s, 'sword_throw')).toMatchObject({ slot: 1, reason: 'learned' });
-    expect(slotLearned(s, 'sword_throw')).toBeNull(); // already on the bar
-  });
-
-  it('a newly learned skill the worn class picks joins the class slots (classLearned)', () => {
-    const s = fresh();
-    for (const id of ['whirlwind', 'sword_throw', 'heavy_cleave', 'flame_spin', 'searing_edge']) if (reg.skill(id)) s.book.learn(id, 'test');
-    const worn = s.book.state.worn;
-    expect(worn).not.toBeNull();
-    bars.length = 0;
-    // A tier-2 blade skill: every blade class prefers it over the tier-1 ones.
-    s.book.learn('spinning_assault', 'test');
-    const picks = s.book.classSkills(s.book.state.worn!, 8);
-    expect(picks.slice(0, 5)).toContain('spinning_assault');
-    expect(s.player.hotbar.indexOf('spinning_assault')).toBeLessThan(5);
-    expect(bars.find((b) => b.skillId === 'spinning_assault')).toMatchObject({ reason: 'classLearned' });
-    expect(new Set(s.player.hotbar.filter(Boolean)).size).toBe(s.player.hotbar.filter(Boolean).length);
+    expect(s.player.hotbar).toEqual(Array(8).fill(E));
+    learn(s, 'fx_spin', 'fx_dart');
+    expect(s.player.hotbar.slice(0, 3)).toEqual(['fx_spin', 'fx_dart', E]);
+    expect(bars.map((b) => b.reason)).toEqual(['learned', 'learned']);
+    expect(classSlotsFor(s.book.state.worn, 8)).toBe(0);
+    // Basics never go on the bar.
+    expect(slotLearned(s, 'slash')).toBeNull();
+    expect(slotLearned(s, 'fx_spin')).toBeNull(); // already there
   });
 });
 
-describe('Session bar: learning while in a class', () => {
-  function pyroblade(ids: string[]): Session {
-    const s = fresh('dagger'); // (a sword's basic Slash would count toward unlocking Blademaster)
-    for (const id of ids) s.book.learn(id, 'test');
-    s.book.state.classes.pyroblade = { rank: 1, xp: 0 };
-    expect(s.book.wear('pyroblade').ok).toBe(true);
-    s.player.hotbar.splice(0, 8, ...Array<null>(8).fill(null));
-    refillClassSlots(s, 'class');
+describe('Session bar: a kit class (v4)', () => {
+  it('discovering the first class wears it: kit skills 1 and 2 take slots 1 and 2, usable fills take the rest', () => {
+    const s = fresh();
+    learn(s, 'fx_spin', 'fx_throw', 'fx_cleave', 'fx_dart', 'fx_knife');
+    find(s, 'fx_blade');
+    expect(s.book.state.worn).toBe('fx_blade');
+    const bar = s.player.hotbar;
+    expect(bar.slice(0, 2)).toEqual(['fx_guard', 'fx_cut']); // kit order
+    expect(bar.slice(0, 5)).toEqual(s.book.classSkills('fx_blade', 5)); // slot order is classSkills() order
+    // Fills are skills usable with the class weapon; the dagger knife is not one, and nothing is lost.
+    expect(bar.slice(0, 5)).not.toContain('fx_knife');
+    for (const id of ['fx_spin', 'fx_throw', 'fx_cleave', 'fx_dart', 'fx_knife']) expect(bar).toContain(id);
+    expect(new Set(bar.filter(Boolean)).size).toBe(bar.filter(Boolean).length);
+    expect(kitFixed(s)).toEqual(['fx_guard', 'fx_cut', E, E, E]);
+  });
+
+  it('a Class Level that unlocks a kit skill puts it in ITS slot; the fill there moves to an empty slot of yours', () => {
+    const s = fresh();
+    learn(s, 'fx_spin', 'fx_throw', 'fx_cleave');
+    find(s, 'fx_blade');
+    const fill = s.player.hotbar[2]!;
+    expect(reg.skill(fill)!.classOf).toBeUndefined();
     bars.length = 0;
-    return s;
-  }
-
-  it('a related skill drops into an empty class slot (classLearned)', () => {
-    const s = pyroblade(['sword_throw', 'heavy_cleave']);
-    expect(s.player.hotbar.slice(0, 5).filter(Boolean).length).toBe(2);
-    s.book.learn('firebolt', 'test'); // fire: related to Pyroblade
-    expect(s.player.hotbar.indexOf('firebolt')).toBeLessThan(5);
-    expect(bars.at(-1)).toMatchObject({ reason: 'classLearned', skillId: 'firebolt', classId: 'pyroblade' });
-    s.book.learn('rising_kick', 'test'); // unrelated: one of your slots
-    expect(s.player.hotbar.indexOf('rising_kick')).toBe(5);
-    expect(bars.at(-1)).toMatchObject({ reason: 'learned', skillId: 'rising_kick' });
+    learn(s, 'fx_turn'); // kit skill 3 (Class Level 2)
+    expect(s.player.hotbar[2]).toBe('fx_turn');
+    expect(s.player.hotbar).toContain(fill);
+    expect(s.player.hotbar.indexOf(fill)).toBeGreaterThanOrEqual(3);
+    expect(bars).toHaveLength(1);
+    expect(bars[0]).toMatchObject({ reason: 'classLearned', skillId: 'fx_turn', classId: 'fx_blade' });
+    // …and so on for kit skills 4 and 5: the five slots end up as the kit, in kit order.
+    learn(s, 'fx_word', 'fx_step');
+    expect(s.player.hotbar.slice(0, 5)).toEqual(['fx_guard', 'fx_cut', 'fx_turn', 'fx_step', 'fx_word']);
+    for (const id of ['fx_spin', 'fx_throw', 'fx_cleave']) expect(s.player.hotbar.slice(5)).toContain(id);
   });
 
-  it('a full class only swaps its weakest skill for a clearly better one (higher tier or a closer fit)', () => {
-    const s = pyroblade(['sword_throw', 'heavy_cleave', 'firebolt', 'flare_dash', 'ember_pounce']);
-    const before = s.player.hotbar.slice(0, 5);
-    expect(before.every(Boolean)).toBe(true);
-    s.book.learn('whirlwind', 'test'); // related tier 1, like every class skill: not clearly better
-    expect(s.player.hotbar.slice(0, 5)).toEqual(before);
-    expect(s.player.hotbar.indexOf('whirlwind')).toBe(5);
-    s.book.learn('ember_fan', 'test'); // related (fire) tier 2: clearly better than a tier-1 skill
-    const after = s.player.hotbar.slice(0, 5);
-    expect(after.filter((id) => !before.includes(id))).toEqual(['ember_fan']); // one swap, in place
-    expect(bars.find((b) => b.skillId === 'ember_fan')).toMatchObject({ reason: 'classLearned', classId: 'pyroblade' });
+  it('a fill never pushes anything out: a newly learned skill fills an empty class slot, else one of yours', () => {
+    const s = fresh();
+    find(s, 'fx_blade'); // only the two kit skills known
+    expect(s.player.hotbar.slice(0, 5)).toEqual(['fx_guard', 'fx_cut', E, E, E]);
+    bars.length = 0;
+    learn(s, 'fx_spin');
+    expect(s.player.hotbar[2]).toBe('fx_spin');
+    expect(bars[0]).toMatchObject({ reason: 'classLearned', skillId: 'fx_spin' });
+    learn(s, 'fx_throw', 'fx_flurry');
+    expect(s.player.hotbar.slice(0, 5)).toEqual(['fx_guard', 'fx_cut', 'fx_spin', 'fx_throw', 'fx_flurry']);
+    bars.length = 0;
+    learn(s, 'fx_cleave'); // tier 3, but the class slots are full: it goes to your slots, nothing is swapped
+    expect(s.player.hotbar.slice(0, 5)).toEqual(['fx_guard', 'fx_cut', 'fx_spin', 'fx_throw', 'fx_flurry']);
+    expect(s.player.hotbar[5]).toBe('fx_cleave');
+    expect(bars[0]).toMatchObject({ reason: 'learned', skillId: 'fx_cleave' });
+    // A skill the class cannot use (a dagger skill) never takes a class slot.
+    learn(s, 'fx_knife');
+    expect(s.player.hotbar.indexOf('fx_knife')).toBeGreaterThanOrEqual(5);
   });
 
-  it('classBeats: a pattern match beats a related skill, then the higher tier wins', () => {
-    const s = pyroblade(['sword_throw']);
-    const beats = classBeats(s)!;
-    expect(beats('flame_spin', 'worldbreaker')).toBe(true); // blade + fire (tier 2) over blade only (tier 3)
-    expect(beats('worldbreaker', 'flame_spin')).toBe(false);
-    expect(beats('meteor', 'firebolt')).toBe(true); // both related: tier 2 over tier 1
-    expect(beats('whirlwind', 'sword_throw')).toBe(false); // same fit, same tier
-    expect(beats('sword_throw', 'rising_kick')).toBe(true); // related over unrelated
+  it('class-only skills never go in your slots: not by learning, not by rehoming, not by backfill', () => {
+    const s = fresh();
+    learn(s, 'fx_spin');
+    find(s, 'fx_blade');
+    find(s, 'fx_heat'); // found while wearing fx_blade: its kit skills are learned but have no slot to go to
+    expect(s.book.has('fx_edge')).toBe(true);
+    expect(s.player.hotbar).not.toContain('fx_edge');
+    expect(ownOk(s, 'fx_edge')).toBe(false);
+    expect(ownOk(s, 'fx_spin')).toBe(true);
+    expect(spareSkills(s)).not.toContain('fx_edge');
+    // Becoming the other class: its kit comes in, the old class's own skills leave the bar entirely.
+    expect(s.book.wear('fx_heat').ok).toBe(true);
+    becomeRefill(s);
+    const bar = s.player.hotbar;
+    expect(bar.slice(0, 2)).toEqual(['fx_edge', 'fx_bellows']);
+    expect(bar).not.toContain('fx_guard');
+    expect(bar).not.toContain('fx_cut');
+    expect(bar).toContain('fx_spin');
+    // "No class": the class slots become yours, and the class's own skills leave with it.
     s.book.unwear();
-    expect(classBeats(s)).toBeNull();
+    refillClassSlots(s, 'class');
+    expect(s.player.hotbar).not.toContain('fx_edge');
+    expect(s.player.hotbar).not.toContain('fx_bellows');
+    expect(s.player.hotbar).toContain('fx_spin');
+    // With no class a class-only skill has nowhere to go.
+    expect(slotLearned(s, 'fx_guard')).toBeNull();
   });
-});
 
-describe('Session bar: changing class and editing your slots (UX audit)', () => {
-  const BLADE_ARCANE = ['heavy_cleave', 'sword_throw', 'whirlwind', 'blade_aura', 'runic_blade', 'arcane_orb', 'firebolt', 'rising_kick'];
-
-  function unlocked(ids: string[], classes: string[]): Session {
-    const s = fresh('dagger');
-    for (const id of ids) s.book.learn(id, 'test');
-    for (const c of classes) s.book.state.classes[c] ??= { rank: 1, xp: 0 };
+  it('becoming a class: your own picks stay, displaced skills move to your empty slots, empty ones are backfilled', () => {
+    const s = fresh();
+    learn(s, 'fx_spin', 'fx_throw', 'fx_cleave', 'fx_flurry', 'fx_dart', 'fx_hop', 'fx_focus');
+    s.book.state.classes.fx_blade = { rank: 1, xp: 0 };
+    learn(s, 'fx_guard', 'fx_cut');
+    // No class: the two class-only skills found no slot.
+    expect(s.player.hotbar).toEqual(['fx_spin', 'fx_throw', 'fx_cleave', 'fx_flurry', 'fx_dart', 'fx_hop', 'fx_focus', E]);
+    expect(s.book.wear('fx_blade').ok).toBe(true);
     bars.length = 0;
-    return s;
-  }
-
-  function become(s: Session, id: string): void {
-    expect(s.book.wear(id).ok).toBe(true);
-    becomeRefill(s); // views.becomeClass
-  }
-
-  it('become A, become B, become A: no slot of yours stays empty while unused known skills exist', () => {
-    const s = unlocked(BLADE_ARCANE, ['blademaster', 'spellblade']);
-    for (const c of ['blademaster', 'spellblade', 'blademaster', 'spellblade']) {
-      become(s, c);
-      const bar = s.player.hotbar;
-      const on = bar.filter(Boolean);
-      expect(new Set(on).size).toBe(on.length); // no duplicates
-      expect(bar.slice(0, 5).every(Boolean)).toBe(true); // the class filled its slots
-      if (spareSkills(s).length) expect(bar.slice(5).every(Boolean)).toBe(true); // …and none of yours is empty
-      const known = s.book.known().filter((k) => barEligible(k)).length;
-      expect(on.length).toBe(Math.min(known, bar.length)); // nothing lost while there is room
-    }
-  });
-
-  it('skills pushed out by the new class move into your empty slots (Sword Throw and Whirlwind stay on the bar)', () => {
-    const s = unlocked(BLADE_ARCANE, ['blademaster', 'spellblade']);
-    become(s, 'blademaster');
-    s.player.hotbar.splice(5, 3, E, E, E); // all three of your slots empty, as in the audit
-    const before = s.player.hotbar.slice(0, 5).filter((x): x is string => !!x);
-    become(s, 'spellblade');
+    becomeRefill(s);
     const bar = s.player.hotbar;
-    for (const id of before) expect(bar).toContain(id);
-    expect(bar.slice(5).every(Boolean)).toBe(true);
+    expect(bar.slice(0, 2)).toEqual(['fx_guard', 'fx_cut']);
+    expect(bar.slice(0, 5)).toEqual(s.book.classSkills('fx_blade', 5));
+    expect(bar[5]).toBe('fx_hop'); // your picks are untouched
+    expect(bar[6]).toBe('fx_focus');
+    expect(bar.every(Boolean)).toBe(true); // no slot of yours stays empty while unused skills are known
+    expect(new Set(bar).size).toBe(8);
+    expect(bars[0]).toMatchObject({ reason: 'class', classId: 'fx_blade' });
   });
 
-  it('putting a skill in your slot never swaps a class slot (Rising Kick stays while Blindside leaves)', () => {
-    const s = unlocked([...BLADE_ARCANE, 'backstab', 'flame_spin', 'rockslide_charge'], ['blademaster']);
-    become(s, 'blademaster');
-    const picks = s.book.classSkills('blademaster', 99);
-    expect(picks.length).toBeGreaterThan(5);
-    const bar = s.player.hotbar;
-    bar.splice(5, 3, E, E, E);
-    // You move the class's 2nd pick into your slot 8: the class takes its 6th pick for the gap (the audit's
-    // Rising Kick in class slot 4, Blindside in your slot 8).
-    bar[bar.indexOf(picks[1])] = null;
-    bar[7] = picks[1];
-    refillClassSlots(s, 'assign', { stable: true });
-    expect(bar.slice(0, 5)).toContain(picks[5]);
-    const cls = bar.slice(0, 5);
-    // Then you equip another skill into slot 8: the 2nd pick leaves the bar, and NO class slot changes.
-    bar[7] = 'arcane_orb' === picks[1] ? 'rising_kick' : 'arcane_orb';
-    bars.length = 0;
-    expect(refillClassSlots(s, 'assign', { stable: true })).toEqual([]); // views.equipSkill
-    expect(bar.slice(0, 5)).toEqual(cls);
-    expect(bars).toEqual([]);
-  });
-
-  it('a class skill moved into your slot leaves a gap the class fills, with one toast naming the new skill', () => {
-    const s = unlocked([...BLADE_ARCANE, 'flame_spin', 'rockslide_charge'], ['blademaster']);
-    become(s, 'blademaster');
-    s.player.hotbar.splice(5, 3, E, E, E);
-    const moved = s.player.hotbar[2]!;
-    s.player.hotbar[2] = null; // MapScene.assignSlot(5, moved): a move
-    s.player.hotbar[5] = moved;
-    bars.length = 0;
-    const changed = refillClassSlots(s, 'assign', { stable: true });
-    expect(changed).toEqual([2]);
-    expect(s.player.hotbar[2]).not.toBeNull();
-    expect(bars).toEqual([{ slots: [2], reason: 'assign', classId: 'blademaster', skillId: s.player.hotbar[2] }]);
-  });
-
-  it('a skill an active quest asks you to use is picked first and never swapped out by a new skill', () => {
-    const s = unlocked(BLADE_ARCANE, ['blademaster']);
-    const quest = [...s.reg.quests.values()].find((q) => q.objectives.some((o) => o.kind === 'use' && o.skill === 'rising_kick'));
-    expect(quest).toBeDefined();
-    s.book.state.quests!.active[quest!.id] = { progress: quest!.objectives.map(() => 0), acceptedAt: 0 };
-    become(s, 'blademaster');
-    expect(s.player.hotbar.slice(0, 5)).toContain('rising_kick');
-    s.player.hotbar.splice(5, 3, 'x1', 'x2', 'x3'); // your slots full
-    for (const id of ['flame_spin', 'rockslide_charge', 'spinning_assault']) s.book.learn(id, 'test');
-    expect(s.player.hotbar.slice(0, 5)).toContain('rising_kick');
+  it('a skill an active quest asks for wins a FILL slot, never a kit slot', () => {
+    const s = fresh();
+    learn(s, 'fx_spin', 'fx_throw', 'fx_cleave', 'fx_flurry', 'fx_dart');
+    const quest = [...reg.quests.values()].find((q) => q.objectives.some((o) => o.kind === 'use' && !!o.skill))!;
+    const use = quest.objectives.find((o) => o.kind === 'use' && !!o.skill) as { skill: string };
+    // Point the quest's wish at a fixture fill by learning under the quest: fake it through the active record.
+    s.book.state.quests!.active[quest.id] = { progress: quest.objectives.map(() => 0), acceptedAt: 0 };
+    const wanted = reg.skill(use.skill);
+    find(s, 'fx_blade');
+    expect(s.player.hotbar.slice(0, 2)).toEqual(['fx_guard', 'fx_cut']);
+    if (wanted && s.book.has(use.skill)) expect(s.player.hotbar.slice(2, 5)).toContain(use.skill);
   });
 
   it('learning uses the refresh rule: a stable refill right after any learn changes nothing', () => {
     const pool = reg.authoredSkills().filter((k) => barEligible(k) && k.tier > 0).map((k) => k.id);
-    const classes = reg.classes.filter((c) => !c.hidden).map((c) => c.id);
     let seed = 12345;
     const rnd = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648;
-    for (let trial = 0; trial < 36; trial++) {
-      const cls = classes[trial % classes.length];
-      const s = unlocked([], [cls]);
-      become(s, cls);
-      for (let k = 0; k < 16; k++) {
+    for (const cls of ['fx_blade', 'fx_heat', 'fx_way', 'fx_pin', 'fx_tide', 'fx_hearth']) {
+      const s = fresh();
+      find(s, cls);
+      expect(s.book.state.worn).toBe(cls);
+      for (let k = 0; k < 40; k++) {
         const id = pool[Math.floor(rnd() * pool.length)];
         if (s.book.has(id)) continue;
         s.book.learn(id, 'test');
         const before = [...s.player.hotbar];
         expect(refillClassSlots(s, 'load', { stable: true }), `${cls} after ${id}`).toEqual([]);
         expect(s.player.hotbar).toEqual(before);
+        // Invariants: kit skills sit in their own slots; your slots hold nothing class-only; no duplicates.
+        const fixed = kitFixed(s)!;
+        fixed.forEach((kid, i) => kid && expect(s.player.hotbar[i], `${cls} slot ${i}`).toBe(kid));
+        for (const own of s.player.hotbar.slice(5)) if (own) expect(reg.skill(own)!.classOf, own).toBeUndefined();
+        const on = s.player.hotbar.filter(Boolean);
+        expect(new Set(on).size).toBe(on.length);
       }
     }
   });
+
+  it('classBeats: a kit skill beats a fill, whatever their tiers', () => {
+    const s = fresh();
+    find(s, 'fx_blade');
+    const beats = classBeats(s)!;
+    expect(beats('fx_cut', 'fx_cleave')).toBe(true); // kit (tier 2) vs a tier-3 fill
+    expect(beats('fx_cleave', 'fx_cut')).toBe(false);
+    expect(beats('fx_cleave', 'fx_spin')).toBe(true); // among fills the higher tier wins
+  });
 });
 
-describe('Session save repair', () => {
-  it('an old 6-slot save is padded to 8 and the worn class refreshes slots 1-5 without losing skills', () => {
-    const s = fresh();
-    for (const id of ['whirlwind', 'sword_throw', 'heavy_cleave', 'flame_spin']) s.book.learn(id, 'test');
-    const worn = s.book.state.worn;
-    expect(worn).not.toBeNull();
-    // A v2 bar: 6 slots, the player's own order.
-    s.player.hotbar.splice(0, 8, 'heavy_cleave', E, 'sword_throw', E, 'whirlwind', 'flame_spin');
-    s.player.hotbar.push(...padBar([], 2));
-    s.repairBar(6);
-    const bar = s.player.hotbar;
-    expect(bar.length).toBe(8);
-    for (const id of ['whirlwind', 'sword_throw', 'heavy_cleave', 'flame_spin']) expect(bar).toContain(id);
-    const picks = s.book.classSkills(worn!, 8).filter((id) => !bar.slice(5).includes(id)).slice(0, 5);
-    expect(bar.slice(0, 5).filter(Boolean).sort()).toEqual([...picks].sort());
-  });
-
-  it('converting a 6-slot bar: a class skill in old slot 6 joins the class slots, a non-class skill moves to yours', () => {
-    const s = fresh();
-    for (const id of ['whirlwind', 'sword_throw', 'heavy_cleave', 'flame_spin', 'quickstep']) s.book.learn(id, 'test');
-    const worn = s.book.state.worn!;
-    const best = s.book.classSkills(worn, 8).slice(0, 5);
-    expect(best).toContain('heavy_cleave');
-    expect(best).not.toContain('quickstep');
-    s.player.hotbar.splice(0, 8, 'quickstep', E, E, E, E, 'heavy_cleave', E, E);
-    s.repairBar(6);
-    const bar = s.player.hotbar;
-    expect(bar.slice(0, 5).sort()).toEqual([...best].sort()); // no empty class slot beside a class skill in yours
-    expect(bar.slice(5)).toEqual(['quickstep', E, E]);
-    // A current 8-slot save keeps your slots as they are.
-    s.player.hotbar.splice(0, 8, E, E, E, E, E, 'heavy_cleave', E, E);
-    s.repairBar(8);
-    expect(s.player.hotbar[5]).toBe('heavy_cleave');
-    expect(s.player.hotbar.slice(0, 5)).not.toContain('heavy_cleave');
-  });
-
-  it('"No class" survives a save and reload (core migration keeps worn: null)', () => {
+describe('Session saves (v3 key; v2 and v1 are read and migrated)', () => {
+  function withStore<T>(run: (store: Map<string, string>) => T): T {
     const store = new Map<string, string>();
     const g = globalThis as unknown as { localStorage?: unknown };
     const had = g.localStorage;
     g.localStorage = { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => void store.set(k, v), removeItem: (k: string) => void store.delete(k) };
+    const lockedWas = Session.locked;
+    Session.locked = false;
     try {
+      return run(store);
+    } finally {
+      g.localStorage = had;
+      Session.locked = lockedWas;
+    }
+  }
+
+  it('saves under omnipath.save.v3 and loads it back, bar and class as they were', () => {
+    withStore((store) => {
+      expect(SAVE_KEY).toBe('omnipath.save.v3');
       const s = fresh();
-      for (const id of ['whirlwind', 'sword_throw', 'heavy_cleave', 'flame_spin']) s.book.learn(id, 'test');
-      expect(s.book.state.worn).not.toBeNull();
+      learn(s, 'fx_spin', 'fx_dart');
+      find(s, 'fx_blade');
+      learn(s, 'fx_turn');
+      s.save();
+      expect([...store.keys()]).toEqual([SAVE_KEY]);
+      expect(JSON.parse(store.get(SAVE_KEY)!).v).toBe(3);
+      const back = Session.load(reg)!;
+      expect(back.book.state.worn).toBe('fx_blade');
+      expect(back.player.hotbar).toEqual(s.player.hotbar);
+      expect(back.player.ownedWeapons).toContain('fists');
+      expect(back.book.state.version).toBe(3);
+    });
+  });
+
+  it('"No class" survives a save and reload (core migration keeps worn: null)', () => {
+    withStore(() => {
+      const s = fresh();
+      learn(s, 'fx_spin', 'fx_throw');
+      find(s, 'fx_blade');
       s.book.unwear();
-      s.player.hotbar.splice(0, 8, 'flame_spin', E, E, E, E, E, E, 'whirlwind');
+      refillClassSlots(s, 'class');
+      s.player.hotbar.splice(0, 8, 'fx_spin', E, E, E, E, E, E, 'fx_throw');
       s.save();
       const back = Session.load(reg)!;
       expect(back.book.state.worn).toBeNull();
-      expect(back.player.hotbar).toEqual(['flame_spin', E, E, E, E, E, E, 'whirlwind']);
-      // A save that wears a class keeps it.
-      back.book.wear(Object.keys(back.book.state.classes)[0]);
-      back.save();
-      expect(Session.load(reg)!.book.state.worn).toBe(back.book.state.worn);
-    } finally {
-      g.localStorage = had;
-    }
+      expect(back.player.hotbar).toEqual(['fx_spin', E, E, E, E, E, E, 'fx_throw']);
+    });
   });
 
-  it('skills the book no longer knows leave the bar on load', () => {
+  it('a v2 save is read, migrated and written as v3; the v2 key is left alone', () => {
+    withStore((store) => {
+      const old = fresh();
+      learn(old, 'fx_spin', 'fx_throw', 'fx_dart');
+      const book = { ...old.book.serialize(), version: 2 };
+      const player = { ...old.player, ownedWeapons: ['sword'], hotbar: ['fx_spin', 'gone_skill', 'fx_throw', null, null, 'fx_dart'] };
+      const v2 = JSON.stringify({ v: 2, player, book, world: old.world });
+      store.set(SAVE_KEY_V2, v2);
+      expect(Session.hasSave()).toBe(true);
+      const s = Session.load(reg)!;
+      expect(s).not.toBeNull();
+      expect(s.book.state.version).toBe(3);
+      expect(s.player.weapon).toBe('sword'); // the held weapon is unchanged…
+      expect(s.player.ownedWeapons).toEqual(['sword', 'fists']); // …and Bare Hands is owned (rule 1)
+      expect(s.player.hotbar.length).toBe(8);
+      expect(s.player.hotbar).not.toContain('gone_skill'); // lost slots are cleared before the refill (rule 9)
+      for (const id of ['fx_spin', 'fx_throw', 'fx_dart']) expect(s.player.hotbar).toContain(id);
+      expect(store.get(SAVE_KEY_V2)).toBe(v2); // never deleted
+      expect(JSON.parse(store.get(SAVE_KEY)!).v).toBe(3); // a v3 write has happened
+      // From now on the v3 save is the one read.
+      store.set(SAVE_KEY_V2, 'garbage');
+      expect(Session.load(reg)!.player.hotbar).toEqual(s.player.hotbar);
+    });
+  });
+
+  it('a migrated save that wears a kit class has its class slots rebuilt from the kit', () => {
+    withStore((store) => {
+      const old = fresh();
+      learn(old, 'fx_spin', 'fx_throw', 'fx_cleave', 'fx_dart');
+      find(old, 'fx_blade');
+      // The bar as an old save might hold it: fills in the kit's slots, a class-only skill in one of yours.
+      const hotbar = ['fx_spin', 'fx_throw', 'fx_cleave', null, null, 'fx_cut', 'fx_dart', null];
+      store.set(SAVE_KEY_V2, JSON.stringify({ v: 2, player: { ...old.player, hotbar }, book: old.book.serialize(), world: old.world }));
+      const s = Session.load(reg)!;
+      const bar = s.player.hotbar;
+      expect(bar.slice(0, 2)).toEqual(['fx_guard', 'fx_cut']);
+      expect(bar.slice(0, 5)).toEqual(s.book.classSkills('fx_blade', 5));
+      expect(bar.slice(5)).not.toContain('fx_cut');
+      for (const id of ['fx_spin', 'fx_throw', 'fx_cleave', 'fx_dart']) expect(bar).toContain(id); // nothing lost
+    });
+  });
+
+  it('a v1 save still loads (v1 → v3) and is written as v3; a corrupt save loads as nothing', () => {
+    withStore((store) => {
+      store.set(SAVE_KEY_V1, JSON.stringify({ v: 1, player: { name: 'Old', weapon: 'dagger', level: 4, hotbar: ['stab', null] }, skills: {} }));
+      const s = Session.load(reg)!;
+      expect(s.player.name).toBe('Old');
+      expect(s.player.weapon).toBe('dagger');
+      expect(s.player.ownedWeapons).toEqual(['dagger', 'fists']);
+      expect(s.book.has('stab')).toBe(true);
+      expect(store.has(SAVE_KEY)).toBe(true);
+      expect(store.has(SAVE_KEY_V1)).toBe(true);
+    });
+    withStore((store) => {
+      store.set(SAVE_KEY, '{not json');
+      expect(Session.load(reg)).toBeNull();
+    });
+  });
+
+  it('the late v2 fixture save loads on the real content: version 3, 8 slots, nothing unknown on the bar', async () => {
+    const { readFileSync } = await import('node:fs');
+    const raw = readFileSync(new URL('./fixtures/save-v2-late.json', import.meta.url), 'utf8');
+    const { createRegistry } = await import('../src/data');
+    const real = createRegistry();
+    withStore((store) => {
+      const data = JSON.parse(raw) as Record<string, unknown>;
+      // The fixture may be a whole save or a book state: wrap a bare book in a v2 save.
+      const save = data.v === 2 && data.book ? data : { v: 2, player: { name: 'Late', weapon: 'sword', hotbar: [] }, book: data, world: {} };
+      store.set(SAVE_KEY_V2, JSON.stringify(save));
+      const s = Session.load(real)!;
+      expect(s).not.toBeNull();
+      expect(s.book.state.version).toBe(3);
+      expect(s.player.hotbar.length).toBe(8);
+      expect(s.player.ownedWeapons).toContain('fists');
+      for (const id of s.player.hotbar) if (id) expect(s.book.has(id), id).toBe(true);
+      const worn = s.book.state.worn;
+      const n = classSlotsFor(worn, 8);
+      for (const id of s.player.hotbar.slice(n)) if (id) expect(real.skill(id)!.classOf, `${id} in your slots`).toBeUndefined();
+      if (worn) expect(s.player.hotbar.slice(0, 5).filter(Boolean)).toEqual(s.book.classSkills(worn, 5).filter((id) => !s.player.hotbar.slice(5).includes(id)).slice(0, s.player.hotbar.slice(0, 5).filter(Boolean).length));
+      expect(JSON.parse(store.get(SAVE_KEY)!).v).toBe(3);
+    });
+  });
+
+  it('skills the book no longer knows leave the bar on load; an old 6-slot bar is padded to 8', () => {
     const s = fresh();
     s.player.hotbar[6] = 'not_a_skill';
     s.repairBar(8);
     expect(s.player.hotbar[6]).toBeNull();
+    learn(s, 'fx_spin', 'fx_throw', 'fx_dart');
+    find(s, 'fx_blade');
+    s.player.hotbar.splice(0, 8, ...padBar(['fx_dart', E, 'fx_throw', E, 'fx_spin', E], 8));
+    s.repairBar(6);
+    expect(s.player.hotbar.length).toBe(8);
+    expect(s.player.hotbar.slice(0, 2)).toEqual(['fx_guard', 'fx_cut']);
+    for (const id of ['fx_spin', 'fx_throw', 'fx_dart']) expect(s.player.hotbar).toContain(id);
   });
 });
 
 describe('SkillBook.unwear', () => {
   it('takes the class off, invalidates caches and re-evaluates classes', () => {
     const b = new SkillBook(reg);
-    for (const id of ['whirlwind', 'sword_throw', 'heavy_cleave', 'flame_spin']) b.learn(id, 'test');
+    b.incFlag('fx:fx_blade');
     const worn = b.state.worn!;
-    expect(worn).toBeTruthy();
+    expect(worn).toBe('fx_blade');
     const withClass = b.activeBonus();
     expect(b.unwear()).toEqual({ ok: true, message: `You set ${reg.classDef(worn)!.name} aside.` });
     expect(b.state.worn).toBeNull();

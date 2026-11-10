@@ -1,6 +1,7 @@
 // Player-facing words (panels lane; docs/UX-SIMPLE.md §1 rule 8). Every UI lane imports these instead of writing
 // internal names: the table maps an internal concept to what players read. Ids never change — only the words.
 // Other lanes import read-only; ask the panels lane (in your report) for a new entry.
+import type { Rarity, WeaponType } from '../core/types';
 
 /** Internal concept → shown as. */
 export const FRIENDLY = {
@@ -21,8 +22,18 @@ export const FRIENDLY = {
   pursuits: 'Pursuits',
   starChart: 'Star Chart',
   // v3 additions (panels lane): every name a player reads for a system.
-  classTree: 'Perks',
-  classPoint: 'perk point',
+  classSkills: 'Class skills',
+  gift: 'Gift',
+  mastered: 'Mastered',
+  trial: 'Trial',
+  beginTrial: 'Begin Trial',
+  pouch: 'Pouch',
+  deed: 'Deed',
+  combo: 'Combo',
+  form: 'Form',
+  echoSocket: 'Echo socket',
+  returnStone: 'Return Stone',
+  costsHp: 'Costs HP',
   keepsakeSlot: 'Keepsake slot',
   fusion: 'Fuse',
   altar: 'Fusion Altar',
@@ -42,9 +53,67 @@ export const FRIENDLY = {
   questGiveUp: 'Give up',
 } as const;
 
-/** "Class Level 4" (or "Class Level 10 · max"). */
+// ---------------------------------------------------------------- v4 words (docs/SPEC-v4.md §12, UX-SIMPLE rule 8)
+
+/** Weapons as players read them: 'staff' is a Rod, 'fists' are Bare Hands. */
+export const WEAPON_WORD: Readonly<Record<WeaponType, string>> = { sword: 'Sword', dagger: 'Dagger', staff: 'Rod', fists: 'Bare Hands' };
+
+/** A weapon item's name as shown ("Oak Rod"): the word Staff never reaches the player. */
+export function weaponName(name: string): string {
+  return name.replace(/\bStaff\b/g, 'Rod').replace(/\bstaff\b/g, 'rod');
+}
+
+/** Class rarity: the word, and 1 – 6 pips so colour is never the only signal. The colour is CSS (`.rar-<rarity>`). */
+export const RARITY_WORD: Readonly<Record<Rarity, string>> = {
+  common: 'Common',
+  uncommon: 'Uncommon',
+  rare: 'Rare',
+  epic: 'Epic',
+  legendary: 'Legendary',
+  mythic: 'Mythic',
+};
+export const RARITY_PIPS: Readonly<Record<Rarity, number>> = { common: 1, uncommon: 2, rare: 3, epic: 4, legendary: 5, mythic: 6 };
+
+/** The rarity tag every class wears wherever it appears: pips + the word, in the rarity colour. */
+export function rarityHtml(r: Rarity): string {
+  return `<span class="rar rar-${r}" aria-label="${RARITY_WORD[r]}"><i class="rar-p" aria-hidden="true">${'<u></u>'.repeat(RARITY_PIPS[r])}</i>${RARITY_WORD[r]}</span>`;
+}
+
+/** New statuses in player words. */
+export const STATUS_WORD: Readonly<Record<string, string>> = { root: 'Held', launch: 'Airborne', expose: 'Exposed', lure: 'Lured' };
+
+/** The six monster materials (the Pouch). */
+export const MATERIAL_WORD: Readonly<Record<string, string>> = { fang: 'Fangs', mote: 'Motes', core: 'Cores', sap: 'Sap', dust: 'Dust', sigil: 'Sigils' };
+
+/** "Sharpened ★★☆☆☆" (Bare Hands: "Hand Wraps ★★☆☆☆"). */
+export function weaponLevelText(weapon: WeaponType, level: number, max = 5): string {
+  return `${weapon === 'fists' ? 'Hand Wraps' : 'Sharpened'} ${stars(level, max)}`;
+}
+
+/** A drop chance in words only: "often", "about 1 in 2", "rare". */
+export function chanceWord(p: number): string {
+  if (p >= 0.75) return 'often';
+  if (p >= 0.4) return 'about 1 in 2';
+  if (p >= 0.25) return 'about 1 in 3';
+  if (p >= 0.12) return 'now and then';
+  return 'rare';
+}
+
+/** "Sword · Fire" for a class card (the grid and the power source are never named). */
+export function classKindLine(weapon: WeaponType | 'any' | undefined, source: string | undefined, elementName: (id: string) => string | undefined): string {
+  const w = !weapon ? '' : weapon === 'any' ? 'Any weapon' : WEAPON_WORD[weapon];
+  const s = !source || source === 'physical' || source === 'none' ? '' : source === 'prism' ? 'Every element' : (elementName(source) ?? '');
+  return [w, s].filter(Boolean).join(' · ');
+}
+
+/** "Needs a sword — Equip": the one lock line (the core writes "Needs a sword"; the UI adds the action). */
+export function lockLine(need: string, canEquip: boolean): string {
+  return canEquip ? `${need} — Equip` : need;
+}
+
+/** "Class Level 4" (or "Class Level 10 · Mastered"). */
 export function classLevel(level: number, max?: number): string {
-  return `${FRIENDLY.classRank} ${level}${max !== undefined && level >= max ? ' · max' : ''}`;
+  return `${FRIENDLY.classRank} ${level}${max !== undefined && level >= max ? ` · ${FRIENDLY.mastered}` : ''}`;
 }
 
 /** "3 more" style counts in hints: "1 more fire skill". */

@@ -1,7 +1,7 @@
 // In-game QA pass regressions (docs/VFX.md §8.10): blade smears for spin bands, one-shot statuses that end on their
 // own, and the sweep / smear stage tables the runtime's chunk rings share with the whole-ring bake.
 import { describe, expect, it } from 'vitest';
-import { createRegistry } from '../src/data';
+import { createRegistry, GAME_DATA } from '../src/data';
 import { EventBus, type GameEvents } from '../src/game/events';
 import { VfxBridge, type BridgePlayer } from '../src/game/vfx/bridge';
 import type { VfxGroup, VfxStage } from '../src/game/vfx/play';
@@ -35,13 +35,17 @@ describe('vfx QA: spin bands are blade smears', () => {
     const band = cast.find((p) => p.component === 'ring' && p.params.anim === 'sweep');
     expect(band && band.component === 'ring' && band.params.smear).toBeGreaterThanOrEqual(6);
     expect(cast.some((p) => p.component === 'motes' && p.params.kind === 'spark')).toBe(true);
-    const torn = deriveVfx(reg.skill('tornado')!, 'player');
+    // A pulling spin (v4 made tornado a launcher and firestorm a zone: any authored pull spin is a vortex).
+    const pullSpin = GAME_DATA.skills.find((x) => x.shape.kind === 'spin' && x.status === 'pull' && !x.tags.includes('monster'))!;
+    const torn = deriveVfx(pullSpin, 'player');
+    expect(torn.carrier).toEqual({ kind: 'spin', style: 'vortex' });
     const tc = torn.phases.cast ?? [];
     expect(tc.filter((p) => p.component === 'ring' && p.params.anim === 'contract').length).toBe(1);
     expect(tc.filter((p) => p.component === 'ring' && p.params.anim === 'sweep' && p.params.smear).length).toBeGreaterThanOrEqual(1);
     // No gapped / dashed rings on a player spin: that is the monsters' rim language.
-    for (const id of ['whirlwind', 'tornado', 'firestorm', 'flame_spin']) {
-      for (const p of deriveVfx(reg.skill(id)!, 'player').phases.cast ?? []) {
+    for (const id of ['whirlwind', 'tornado', 'firestorm', 'flame_spin', pullSpin.id]) {
+      const r = deriveVfx(reg.skill(id)!, 'player');
+      for (const p of [...(r.phases.cast ?? []), ...(r.phases.area ?? []), ...(r.riders.zone?.tick ?? [])]) {
         if (p.component === 'ring') expect(['gapped', 'dashed'], `${id}`).not.toContain(p.params.style);
       }
     }

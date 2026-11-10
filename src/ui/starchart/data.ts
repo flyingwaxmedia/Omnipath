@@ -12,7 +12,8 @@
 // between its ingredients; recipe lines appear once the recipe is discovered; every element of The Heart is drawn.
 import type { Registry } from '../../core/registry';
 import type { SkillBook } from '../../core/skillbook';
-import type { ElementId, WeaponType } from '../../core/types';
+import { classTier } from '../../core/classes';
+import type { ClassDef, ElementId, WeaponType } from '../../core/types';
 import { WEAPON_TYPES } from '../../core/types';
 import { NPCS } from '../../data/npcs';
 import { WEAPONS } from '../../data/weapons';
@@ -120,6 +121,15 @@ export interface StarChartData {
   sky: SkyPlan;
 }
 
+/**
+ * The skills only this class has: the class skills made for it (v4: `classOf`), and its old signature skills. A
+ * class not rebuilt yet borrows ordinary skills for its five — those stay where they are in the sky.
+ */
+export function classOwnSkills(reg: Registry, cl: ClassDef): readonly string[] {
+  const own = (cl.kit ?? []).filter((id) => reg.skill(id)?.classOf === cl.id);
+  return [...new Set([...own, ...(cl.grants ?? [])])];
+}
+
 const TREE: Record<WeaponType, ConstellationId> = { sword: 'edge', dagger: 'fang', staff: 'lantern', fists: 'craft' };
 
 /** Star id for an ingredient ref ('skill:x' → 'x', 'el:fire' → 'el:fire'); null for essences / passives. */
@@ -204,7 +214,8 @@ export function skyPlan(reg: Registry): SkyPlan {
   for (const m of MAPS) for (const sp of m.spawns ?? []) if (!regionOf.has(sp.monster)) regionOf.set(sp.monster, m.region);
   const regionName = new Map(REGIONS.map((r) => [r.id, r.name]));
   const signature = new Map<string, number>();
-  for (const cl of reg.classes) for (const g of cl.grants ?? []) if (!signature.has(g)) signature.set(g, cl.tier ?? 1);
+  // v4: a class's own skills are its five class skills (the old signature list for classes not rebuilt yet).
+  for (const cl of reg.classes) for (const g of classOwnSkills(reg, cl)) if (!signature.has(g)) signature.set(g, classTier(cl));
 
   const rest = reg.authoredSkills().filter((s) => !byId.has(s.id) && !s.tags.includes('monster'));
   // Parents before children so a technique chain follows its first link.
@@ -326,7 +337,7 @@ export function buildStarChartData(reg: Registry, book: SkillBook): StarChartDat
       return st === 'available' || st === 'active' || st === 'ready';
     });
     const seenEcho = (book.state.witness[s.id] ?? 0) > 0;
-    const sig = s.constellation === 'crown' && reg.classes.some((c) => whispered.has(c.id) && (c.grants ?? []).includes(s.id));
+    const sig = s.constellation === 'crown' && reg.classes.some((c) => whispered.has(c.id) && classOwnSkills(reg, c).includes(s.id));
     if (s.depth === 0 || visibleQuest || seenEcho || sig) put(s, 'revealed');
   }
   // Recipes: discovered → result + lines; whispered (its hint heard) → a faint '?' between the ingredients.

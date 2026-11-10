@@ -8,7 +8,8 @@ import { CLASS, classMaxRank } from '../core/classes';
 import type { GameController } from './controller';
 import { SPARK_RUNE } from './hud';
 import { $, $$, esc, hex } from './util';
-import { classLevel, effectLine, familyName, oneLine, seen, shapeWord, stars } from './words';
+import { nextRewardLine } from './classinfo';
+import { article, classLevel, effectLine, familyName, oneLine, seen, shapeWord, stars } from './words';
 
 export interface DialogOption {
   label: string;
@@ -265,9 +266,10 @@ export function wireDiscoveryCards(ui: DiscoveryHost, ctrl: GameController): () 
       const keepsake = cls.imprint ? reg.passive(cls.imprint) : undefined;
       const first = book.flag(SEEN.classRank) < 1;
       const image = art(ctrl, 'cls', cls.id);
+      const next = nextRewardLine(reg, cls, rank);
       let card: DiscoveryCard | null = null;
       if (rank >= max) {
-        card = { kind: 'class', icon: cls.icon, image, kicker: 'CLASS MASTERED', title: cls.name, body: `${esc(cls.name)} reached its top ${classLevel(rank)}.` };
+        card = { kind: 'class', icon: cls.icon, image, kicker: 'CLASS MASTERED', title: cls.name, body: `You mastered ${esc(cls.name)}. Its card wears a gold border now.` };
       } else if (keepsake && rank === CLASS.imprintAt) {
         card = {
           kind: 'class',
@@ -285,8 +287,8 @@ export function wireDiscoveryCards(ui: DiscoveryHost, ctrl: GameController): () 
           image,
           kicker: classLevel(rank).toUpperCase(),
           title: cls.name,
-          body: 'Use your class skills to level it up. Each level gives a perk point.',
-          cta: cls.tree?.length ? { label: 'Perks', run: () => ui.open('classes', `tree:${cls.id}`) } : undefined,
+          body: `Fight as ${esc(article(cls.name))} to level it up.${next ? `<br><small>${esc(next)}</small>` : ''}`,
+          cta: { label: 'Class', run: () => ui.open('classes', cls.id) },
         };
       }
       if (!card) return;

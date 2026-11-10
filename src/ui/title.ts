@@ -1,7 +1,11 @@
 import type { WeaponType } from '../core/types';
+import { GAME_DATA } from '../data';
 import { SOLD_WEAPONS, WEAPONS } from '../data/weapons';
 import { esc } from './util';
-import { oneLine } from './words';
+import { WEAPON_WORD, oneLine } from './words';
+
+/** Weapons a new hero may start with: the smith's three, and Bare Hands once its basic attack is in the data. */
+const START_WEAPONS: WeaponType[] = [...SOLD_WEAPONS, ...(GAME_DATA.skills.some((s) => s.id === WEAPONS.fists.basic) ? (['fists'] as const) : [])];
 
 export interface TitleChoice {
   kind: 'continue' | 'new';
@@ -43,12 +47,12 @@ export function showTitle(parent: HTMLElement, hasSave: boolean, savedName?: str
           <h2>Who are you?</h2>
           <input class="name" maxlength="16" placeholder="Your name" value="" autocomplete="off" />
           <h3>Pick your first weapon</h3>
-          <p class="fine">Every skill you learn works with any weapon.</p>
+          <p class="fine">If a move uses a weapon, you need that weapon.</p>
           <div class="weapon-pick">
-            ${[...SOLD_WEAPONS]
+            ${START_WEAPONS
               .map(
                 (w) => `<button class="wcard ${w === weapon ? 'on' : ''}" data-w="${w}">
-                  <span class="ico">${WEAPONS[w].icon}</span><b>${w[0].toUpperCase() + w.slice(1)}</b>
+                  <span class="ico">${WEAPONS[w].icon}</span><b>${WEAPON_WORD[w]}</b>
                   <small>${esc(oneLine(WEAPONS[w].blurb))}</small></button>`,
               )
               .join('')}

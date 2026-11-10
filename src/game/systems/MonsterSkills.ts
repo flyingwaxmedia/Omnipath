@@ -495,10 +495,25 @@ export class MonsterSkills {
     this.s.floatText(m.x, this.headY(m, 16), 'Interrupted!', '#9fe0ff', 12);
   }
 
+  /** v4: a player skill that interrupts struck `m`: its wind-up (if any) is dropped. True when one was. */
+  interruptBy(m: Monster): boolean {
+    if (!this.active.some((a) => a.m === m && a.windup && a.state === 'pending')) return false;
+    this.interrupt(m);
+    return true;
+  }
+
+  /** v4: some monster is winding a technique up at the player right now (AUTO raises a shield for it). */
+  windingUp(): boolean {
+    const now = this.s.time.now;
+    return this.active.some((a) => a.windup && a.state === 'pending' && a.m.alive && now >= a.start && a.skill.shape.kind !== 'buff');
+  }
+
   /** monsterTelegraphEnd for an announced (wind-up) tell. */
   private ended(a: Pending, reason: 'resolve' | 'cancel'): void {
     if (reason === 'cancel') a.state = 'cancelled';
     if (a.windup) gameBus.emit('monsterTelegraphEnd', { id: a.id, monster: a.m, reason });
+    // v4: a monster that just finished its own technique shows an Opening (class marks that land on openings).
+    if (a.windup && reason === 'resolve') this.s.combat.opening(a.m);
   }
 
   /** Drops a monster's pending technique and dash (death, leash, interrupt). Fired projectiles keep flying. */

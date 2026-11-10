@@ -41,6 +41,11 @@ export const UI_SLICES = {
   ui_frame_card: 5,
   ui_frame_button: 7,
   ui_frame_button_down: 7,
+  // v4 frame weights (SPEC-v4 §11.7): heavy = things you tap that matter most, light = slots, strip = no frame.
+  ui_frame_heavy: 8,
+  ui_frame_light: 3,
+  ui_frame_light_on: 3,
+  ui_strip: 4,
   ui_bar_frame: 3,
   ui_pill: 4,
   ui_pill_safe: 4,
@@ -253,6 +258,26 @@ function drawFrames(scene: Phaser.Scene): void {
   pixelTex(scene, 'ui_bar_frame', 10, 10, (c) => {
     frameRect(c, 10, 10, [OUT, [U.gold, U.bevel], OUT], 1, U.deeper);
   });
+  // ---- v4 frame weights. Gold only on tappable things: heavy carries the bevel, light is a quiet 1 px bronze line,
+  // strip is no frame at all (a soft dark strip whose ends fade in two hard steps: no smooth gradient).
+  pixelTex(scene, 'ui_frame_heavy', 26, 26, (c) => {
+    frameRect(c, 26, 26, [OUT, [U.goldHi, U.bronzeLo], [U.gold, U.bronzeLo], U.bronze, [U.bevel, U.gold], OUT, [U.deeper, '#2a1c12']], 3, U.deep);
+    for (const [x, y] of [[4, 4], [21, 4], [4, 21], [21, 21]]) stud(c, x, y, false);
+  });
+  const light = (key: string, line: Band, fill: string): void =>
+    pixelTex(scene, key, 10, 10, (c) => {
+      frameRect(c, 10, 10, [OUT, line, [U.deeper, '#241810']], 1, fill);
+    });
+  light('ui_frame_light', ['#6a4c2c', '#4a3420'], 'rgba(24,17,12,0.86)');
+  light('ui_frame_light_on', [U.gold, U.bronze], 'rgba(34,24,15,0.9)');
+  pixelTex(scene, 'ui_strip', 12, 12, (c) => {
+    paint(c, 12, 12, (x, y) => {
+      const e = Math.min(x, 11 - x, y, 11 - y);
+      const corner = Math.min(x, 11 - x) + Math.min(y, 11 - y);
+      if (corner < 2) return null;
+      return e === 0 ? 'rgba(18,12,10,0.28)' : e === 1 ? 'rgba(18,12,10,0.46)' : 'rgba(18,12,10,0.6)';
+    });
+  });
   const pill = (key: string, base: string, hi: string): void =>
     pixelTex(scene, key, 12, 10, (c) => {
       frameRect(c, 12, 10, [OUT, [U.gold, U.bevel], OUT], 2, (_x, y) => (y === 3 ? hi : base));
@@ -393,6 +418,17 @@ export function pixelSnap(cssPx: number, artPx: number, dpr: number = typeof win
  */
 export const UI_FONT_STACK = "'Pixelify Sans', ui-monospace, monospace";
 export const UI_FONT_SMALL_STACK = "'Tiny5', 'Pixelify Sans', ui-monospace, monospace";
+/**
+ * v4 type (SPEC-v4 §11.7): two faces, three sizes.
+ *  - BODY: Tiny5, a plain even-stroke pixel face, for numbers and body text. Crisp only at multiples of 8 px.
+ *  - DISPLAY: the game's own drawn bitmap face (render/glyphs.ts), painted to an image by render/fonts.ts
+ *    displayText() / displayLabel() for zone names and headers. The stack below is only the fallback for display
+ *    text that cannot be an image (it must stay rare).
+ */
+export const UI_FONT_BODY_STACK = "'Tiny5', ui-monospace, monospace";
+export const UI_FONT_DISPLAY_STACK = "'Pixelify Sans', 'Tiny5', ui-monospace, monospace";
+/** The three text sizes (CSS px): small labels, body and numbers, headers. */
+export const UI_TEXT_SIZES = { s: 8, m: 16, l: 24 } as const;
 
 /**
  * A CSS block exposing every UI texture as custom properties on :root plus ready-made helper classes.
@@ -406,7 +442,16 @@ export const UI_FONT_SMALL_STACK = "'Tiny5', 'Pixelify Sans', ui-monospace, mono
  */
 export function uiCss(scene: Phaser.Scene): string {
   drawUi(scene);
-  const vars: string[] = ['  --ui-px: 1px;', `  --ui-font: ${UI_FONT_STACK};`, `  --ui-font-small: ${UI_FONT_SMALL_STACK};`];
+  const vars: string[] = [
+    '  --ui-px: 1px;',
+    `  --ui-font: ${UI_FONT_STACK};`,
+    `  --ui-font-small: ${UI_FONT_SMALL_STACK};`,
+    `  --ui-font-body: ${UI_FONT_BODY_STACK};`,
+    `  --ui-font-display: ${UI_FONT_DISPLAY_STACK};`,
+    `  --ui-text-s: ${UI_TEXT_SIZES.s}px;`,
+    `  --ui-text-m: ${UI_TEXT_SIZES.m}px;`,
+    `  --ui-text-l: ${UI_TEXT_SIZES.l}px;`,
+  ];
   const rules: string[] = [];
   for (const [key, slice] of Object.entries(UI_SLICES)) {
     const name = key.replace(/^ui_/, '').replace(/_/g, '-');
@@ -435,6 +480,8 @@ export function uiCss(scene: Phaser.Scene): string {
     '.ui-bar>.ui-bar-fill.hp{background-image:var(--ui-bar-fill-hp)}',
     '.ui-bar>.ui-bar-fill.sp{background-image:var(--ui-bar-fill-sp)}',
     '.ui-bar>.ui-bar-fill.exp{background-image:var(--ui-bar-fill-exp)}',
+    '.ui-display{display:inline-block;background:center / 100% 100% no-repeat;image-rendering:pixelated;vertical-align:middle;flex:none}',
+    `.ui-body{font-family:var(--ui-font-body);font-size:var(--ui-text-m);line-height:1;color:${PAL.ui.text}}`,
     `.ui-text{font-family:var(--ui-font);color:${PAL.ui.text};text-shadow:1px 0 ${OUT},-1px 0 ${OUT},0 1px ${OUT},0 -1px ${OUT}}`,
   );
   return `:root{\n${vars.join('\n')}\n}\n${rules.join('\n')}\n`;

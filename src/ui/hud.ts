@@ -1,26 +1,34 @@
-// HUD v3 (docs/CLIENT-v3.md §2, docs/ART-DIRECTION.md §5, docs/UX-SIMPLE.md) — no joystick, tap-to-move:
-//   top-left    portrait medallion + level badge, "Lv N · Name", HP / SP bars with numbers, stat strip (+ class);
-//   top-centre  zone plate (name, Safe / Hunting / Dungeon / Warden, level band) + a slim strip; target and auto-travel
-//               under it (landscape: the toasts too);
+// HUD v4 (docs/SPEC-v4.md §11.7 "HUD diet", docs/CLIENT-v3.md §2, docs/UX-SIMPLE.md) — no joystick, tap-to-move:
+//   top-left    portrait medallion + level badge (heavy frame; tap → Class), "Lv N · Name" and HP / SP bars on a soft
+//               dark strip (no frame: you cannot tap it). The stat strip lives in the Class screen now;
+//   top-centre  the zone plate: drawn in the display face on arrival, then it shrinks to a small tag (tap → Map; the
+//               explored % lives in the Map). The target and auto-travel sit under it (landscape: the toasts too);
 //   top-right   framed buttons Skills · Fuse · Class · Codex · Bag · Map · ☰ (Fuse after the first element), the
-//               collapsible minimap under them, then the Pursuits tracker (≤ 2 rows: tracked quests, then goals; "+N");
+//               collapsible minimap under them, then the tracker: ONE line, collapsed; tap to open its rows;
 //   left edge   round quick buttons: heal (count), recall (count), rest;
-//   bottom      3-line fading log, the skill bar (class slots with the emblem and a class-coloured bracket, your slots
-//               plain; portrait: class row + your row), the attack cluster (hold to swing, AUTO, Target, SP potion)
-//               and the EXP bar. Portrait: the toasts rise from just above the bar.
-// The layout pass (layout()) measures the widgets and places the zone plate, bar, log, Pursuits and toasts so portrait /
-// landscape phones, iPads and desktops never overlap, and portrait keeps the middle of the screen (where the player
-// stands; tap-to-move is the only way to move) free. Updates are throttled by the caller (≤ 10 Hz) and only touch the
+//   bottom      the log (fades 4 s after its last line), the class mechanic widget (one per worn class, its only
+//               label the mechanic's name), the skill bar (light frames; icon grounds tinted by element; class slots
+//               framed in the class colour; a skill that needs another weapon is dimmed and wears that weapon — tap
+//               = Equip), the attack cluster (heavy frame; hold to swing, AUTO, Target, SP potion) and the EXP bar.
+// Frame weights: heavy (portrait, attack button, menu buttons), light (slots), none (text on a soft dark strip).
+// Gold only on things you can tap. Type: one plain pixel face for body and numbers, the drawn display face for the
+// zone name and the headline; three sizes (--fs-s, --fs-m, display art).
+// The layout pass (layout()) measures the widgets and places the zone plate, bar, log, tracker and toasts so portrait /
+// landscape phones, iPads and desktops never overlap, and nothing covers the middle of the screen (where the player
+// stands; tap-to-move is the only way to move). Updates are throttled by the caller (≤ 10 Hz) and only touch the
 // DOM when a value changed. Frames come from the uiCss custom properties (./hud/art.ts).
 import type { ElementDef, SkillDef } from '../core/types';
 import { WEAPONS } from '../data/weapons';
 import { mapById } from '../data/world';
+import { displayText } from '../game/render/fonts';
 import { expToNext } from '../game/session';
 import { discoveredRoute } from '../game/world/runtime';
 import type { BarSlotView, GameController, PursuitView, ZoneView } from './controller';
-import { ensureUiArt } from './hud/art';
+import { equipForSkill, lockOf } from './classinfo';
+import { ensureUiArt, hasV4Art } from './hud/art';
+import { mechanicHint, mechanicHtml, mechanicOf, mechanicTap } from './hud/mechanic';
 import { MARKER_ART } from '../game/entities/actorArt';
-import { HUD_WORDS, SPARK_RUNE, barTabsHtml, digits, pursuitHtml, slotHtml, statsHtml, zonePlateHtml, zoneStripHtml, type HudArt, type QuestMarkArt } from './hud/html';
+import { HUD_WORDS, SPARK_RUNE, digits, pursuitHtml, pursuitLineHtml, slotHtml, zonePlateHtml, type HudArt, type QuestMarkArt } from './hud/html';
 import {
   HOLD_MS,
   HOLD_SLOP,
@@ -84,7 +92,10 @@ export interface HudActions {
   toggleAuto(): void;
 }
 
-const PZ_KEY = 'omnipath.ui.pursuits';
+/** v4: the tracker starts collapsed on every screen (a new key: the old default was open). */
+const PZ_KEY = 'omnipath.ui.pursuits4';
+/** The log goes quiet this long after its last line (SPEC-v4 §11.7). */
+export const LOG_QUIET_MS = 4000;
 
 function levelClass(monster: number, player: number): string {
   const d = monster - player;
@@ -128,7 +139,7 @@ export class Hud {
   private pzList!: HTMLElement;
   private hotbar!: HTMLElement;
   private slotsEl!: HTMLElement;
-  private grpsEl!: HTMLElement;
+  private mechEl!: HTMLElement;
   private cluster!: HTMLElement;
   private atkBtn!: HTMLButtonElement;
   /** The AUTO switch (never `$(cluster, '.auto')`: the attack button wears `.auto` too while AUTO is on). */
@@ -150,7 +161,7 @@ export class Hud {
   private castKey = '';
   private castProgress = 0;
   private navKey = '';
-  private t = { stats: 0, badges: 0, zone: 0, pz: 0 };
+  private t = { stats: 0, badges: 0, zone: 0, pz: 0, slots: 0 };
   private pursuits: PursuitView[] = [];
   private pzOpen: boolean | null = null;
   /** Slot presses in progress, one per finger (two-thumb play: each press casts or edits on its own). */
@@ -168,6 +179,9 @@ export class Hud {
   private uiArt = false;
   private hinted = new Set<string>();
   private headTimer = 0;
+  private logTimer = 0;
+  private wornColor = '#e9c46a';
+  private mechKey = '';
   private toastTimers = new WeakMap<Element, number[]>();
   /** The HUD's pixel size (CSS px per HUD art px = `--ui-px`) and the art-px viewport. */
   private scale: HudScale = { px: 1, n: 1, w: 0, h: 0, fits: true };
@@ -193,10 +207,9 @@ export class Hud {
           <div class="vb hp"><i></i><span></span></div>
           <div class="vb sp"><i></i><span></span></div>
         </div>
-        <div class="me-stats"></div>
       </div>
       <div class="hud-centre">
-        <button class="zone-banner" aria-label="Open the map"><span class="zone-plate"></span><span class="zone-strip"></span></button>
+        <button class="zone-banner" aria-label="Open the map"><span class="zone-plate"></span></button>
         <div class="target hidden"></div>
         <div class="navpill hidden" role="status">
           <button class="np-open" aria-label="Show route on the map"><i class="g g-map" aria-hidden="true"></i><span class="np-txt"><b></b><small></small></span></button>
@@ -211,11 +224,9 @@ export class Hud {
         ).join('')}</nav>
         <div class="mm-dock"></div>
         <div class="pursuits hidden">
+          <button class="pz-tab" aria-label="${HUD_WORDS.pursuits}" aria-expanded="false"></button>
           <div class="pz-list"></div>
-          <div class="pz-side">
-            <button class="pz-tab" aria-label="${HUD_WORDS.pursuits}"><i class="g g-quest" aria-hidden="true"></i><b class="pz-n"></b><small>${HUD_WORDS.pursuits}</small></button>
-            <button class="pz-more hidden" aria-label="More quests: open the quest log"></button>
-          </div>
+          <button class="pz-more hidden" aria-label="More quests: open the quest log"></button>
         </div>
       </div>
       <div class="quick">
@@ -224,7 +235,7 @@ export class Hud {
         <button class="qk" data-q="rest" aria-label="${HUD_WORDS.rest}"><span class="q-ico"><i class="g g-rest" aria-hidden="true"></i></span><small>${HUD_WORDS.rest}</small></button>
       </div>
       <div class="log" aria-live="off"></div>
-      <div class="hotbar"><div class="grps"></div><div class="slots"></div></div>
+      <div class="hotbar"><div class="mech-dock"></div><div class="slots"></div></div>
       <div class="cluster">
         <button class="atk" aria-label="${HUD_WORDS.attack} (hold to keep swinging)"><i class="g g-attack" aria-hidden="true"></i><span class="cd" aria-hidden="true"></span><span class="ring" aria-hidden="true"></span><span class="rk hidden" aria-hidden="true"></span></button>
         <button class="rb auto" aria-pressed="false" aria-label="${HUD_WORDS.auto}"><i class="g g-auto" aria-hidden="true"></i><em class="pill">${HUD_WORDS.off}</em></button>
@@ -247,7 +258,7 @@ export class Hud {
     this.pzList = q('.pz-list');
     this.hotbar = q('.hotbar');
     this.slotsEl = q('.hotbar .slots');
-    this.grpsEl = q('.hotbar .grps');
+    this.mechEl = q('.hotbar .mech-dock');
     this.cluster = q('.cluster');
     this.atkBtn = q<HTMLButtonElement>('.cluster .atk');
     this.autoBtn = q<HTMLButtonElement>('.cluster .rb.auto');
@@ -270,15 +281,14 @@ export class Hud {
       ['hpS', '.vb.hp span'],
       ['spI', '.vb.sp i'],
       ['spS', '.vb.sp span'],
-      ['stats', '.me-stats'],
       ['expI', '.expbar i'],
       ['expS', '.expbar span'],
-      ['pzN', '.pz-n'],
     ] as const)
       this.v[k] = q(sel);
     this.wire();
     this.uiArt = ensureUiArt(ctrl);
     this.el.classList.toggle('ui-art', this.uiArt);
+    this.el.classList.toggle('v4-art', this.uiArt && hasV4Art());
     if (typeof ResizeObserver !== 'undefined') {
       const ro = new ResizeObserver(() => this.queueLayout());
       for (const e of [this.me, this.right, this.zoneEl, this.cluster, this.hotbar, this.mmDock]) ro.observe(e);
@@ -377,6 +387,13 @@ export class Hud {
       const h = this.holds.get(e.pointerId);
       if (h && Math.hypot(e.clientX - h.x, e.clientY - h.y) > HOLD_SLOP) this.endHold(e.pointerId);
     });
+    // The stance toggle is the one mechanic widget you tap.
+    this.mechEl.addEventListener('click', (e) => {
+      if (!(e.target as HTMLElement).closest('.mech.tap')) return;
+      const r = mechanicTap(c);
+      if (r && !r.ok && r.message) this.toast(esc(r.message));
+      this.updateMechanic();
+    });
     this.el.addEventListener('contextmenu', (e) => e.preventDefault());
     // Desktop: M opens the map.
     window.addEventListener('keydown', (e) => {
@@ -436,6 +453,9 @@ export class Hud {
     if (!h) return;
     const i = h.i;
     this.endHold(pointerId);
+    if (this.equipFor(i)) return;
+    const waiting = this.slots.find((x) => x.index === i)?.waiting;
+    if (waiting) this.toast(esc(waiting));
     this.ctrl.castSlot(i);
     const b = this.slotsEl.querySelector<HTMLElement>(`.slot[data-slot="${i}"]`);
     if (b) {
@@ -443,6 +463,26 @@ export class Hud {
       void b.offsetWidth;
       b.classList.add('tapped');
     }
+  }
+
+  /**
+   * A slot whose skill needs another weapon ("Needs a sword — Equip"): the tap equips that weapon when you own it,
+   * else says the one line. True when the slot was locked (no cast).
+   */
+  private equipFor(i: number): boolean {
+    const v = this.slots.find((s) => s.index === i);
+    if (!v?.skillId) return false;
+    const c = this.ctrl;
+    const lock = v.lock ? { need: v.lock.weapon, line: v.lock.line, owned: v.lock.owned } : lockOf(c, v.skillId);
+    if (!lock) return false;
+    if (!lock.owned) {
+      this.toast(`${esc(lock.line)}. Brann sells one in Hearthvale.`);
+      return true;
+    }
+    const r = equipForSkill(c, v.skillId, lock.need);
+    if (r.message) this.toast(esc(r.message));
+    this.renderHotbar();
+    return true;
   }
 
   private slotClick(e: MouseEvent): void {
@@ -513,12 +553,15 @@ export class Hud {
     const k = art > 0 ? Math.round(art * dpr) : Math.ceil(dpr);
     const s = hudScale(W, H, dpr, k);
     const lay = hudLayoutClasses(s.w, s.h);
-    const key = `${s.px}|${lay.port}|${lay.narrow}|${lay.short}|${lay.big}`;
+    const key = `${s.px}|${dpr}|${lay.port}|${lay.narrow}|${lay.short}|${lay.big}`;
     this.scale = s;
     this.lay = lay;
     if (key === this.layKey) return;
     this.layKey = key;
     document.documentElement.style.setProperty('--ui-px', `${s.px}px`);
+    // The body face's pixel (CSS px): the HUD's own pixel where that reads well, else the next whole device pixel up
+    // (phones: 5 device px instead of 3), so text is always on whole device pixels and never under TEXT_MIN_PX.
+    this.root.style.setProperty('--tx', `${textPixel(s.px, dpr)}px`);
     for (const c of ['port', 'narrow', 'short', 'big'] as const) this.root.classList.toggle(`hud-${c}`, lay[c]);
     this.sizeFace();
   }
@@ -605,12 +648,7 @@ export class Hud {
     this.setVar('--log-left', logLeft ? `${snap(logLeft)}px` : '');
     const logRoom = logLeft ? clLeft - 8 * u - logLeft : Infinity;
     this.setVar('--log-w', `${snap(stacked ? Math.min(320 * u, W * 0.62, logRoom) : Math.min(340 * u, room))}px`);
-    // Stat strip: when the buttons stack into rows beside it (portrait phones), its text stops short of them (only the
-    // fading right padding may slide under the buttons).
     const menu = this.menuEl.getBoundingClientRect();
-    const st = this.v.stats.getBoundingClientRect();
-    const statsRoom = menu.width > 0 && menu.bottom > st.top && menu.left > st.left ? `${snap(Math.max(80 * u, menu.left + 8 * u - st.left))}px` : '9999px';
-    this.setVar('--stats-room', statsRoom);
     // Pursuits: ≤ 2 rows, above the attack cluster and (portrait) above the middle band; the rest behind "+N".
     this.fitPursuits(Math.min(cl.width ? cl.top - 10 * u : H - 120 * u, H > W ? H * 0.4 : Infinity));
     // Zone plate (+ the target under it): whole art px wide (its natural width rounded up), then placed.
@@ -640,7 +678,7 @@ export class Hud {
     const mm = rect(this.mmDock);
     const pz = rect(this.pzEl);
     const quick = rect(this.el.querySelector('.quick'));
-    const place = placeZone({ W, m, u, zw, zwCompact, zh, below: port ? 0 : 48 * u, portrait: port, plate, me, stats: rect(this.v.stats), menu, minimap: mm, pursuits: pz, quick });
+    const place = placeZone({ W, m, u, zw, zwCompact, zh, below: port ? 0 : 48 * u, portrait: port, plate, me, stats: null, menu, minimap: mm, pursuits: pz, quick });
     zone.classList.toggle('compact', place.compact);
     const width = place.maxW !== undefined ? Math.floor(place.maxW / u) * u : place.compact ? zwCompact : zw;
     zone.style.width = `${width}px`;
@@ -728,8 +766,6 @@ export class Hud {
 
   /** The open tracker: at most PURSUIT_ROWS rows, only those above `limit`; "+N" (→ the quest log) for the rest. */
   private fitPursuits(limit: number): void {
-    // The default open state follows the screen (folded on portrait phones): keep the list's class in step after a
-    // rotation, so what shows is what is fitted.
     const open = this.pursuitsOpen();
     if (this.pzEl.classList.contains('open') !== open) {
       this.pzEl.classList.toggle('open', open);
@@ -792,7 +828,6 @@ export class Hud {
     const now = performance.now();
     if (now - this.t.stats > 500) {
       this.t.stats = now;
-      this.updateStats();
       this.updateQuick();
       this.updatePortrait();
     }
@@ -803,28 +838,13 @@ export class Hud {
         this.uiArt = ensureUiArt(c);
         this.el.classList.toggle('ui-art', this.uiArt);
       }
+      if (this.uiArt && !this.el.classList.contains('v4-art') && hasV4Art()) this.el.classList.add('v4-art');
     }
     if (now - this.t.zone > 2000) {
       this.t.zone = now;
       this.renderZone();
     }
     if (now - this.t.pz > 3000) this.renderPursuits();
-  }
-
-  /** Stat strip: ATK · MATK · DEF and the worn class with its Class Level. */
-  updateStats(): void {
-    const c = this.ctrl;
-    let worn = null;
-    let showClass = false;
-    try {
-      worn = c.wornClass();
-      showClass = !!worn || c.unlocks().classes;
-    } catch {
-      /* scene not ready */
-    }
-    const st = c.stats();
-    const html = statsHtml(st, worn, worn ? c.iconUrl('cls', worn.id) : '', showClass);
-    this.set('stats', this.v.stats, html, 'html');
   }
 
   /** The portrait medallion: the player's current look (worn class outfit). */
@@ -933,13 +953,17 @@ export class Hud {
         return;
       }
     }
-    const plate = zonePlateHtml(view);
-    const strip = zoneStripHtml(view, (e) => this.ctrl.iconUrl('el', e));
-    const key = plate + strip;
-    if (this.last.zone === key) return;
-    this.last.zone = key;
+    // The arrival plate wears the name in the drawn display face (render lane: an image); the tag is plain text.
+    let title = null;
+    try {
+      title = displayText(view.name, 'gold');
+    } catch {
+      title = null;
+    }
+    const plate = zonePlateHtml(view, title);
+    if (this.last.zone === plate) return;
+    this.last.zone = plate;
     $(this.zoneEl, '.zone-plate').innerHTML = plate;
-    $(this.zoneEl, '.zone-strip').innerHTML = strip;
     this.zoneEl.setAttribute('aria-label', `${view.name}: open the map`);
     if (view.name !== this.zoneName) {
       this.zoneName = view.name;
@@ -948,13 +972,21 @@ export class Hud {
     this.queueLayout();
   }
 
-  /** Portrait / short landscape: the zone plate shows on arrival and fades after a few seconds (CSS: .hud-port, .hud-short). */
+  /**
+   * The zone plate animates in on arrival and, after a few seconds, shrinks to a small tag (`.tag`). Portrait / short
+   * landscape: it fades away altogether (CSS: .hud-port, .hud-short), so the middle band stays clear.
+   */
   private armZoneFade(): void {
-    this.zoneEl.classList.remove('faded', 'gone');
+    this.zoneEl.classList.remove('faded', 'gone', 'tag');
     clearTimeout(this.zoneFade);
+    this.queueLayout();
     this.zoneFade = window.setTimeout(() => {
-      this.zoneEl.classList.add('faded');
-      this.zoneFade = window.setTimeout(() => this.zoneEl.classList.add('gone'), 650);
+      this.zoneEl.classList.add('faded', 'tag');
+      this.queueLayout();
+      this.zoneFade = window.setTimeout(() => {
+        this.zoneEl.classList.add('gone');
+        this.queueLayout();
+      }, 650);
     }, 4000);
   }
 
@@ -1233,7 +1265,7 @@ export class Hud {
 
   // ================================================================ log + toasts
 
-  /** Compact log: the last 3 lines, each fading out after a few seconds. */
+  /** Compact log: the last 3 lines; the whole log fades LOG_QUIET_MS after its last line. */
   log(msg: string, kind: LogKind = 'info'): void {
     const line = document.createElement('div');
     line.className = `line ${kind}`;
@@ -1241,8 +1273,12 @@ export class Hud {
     wrapDigits(line);
     this.logEl.appendChild(line);
     while (this.logEl.children.length > 3) this.logEl.firstElementChild?.remove();
-    setTimeout(() => line.classList.add('fade'), 7000);
-    setTimeout(() => line.remove(), 8200);
+    this.logEl.classList.remove('quiet');
+    clearTimeout(this.logTimer);
+    this.logTimer = window.setTimeout(() => {
+      this.logEl.classList.add('quiet');
+      this.logTimer = window.setTimeout(() => this.logEl.replaceChildren(), 700);
+    }, LOG_QUIET_MS);
   }
 
   /** Toast under the zone plate (max 3; the same text again just restarts its timer). */
@@ -1280,7 +1316,7 @@ export class Hud {
     if (this.pzOpen !== null) return this.pzOpen;
     const saved = store(PZ_KEY);
     if (saved === '1' || saved === '0') return (this.pzOpen = saved === '1');
-    return !this.portraitPhone();
+    return false;
   }
 
   /** Tracked quests first, then at most 2 goals — each ONE line; tap → the quest log / the right panel. */
@@ -1293,16 +1329,19 @@ export class Hud {
       return;
     }
     this.pursuits = list;
-    const html = list.map((p, i) => pursuitHtml(p, i, p.icon ? this.ctrl.iconUrl(p.icon.kind, p.icon.id) : '', p.kind === 'quest' ? this.markArt(!!p.ready) : null)).join('');
+    const one = pursuitLineHtml(list, list[0]?.kind === 'quest' ? this.markArt(!!list[0].ready) : null);
+    const html = one + list.map((p, i) => pursuitHtml(p, i, p.icon ? this.ctrl.iconUrl(p.icon.kind, p.icon.id) : '', p.kind === 'quest' ? this.markArt(!!p.ready) : null)).join('');
     if (this.last.pz !== html) {
       const before = this.last.pzKeys ?? '';
       const keys = list.map((p) => p.key).join(',');
       this.last.pz = html;
       this.last.pzKeys = keys;
-      this.pzList.innerHTML = html;
+      this.pzList.innerHTML = html.slice(one.length);
+      const tab = $(this.pzEl, '.pz-tab');
+      tab.innerHTML = one;
+      tab.setAttribute('aria-label', list[0] ? `${list[0].title}: ${list[0].line}. Tap for more.` : HUD_WORDS.pursuits);
       this.pzEl.classList.toggle('hidden', !list.length);
       const ready = list.filter((p) => p.ready).length;
-      this.v.pzN.textContent = list.length ? String(list.length) : '';
       this.pzEl.classList.toggle('has-ready', ready > 0);
       // Something new while folded away: make the tab glow once.
       if (!this.pursuitsOpen() && keys !== before && before !== '') {
@@ -1357,27 +1396,54 @@ export class Hud {
     const art = this.art();
     this.sparkSkills.clear();
     for (const s of slots) if (s.skillId && c.reg.morphsFrom(s.skillId).some((m) => !!m.spark && !c.book.has(m.to))) this.sparkSkills.add(s.skillId);
+    this.wornColor = worn?.color ?? '#e9c46a';
+    this.last.weapon = p.weapon;
+    let locks = 0;
     const html = slots
-      .map((s) =>
-        slotHtml(s, art, {
+      .map((s) => {
+        const lock = s.lock ? { need: s.lock.weapon, line: s.lock.line, owned: s.lock.owned } : s.skillId ? lockOf(c, s.skillId) : null;
+        if (lock) locks++;
+        const el = s.element ? c.reg.element(s.element) : undefined;
+        return slotHtml(s, art, {
+          lock: lock ?? undefined,
+          elementColor: el ? hex(el.color) : undefined,
           auto: p.autoOn,
           classColor: s.kind === 'class' ? (worn && s.classId === worn.id ? worn.color : '#b0803a') : undefined,
           className: worn?.name,
           spark: !!s.skillId && this.sparkSkills.has(s.skillId),
-        }),
-      )
+        });
+      })
       .join('');
     const classCount = slots.filter((s) => s.kind === 'class').length;
     this.slotsEl.innerHTML = html;
-    this.grpsEl.innerHTML = barTabsHtml(classCount, slots.length, worn, worn ? c.iconUrl('cls', worn.id) : '');
     this.hotbar.classList.toggle('has-class', classCount > 0);
     this.last = Object.fromEntries(Object.entries(this.last).filter(([k]) => !k.startsWith('slot:')));
     if (this.castKey) this.slotsEl.querySelector(`.slot[data-skill="${CSS.escape(this.castKey)}"]`)?.classList.add('casting');
     this.applyAuto(p.autoOn);
     this.updateCooldowns();
     this.queueLayout();
+    this.updateMechanic();
+    if (locks > 0) this.hint('weapon_lock', 'A dimmed skill needs another weapon. Tap it to equip that weapon.');
     if (classCount > 0) this.hint('class_slots', 'Your class fills the framed slots by itself.');
     if (slots.some((s) => s.kind === 'own' && s.skillId)) this.hint('own_slot_hold', 'Hold one of your slots to swap its skill.');
+  }
+
+  /**
+   * The class mechanic widget above the bar (≤ 10 Hz): one widget for the worn class, hidden when it has none. The
+   * first time a kind of widget shows, one line says what it is.
+   */
+  updateMechanic(): void {
+    const v = mechanicOf(this.ctrl);
+    const html = v ? mechanicHtml(v, v.color ?? this.wornColor) : '';
+    if (html === this.mechKey) return;
+    const shown = !!this.mechKey;
+    this.mechKey = html;
+    this.mechEl.innerHTML = html;
+    if (shown !== !!html) {
+      this.hotbar.classList.toggle('has-mech', !!html);
+      this.queueLayout();
+    }
+    if (v) this.hint(`mech_${v.kind}`, mechanicHint(v));
   }
 
   private applyAuto(on: boolean): void {
@@ -1403,6 +1469,13 @@ export class Hud {
   updateCooldowns(): void {
     const c = this.ctrl;
     const sp = c.session.player.sp;
+    // Another weapon in hand: the locks on the bar change with it.
+    if (this.last.weapon !== undefined && this.last.weapon !== c.session.player.weapon) {
+      this.renderHotbar();
+      return;
+    }
+    this.updateMechanic();
+    if (this.syncSlotStates()) return;
     for (const b of $$<HTMLElement>(this.slotsEl, '.slot[data-skill]')) {
       const id = b.dataset.skill!;
       this.cooldownOn(b, id);
@@ -1441,6 +1514,40 @@ export class Hud {
     }
   }
 
+  /**
+   * The class mechanic changes what slots do between bar renders (≈ 3 Hz): "needs more Vow" dims a slot, a skill the
+   * meter would power glows; a new weapon lock or a stance's other skill re-renders the bar (true then).
+   */
+  private syncSlotStates(): boolean {
+    const now = performance.now();
+    if (now - this.t.slots < 300) return false;
+    this.t.slots = now;
+    let slots: BarSlotView[];
+    try {
+      slots = this.ctrl.barSlots();
+    } catch {
+      return false;
+    }
+    const shape = (list: BarSlotView[]) => list.map((s) => `${s.skillId ?? ''}|${s.lock?.weapon ?? ''}|${s.lock?.owned ?? ''}|${s.castsAs?.skillId ?? ''}`).join(',');
+    if (shape(slots) !== shape(this.slots)) {
+      this.renderHotbar();
+      return true;
+    }
+    for (const s of slots) {
+      if (!s.skillId) continue;
+      const prev = this.slots.find((x) => x.index === s.index);
+      if (prev && !!prev.waiting === !!s.waiting && !!prev.boosted === !!s.boosted) continue;
+      const b = this.slotsEl.querySelector<HTMLElement>(`.slot[data-slot="${s.index}"]`);
+      if (!b) continue;
+      const locked = b.classList.contains('wlocked');
+      b.classList.toggle('waiting', !locked && !!s.waiting);
+      b.classList.toggle('boost', !locked && !s.waiting && !!s.boosted);
+      if (!locked) b.setAttribute('aria-label', s.waiting ? `${s.castsAs?.name ?? s.name ?? ''}: ${s.waiting}` : (s.castsAs?.name ?? s.name ?? ''));
+    }
+    this.slots = slots;
+    return false;
+  }
+
   private cooldownOn(b: HTMLElement, id: string): void {
     const { remain, total } = this.ctrl.cooldown(id);
     const f = total > 0 && remain > 0 ? Math.min(1, remain / total) : 0;
@@ -1459,4 +1566,17 @@ export class Hud {
       if (txt.textContent !== s) txt.textContent = s;
     }
   }
+}
+
+/** The smallest body-face pixel that still reads on a touch screen, in CSS px (8 of them make a 13 px line). */
+export const TEXT_MIN_PX = 1.6;
+
+/**
+ * CSS px per pixel of the body face: the HUD's art pixel (`px`) when that is at least TEXT_MIN_PX, else the smallest
+ * whole number of device pixels that is (never a fraction of a device pixel: the face stays crisp).
+ */
+export function textPixel(px: number, dpr: number): number {
+  const d = dpr > 0 && Number.isFinite(dpr) ? dpr : 1;
+  if (px >= TEXT_MIN_PX - 1e-9) return px;
+  return Math.max(Math.round(px * d), Math.ceil(TEXT_MIN_PX * d - 1e-6)) / d;
 }

@@ -5,18 +5,23 @@ import { aura } from './aura';
 import { bolt } from './bolt';
 import { burst } from './burst';
 import { decal } from './decal';
+import { emblem } from './emblem';
 import { erupt } from './erupt';
+import { field } from './field';
+import { mend } from './mend';
 import { missile } from './missile';
 import { motes } from './motes';
 import { nova } from './nova';
 import { orb } from './orb';
 import { puff } from './puff';
 import { ring } from './ring';
+import { shell } from './shell';
 import { sigil } from './sigil';
 import { slash } from './slash';
 import { status } from './status';
 import { tell } from './tell';
 import { thrust } from './thrust';
+import { warp } from './warp';
 
 export const TEMPLATES: TemplateMap = {
   slash,
@@ -36,6 +41,11 @@ export const TEMPLATES: TemplateMap = {
   aura,
   tell,
   afterimage,
+  field,
+  warp,
+  mend,
+  shell,
+  emblem,
 };
 
 /** Families whose small marks are matter chips (earth chips, magma crust): outlined like any matter. */
@@ -55,7 +65,7 @@ export function outlineAllowed(piece: VfxPiece, keyline = false): boolean {
     case 'motes':
       return piece.params.kind === 'chip';
     case 'burst':
-      return piece.params.cls === 'blunt' || piece.params.cls === 'star' || (piece.params.cls === 'magic' && MATTER_MARKS.has(piece.motif));
+      return piece.params.cls === 'blunt' || piece.params.cls === 'star' || piece.params.cls === 'slam' || (piece.params.cls === 'magic' && MATTER_MARKS.has(piece.motif));
     case 'slash':
       return piece.params.tier >= 2 && MATTER_MARKS.has(piece.motif);
     case 'erupt':
@@ -71,6 +81,14 @@ export function outlineAllowed(piece: VfxPiece, keyline = false): boolean {
     case 'nova':
       // Blast rocks (earth) and metal chips (steel) are matter.
       return piece.params.core === 'blast' && (piece.motif === 'earth' || piece.motif === 'steel' || piece.motif === 'danger');
+    case 'field':
+      // Rubble, frost and caltrops are matter.
+      return piece.motif === 'earth' || piece.motif === 'ice' || piece.motif === 'steel' || piece.motif === 'danger';
+    case 'warp':
+      return MATTER_MARKS.has(piece.motif);
+    case 'shell':
+      // Turning rock / crust plates.
+      return MATTER_MARKS.has(piece.motif);
     default:
       return false;
   }

@@ -19,6 +19,11 @@ const FRAMES: Record<string, number> = {
   ui_pill_hunt: 4,
   ui_pill_dungeon: 4,
   ui_pill_warden: 4,
+  // v4 frame weights (SPEC-v4 §11.7; render lane): heavy, light, and the frameless soft strip.
+  ui_frame_heavy: 8,
+  ui_frame_light: 3,
+  ui_frame_light_on: 3,
+  ui_strip: 4,
 };
 
 /** Fixed pieces the HUD uses. */
@@ -33,6 +38,16 @@ const cssName = (key: string) => `--ui-${key.replace(/^ui_/, '').replace(/_/g, '
 export function hasUiArt(): boolean {
   try {
     return getComputedStyle(document.documentElement).getPropertyValue('--ui-frame-plate').trim() !== '';
+  } catch {
+    return false;
+  }
+}
+
+/** True when the v4 frame weights exist (--ui-frame-light and --ui-strip): the HUD then wears them (.v4-art). */
+export function hasV4Art(): boolean {
+  try {
+    const cs = getComputedStyle(document.documentElement);
+    return cs.getPropertyValue('--ui-frame-light').trim() !== '' && cs.getPropertyValue('--ui-strip').trim() !== '';
   } catch {
     return false;
   }

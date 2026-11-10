@@ -75,7 +75,8 @@ function drawEffects(scene: Phaser.Scene): void {
     rect(c, 0, 2, 4, 2, '#9aa4b4');
   });
   // Ground marks: flat, hard-edged.
-  pixelTex(scene, 'shadow', 32, 12, (c) => disc(c, 16, 6, 15, 5, 'rgba(20,12,6,0.3)'));
+  // fallback blob only (render/shadows.ts gives every actor its real cast shadow): the shadow violet, never black
+  pixelTex(scene, 'shadow', 32, 12, (c) => disc(c, 16, 6, 13, 4, 'rgba(58,53,96,0.4)'));
   pixelTex(scene, 'target_ring', 48, 20, (c) => {
     ring(c, 24, 10, 22, 9, PAL.outline, 1);
     ring(c, 24, 10, 21, 8, '#ffdd55', 2);

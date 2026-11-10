@@ -19,12 +19,12 @@ import {
 } from '../src/game/vfx/types';
 
 describe('vfx contract', () => {
-  it('has 17 families with danger, and 17 components', () => {
+  it('has 17 families with danger, and 22 components (17 of v1 + field, warp, mend, shell, emblem)', () => {
     expect(FAMILY_IDS).toHaveLength(17);
     expect(new Set(FAMILY_IDS).size).toBe(17);
     expect(FAMILY_IDS).toContain('danger');
-    expect(COMPONENT_IDS).toHaveLength(17);
-    expect(new Set(COMPONENT_IDS).size).toBe(17);
+    expect(COMPONENT_IDS).toHaveLength(22);
+    expect(new Set(COMPONENT_IDS).size).toBe(22);
     expect(PHASE_IDS).toEqual(['telegraph', 'charge', 'cast', 'body', 'trail', 'impact', 'area', 'status', 'aura']);
   });
 

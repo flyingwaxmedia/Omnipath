@@ -360,4 +360,95 @@ const RESONANCE_PASSIVES: PassiveDef[] = [
   },
 ];
 
-export const PASSIVES: PassiveDef[] = [...TAG_PASSIVES, ...TRAINER_PASSIVES, ...RESONANCE_PASSIVES];
+// ------------------------------------------------------------------ class Gifts (SPEC-v4 §3.6 "Mastery passive", §4)
+
+// One per rebuilt class: on while the class is worn, from Class Level 1. Each changes a rule, not just a number, so
+// most are `trigger` effects the game layer fires (PassiveTotals.triggers). `budget` is the damage it adds to one
+// skill, averaged over a fight, in points (≤ 5, balance.KEEPSAKE_BUDGET). Rules named with `do: { rule }`:
+//   fromBehind — hits that land on a foe's back deal +15%;
+//   nearFireSp — standing near a campfire, a Hearth or burning ground restores SP;
+//   ebbAndFlow — every 6 s the next skill gets +15% size, then +15% damage, in turn.
+const GIFT_PASSIVES: PassiveDef[] = [
+  {
+    id: 'clean_edge',
+    name: 'Clean Edge',
+    icon: '⚔️',
+    desc: 'Your 3rd hit in a row on the same foe always crits.',
+    source: 'class',
+    maxRank: 1,
+    effect: { kind: 'trigger', when: 'nthHit', n: 3, do: { guaranteeCrit: true }, icdMs: 6000 },
+    budget: 5,
+  },
+  {
+    id: 'spare_knife',
+    name: 'Spare Knife',
+    icon: '🃏',
+    desc: 'Every 4th basic attack also throws a knife at a second foe.',
+    source: 'class',
+    maxRank: 1,
+    effect: { kind: 'trigger', when: 'nthHit', n: 4, weapon: 'dagger', do: { arc: 1 } },
+    budget: 4,
+  },
+  {
+    id: 'tidy_weave',
+    name: 'Tidy Weave',
+    icon: '🔮',
+    desc: 'Every 4th spell you cast costs no SP.',
+    source: 'class',
+    maxRank: 1,
+    effect: { kind: 'trigger', when: 'skillCast', n: 4, do: { freeCast: true } },
+    budget: 0,
+  },
+  {
+    id: 'road_legs',
+    name: 'Road Legs',
+    icon: '🥾',
+    desc: 'You move faster, in a fight and out of one.',
+    source: 'class',
+    maxRank: 1,
+    effect: { kind: 'stat', stat: 'speed', pct: 5 },
+    budget: 0,
+  },
+  {
+    id: 'banked_coals',
+    name: 'Banked Coals',
+    icon: '🔥',
+    desc: 'When a burn you caused ends, it pops for a small burst.',
+    source: 'class',
+    maxRank: 1,
+    effect: { kind: 'trigger', when: 'statusEnds', do: { burst: 0.4 }, icdMs: 1000 },
+    budget: 4,
+  },
+  {
+    id: 'from_nowhere',
+    name: 'From Nowhere',
+    icon: '🦇',
+    desc: 'Hits from behind deal more damage.',
+    source: 'class',
+    maxRank: 1,
+    effect: { kind: 'trigger', when: 'always', do: { rule: 'fromBehind' } },
+    budget: 5,
+  },
+  {
+    id: 'warm_hands',
+    name: 'Warm Hands',
+    icon: '🌋',
+    desc: 'Standing near any fire restores SP.',
+    source: 'class',
+    maxRank: 1,
+    effect: { kind: 'trigger', when: 'always', do: { rule: 'nearFireSp' } },
+    budget: 0,
+  },
+  {
+    id: 'ebb_and_flow',
+    name: 'Ebb and Flow',
+    icon: '🌊',
+    desc: 'Now and then your next skill is bigger, then stronger.',
+    source: 'class',
+    maxRank: 1,
+    effect: { kind: 'trigger', when: 'skillCast', ms: 6000, do: { rule: 'ebbAndFlow' }, icdMs: 6000 },
+    budget: 3,
+  },
+];
+
+export const PASSIVES: PassiveDef[] = [...TAG_PASSIVES, ...TRAINER_PASSIVES, ...RESONANCE_PASSIVES, ...GIFT_PASSIVES];

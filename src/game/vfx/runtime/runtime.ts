@@ -1239,7 +1239,8 @@ export class VfxRuntime implements VfxStage {
   /** Whole body-layer rings and auras round an actor split into back / front halves. */
   private splits(p: VfxPiece): boolean {
     if (p.layer !== 'body' || p.anchor.along || p.anchor.half) return false;
-    if (p.component === 'aura') return true;
+    // Auras, heal blooms and shield shells wrap the actor: the far half sorts behind it, the near half in front.
+    if (p.component === 'aura' || p.component === 'mend' || p.component === 'shell') return true;
     return p.component === 'ring' && !this.chunked(p as RingPiece) && p.anchor.to !== 'hop';
   }
 
@@ -1373,7 +1374,11 @@ export class VfxRuntime implements VfxStage {
       case 'motes':
       case 'puff':
       case 'status':
+      case 'field':
+      case 'emblem':
         return Y_BIAS.PARTICLE;
+      case 'warp':
+        return Y_BIAS.PILLAR;
       default:
         return Y_BIAS.ARC;
     }

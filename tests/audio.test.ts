@@ -1,10 +1,14 @@
 import { describe, expect, it } from 'vitest';
+import { WEAPON_TYPES } from '../src/core/types';
 import { T } from '../src/core/world/tiles';
 import type { NodeKind } from '../src/core/world/types';
 import { MONSTERS } from '../src/data/monsters';
 import { SKILLS } from '../src/data/skills';
 import { MAPS } from '../src/data/world';
 import {
+  FIST_BLOWS,
+  fistSound,
+  mechanicSound,
   CAST_SHAPES,
   ELEMENT_KEYS,
   GROUPS,
@@ -129,7 +133,7 @@ describe('SFX bank', () => {
       expect(SOUNDS[chargeSound(el === 'physical' ? undefined : el)]).toBeDefined();
       for (const shape of CAST_SHAPES) expect(SOUNDS[`cast_${shape}_${el}`], `cast_${shape}_${el}`).toBeDefined();
     }
-    for (const w of ['sword', 'dagger', 'staff'] as const) for (const heavy of [false, true]) expect(SOUNDS[swingSound(w, heavy)]).toBeDefined();
+    for (const w of WEAPON_TYPES) for (const heavy of [false, true]) expect(SOUNDS[swingSound(w, heavy)], w).toBeDefined();
     for (const s of SURFACES) expect(SOUNDS[stepSound(s)], s).toBeDefined();
     const nodes: NodeKind[] = ['ore', 'fishing', 'herb', 'ember_vent', 'wind_chime', 'storm_tree', 'shadow_fungus', 'sun_spring', 'frost_crystal'];
     for (const n of nodes) expect(gatherSound(n), n).toBe(`gather_${n}`);
@@ -138,7 +142,18 @@ describe('SFX bank', () => {
       if (s) expect(SOUNDS[s], k).toBeDefined();
     }
     expect(new Set(['skill', 'element', 'class', 'spark'].map(discoverySound)).size).toBe(4);
-    for (const s of ['burn', 'soak', 'stun', 'shock', 'freeze', 'bleed', 'smite', 'slow', 'knockback', 'poison', 'pull'] as const) {
+    // v4: the four new kinds have their own cast templates (not the nova / dash / buff ones), the fist set, the
+    // shield / zone / mend one-shots and the class mechanic feedback exist.
+    for (const el of ELEMENT_KEYS) {
+      const same = (x: string, y: string) => JSON.stringify(SOUNDS[`cast_${x}_${el}`].layers) === JSON.stringify(SOUNDS[`cast_${y}_${el}`].layers);
+      expect(same('zone', 'nova') || same('blink', 'dash') || same('mend', 'buff') || same('shield', 'buff') || same('shield', 'ward'), el).toBe(false);
+    }
+    for (const b of FIST_BLOWS) expect(SOUNDS[fistSound(b)], b).toBeDefined();
+    for (const t of ['full', 'finisher', 'cashIn', 'stance', 'comboStep', 'comboBreak', 'marked', 'markEnd', 'levelUp']) expect(SOUNDS[mechanicSound(t)!], t).toBeDefined();
+    expect(new Set(['full', 'finisher', 'cashIn', 'stance'].map(mechanicSound)).size).toBe(4);
+    for (const t of ['spent', 'placed', 'expired', 'consumed']) expect(mechanicSound(t)).toBeNull();
+    for (const n of ['zone_tick', 'zone_end', 'mend_tick', 'shield_absorb', 'shield_break']) expect(SOUNDS[n], n).toBeDefined();
+    for (const s of ['burn', 'soak', 'stun', 'shock', 'freeze', 'bleed', 'smite', 'slow', 'knockback', 'poison', 'pull', 'root', 'launch', 'expose', 'lure'] as const) {
       expect(SOUNDS[statusSound(s)!], s).toBeDefined();
       expect(SOUNDS[tickSound(s)], s).toBeDefined();
     }

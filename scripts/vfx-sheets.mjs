@@ -43,7 +43,7 @@ const bundleEntry = `
 export { bakePiece, pieceKey } from './src/game/vfx/bake';
 export { RAMPS, hexToRgb } from './src/game/vfx/ramps';
 export { FAMILY_IDS, pickDir, RING_WHOLE_MAX } from './src/game/vfx/types';
-export { deriveVfx, deriveAttackVfx, impactPieces, statusPieces } from './src/game/vfx/recipe';
+export { deriveVfx, deriveAttackVfx, impactPieces, statusPieces, mechanicPieces, MECHANIC_FX } from './src/game/vfx/recipe';
 export { recipePieces } from './src/game/vfx/pieces';
 export { LOOKS, elementStatus } from './src/game/vfx/families';
 export { createRegistry, GAME_DATA } from './src/data';
@@ -278,6 +278,15 @@ function familyRows(fam) {
     P('status', { kind: st, unit: UNIT_OF_STATUS[st], body: 'M' }, `status ${st}`),
     P('aura', { motif: 'edge', phase: 'activate', activation: fam === 'holy' ? 'pillar' : fam === 'arcane' ? 'sigil' : 'ring', body: 'M', halo: false }, 'aura activate'),
     P('aura', { motif: 'edge', phase: 'loop', activation: 'ring', body: 'M', halo: false }, 'aura edge loop'),
+    // v4 kinds (docs/VFX.md §6.9): the zone's living unit, both ends of a blink, the shield's four phases.
+    P('field', { size: 's' }, 'field unit s'),
+    P('field', { size: 'm' }, 'field unit m'),
+    P('warp', { phase: 'out', body: 'M' }, 'warp out'),
+    P('warp', { phase: 'in', body: 'M' }, 'warp in'),
+    P('shell', { phase: 'form', body: 'M' }, 'shell form'),
+    P('shell', { phase: 'loop', body: 'M' }, 'shell loop'),
+    P('shell', { phase: 'absorb', body: 'M' }, 'shell absorb'),
+    P('shell', { phase: 'break', body: 'M' }, 'shell break'),
   ];
   return rows;
 }
@@ -351,6 +360,76 @@ function familySheet(fam) {
     y += h + 4;
   }
   return img;
+}
+
+/** A sheet of labelled strips (grass, then dungeon), each row its own ramp. */
+function rowsSheet(title, defs) {
+  const rows = [];
+  for (const r of defs) {
+    const b = bake(r.piece);
+    if (!b || b.use === 'runtime') continue;
+    rows.push({ ...r, b, g: stripBlock(b, C.grass, 0.6, true), d: stripBlock(b, C.dungeon, 1.0, false) });
+  }
+  let H = 12;
+  let W = Math.max(textW(title) + 8, 200);
+  for (const r of rows) {
+    W = Math.max(W, LABEL_W + Math.max(r.g.w, r.d.w));
+    H += r.g.h + r.d.h + 4;
+  }
+  const img = new Img(W, H);
+  img.text(4, 3, title);
+  let y = 12;
+  for (const r of rows) {
+    const h = r.g.h + r.d.h;
+    img.rect(0, y, LABEL_W - 2, h, C.label);
+    img.text(3, y + 3, r.label);
+    img.text(3, y + 11, `${r.b.use} ${r.b.frames[0].length}f ${stripMs(r.b.frames[0])}ms`, C.dim);
+    img.text(3, y + 19, r.piece.ramp, C.dim);
+    const tint = glowTint(r.piece.ramp);
+    r.g.draw(img, LABEL_W, y, tint);
+    r.d.draw(img, LABEL_W, y + r.g.h, tint);
+    y += h + 4;
+  }
+  return img;
+}
+
+/** v4 feedback (docs/VFX.md §6.9, §6.10): the fist impact set, the heal bloom, the new status units, the emblems. */
+function v4Rows() {
+  const P = (component, params, label, ramp, motif = ramp === 'spirit' ? 'steel' : ramp, extra = {}) => ({ label, piece: { component, params, ramp, motif: motif === 'heal' ? 'steel' : motif, lut: 'base', blend: 'normal', layer: 'body', anchor: { to: 'caster', dy: 0 }, ...extra } });
+  const rows = [];
+  for (const cls of ['jab', 'hook', 'palm', 'kick', 'slam']) {
+    rows.push(P('burst', { cls, size: 'm' }, `fist ${cls} m`, 'spirit'));
+    rows.push(P('burst', { cls, size: 'l' }, `fist ${cls} l`, cls === 'kick' ? 'fire' : 'spirit'));
+  }
+  rows.push(P('mend', { phase: 'pulse', body: 'M' }, 'mend pulse', 'heal'), P('mend', { phase: 'loop', body: 'M' }, 'mend loop', 'heal'));
+  rows.push(P('status', { kind: 'root', unit: 'shackle', body: 'M' }, 'root shackle', 'shadow'), P('status', { kind: 'root', unit: 'shackle', body: 'L' }, 'root shackle L', 'earth'));
+  rows.push(P('status', { kind: 'launch', unit: 'updraft', body: 'M' }, 'launch updraft', 'wind'), P('status', { kind: 'launch', unit: 'updraft', body: 'M' }, 'launch (fists)', 'steel'));
+  rows.push(P('status', { kind: 'expose', unit: 'breach', body: 'M' }, 'expose breach', 'steel'), P('status', { kind: 'expose', unit: 'breach', body: 'M' }, 'expose (arcane)', 'arcane'));
+  rows.push(P('status', { kind: 'lure', unit: 'beckon', body: 'M' }, 'lure beckon', 'water'), P('status', { kind: 'lure', unit: 'beckon', body: 'M' }, 'lure (holy)', 'holy'));
+  for (const k of ['root', 'launch', 'expose', 'lure']) rows.push(P('status', { kind: k, unit: 'pip', body: 'S' }, `pip ${k}`, 'steel'));
+  rows.push(P('emblem', { kind: 'full', n: 1 }, 'meter full', 'fire'), P('emblem', { kind: 'full', n: 1 }, 'meter full', 'steel'));
+  rows.push(P('emblem', { kind: 'finisher', n: 1 }, 'finisher', 'steel'), P('emblem', { kind: 'finisher', n: 1 }, 'finisher', 'arcane'), P('emblem', { kind: 'finisher', n: 1 }, 'finisher', 'spirit', 'spirit'));
+  rows.push(P('emblem', { kind: 'cashIn', n: 1 }, 'mark cash-in', 'shadow'));
+  rows.push(P('emblem', { kind: 'stance', n: 1 }, 'stance swap 1', 'water'), P('emblem', { kind: 'stance', n: 2 }, 'stance swap 2', 'water'));
+  rows.push(P('emblem', { kind: 'step', n: 1, of: 3 }, 'combo step 1/3', 'steel'), P('emblem', { kind: 'step', n: 2, of: 3 }, 'combo step 2/3', 'steel'), P('emblem', { kind: 'step', n: 3, of: 4 }, 'combo step 3/4', 'arcane'));
+  rows.push(P('emblem', { kind: 'mark', n: 1 }, 'mark pip 1', 'shadow'), P('emblem', { kind: 'mark', n: 3 }, 'mark pip 3', 'shadow'), P('emblem', { kind: 'mark', n: 5 }, 'mark pip 5', 'steel'));
+  return rows;
+}
+
+/** One composited moment per mechanic effect, on the dummy (caster = target for the sheet). */
+function mechanicSheet() {
+  const fams = ['fire', 'steel', 'arcane', 'spirit', 'shadow', 'water'];
+  const entries = vfx.MECHANIC_FX.map((fx, i) => {
+    const fam = fams[i % fams.length];
+    const o = { n: fx === 'comboStep' ? 2 : fx === 'marked' ? 3 : 1, of: 3 };
+    const all = vfx.mechanicPieces(fx, fam, o);
+    const calm = vfx.mechanicPieces(fx, fam, { ...o, calm: true });
+    const lead = all.find((q) => q.component === 'emblem') ?? all[0];
+    const lb = bake(lead);
+    const tp = lb ? peakMs(lb) : 60;
+    return { name: fx, sub: [fam, all.map((q) => q.component).join(' ')], ms: [{ name: 'start', ops: composite(all, 30) }, { name: 'peak', ops: composite(all, Math.max(100, tp)) }, { name: 'calm', ops: composite(calm, Math.max(100, tp)) }] };
+  });
+  return skillSheet('class mechanic feedback (13 effects) - start / peak / under reduce-flash', entries);
 }
 
 /** Review aid (--compare): one component across every family (grass strip, then dungeon strip). */
@@ -696,6 +775,36 @@ const span = (ps) => ps.reduce((m, p) => Math.max(m, (p.delayMs ?? 0) + (p.lifeM
 /** The three moments of a recipe: CAST (telegraph / charge / wind-up), PEAK and HIT. */
 function moments(r) {
   const shape = r.shape;
+  // v4 kinds (docs/VFX.md §6.9).
+  if (shape === 'zone') {
+    const stand = ph(r, 'aura');
+    const z = r.riders.zone ?? { tick: [], end: [] };
+    const open = composite(stand, 60, composite(ph(r, 'area'), 60));
+    const tick = composite(z.tick, 90, composite(stand, 900));
+    const hit = composite(ph(r, 'status'), 250, composite(ph(r, 'impact'), 40, composite(stand, 1500)));
+    return [{ name: 'open', ops: open }, { name: 'tick', ops: tick }, { name: 'hit', ops: hit }];
+  }
+  if (shape === 'blink') {
+    const out = composite(ph(r, 'cast'), 50);
+    const mid = composite(ph(r, 'trail'), 60, composite(ph(r, 'cast'), 110));
+    const inn = composite(ph(r, 'status'), 250, composite(ph(r, 'impact'), 40, composite(ph(r, 'area'), 130)));
+    return [{ name: 'vanish', ops: out }, { name: 'between', ops: mid }, { name: 'arrive', ops: inn }];
+  }
+  if (shape === 'mend') {
+    return [
+      { name: 'cast', ops: composite(ph(r, 'area'), 80, composite(ph(r, 'cast'), 80)) },
+      { name: 'bloom', ops: composite(ph(r, 'area'), 250, composite(ph(r, 'cast'), 250)) },
+      { name: 'over time', ops: composite(ph(r, 'trail'), 120, composite(ph(r, 'aura'), 900)) },
+    ];
+  }
+  if (shape === 'shield') {
+    const sh = r.riders.shield ?? { absorb: [], break: [], burst: [] };
+    return [
+      { name: 'form', ops: composite(ph(r, 'cast'), 150) },
+      { name: 'absorb', ops: composite(sh.absorb, 20, composite(ph(r, 'aura'), 800)) },
+      { name: 'break', ops: composite(sh.burst, 80, composite(sh.break, 80)) },
+    ];
+  }
   const mainPhase = shape === 'projectile' || shape === 'chain' ? 'body' : shape === 'nova' ? 'area' : shape === 'buff' ? 'aura' : 'cast';
   const main = ph(r, mainPhase);
   const lead = main.find((p) => (p.tags ?? []).includes('hero')) ?? main.find((p) => p.component !== 'motes' && p.component !== 'afterimage') ?? main[0];
@@ -737,7 +846,7 @@ const NAME_W = 104;
 function skillSheet(title, entries) {
   // entries: { name, sub, recipe }
   const rows = entries.map((e) => {
-    const ms = moments(e.recipe);
+    const ms = e.ms ?? moments(e.recipe);
     const boxes = ms.map((m) => opsBox(m.ops));
     const cw = Math.min(260, Math.max(...boxes.map((b) => b[2] - b[0]))) + 2;
     const ch = Math.min(200, Math.max(...boxes.map((b) => b[3] - b[1]))) + 2;
@@ -797,7 +906,7 @@ function skillSheet(title, entries) {
 const reg = vfx.createRegistry();
 const AUTHORED = reg.authoredSkills();
 const isMonster = (s) => s.tags.includes(vfx.MONSTER_TAG);
-const carrierText = (c) => `${c.kind} ${c.style ?? c.mode ?? c.core ?? c.body ?? c.motif ?? ''}`.trim();
+const carrierText = (c) => `${c.kind} ${c.style ?? c.mode ?? c.core ?? c.body ?? c.motif ?? (c.line ? 'line' : c.follow ? 'follow' : c.arrive ? 'arrive' : c.burst ? 'burst' : c.over ? 'over' : '')}`.trim();
 const derive = (s, owner = 'player') => {
   try {
     return vfx.deriveVfx(s, owner);
@@ -854,6 +963,18 @@ groups.push({ id: 'monster', title: `monster techniques (${techIds.length}, owne
   groups.push({ id: 'monster-attacks', title: `monster auto-attacks (one per family x element)`, entries });
 }
 const signatures = new Set(reg.classes.flatMap((c) => c.grants ?? []));
+// v4: the rebuilt classes' kits (classOf skills), one group, class by class.
+{
+  const kits = AUTHORED.filter((s) => s.classOf && !isMonster(s)).sort((a, b) => (a.classOf < b.classOf ? -1 : a.classOf > b.classOf ? 1 : 0));
+  kits.forEach((s) => placed.add(s.id));
+  if (kits.length) groups.push({ id: 'kits', title: `class kits (${kits.length} classOf skills)`, entries: kits.map((s) => entry(s, 'player', `${s.classOf}: ${s.name}`)) });
+}
+// v4: every zone / blink / mend / shield skill outside the kits and trees.
+{
+  const fresh = AUTHORED.filter((s) => !placed.has(s.id) && !isMonster(s) && ['zone', 'blink', 'mend', 'shield'].includes(s.shape.kind));
+  fresh.forEach((s) => placed.add(s.id));
+  if (fresh.length) groups.push({ id: 'v4kinds', title: `zone / blink / mend / shield skills (${fresh.length})`, entries: fresh.map((s) => entry(s)) });
+}
 const rest = { crown: [], wild: [], craft: [], universal: [] };
 for (const s of AUTHORED) {
   if (placed.has(s.id) || isMonster(s)) continue;
@@ -877,6 +998,8 @@ for (const s of AUTHORED) {
 // ---------------------------------------------------------------- write
 const t0 = performance.now();
 const written = [];
+if (want('v4', 'feedback')) written.push(save('v4-feedback', rowsSheet('v4 feedback: fist impact set, mend, new statuses, mechanic emblems - grass / dungeon', v4Rows())));
+if (want('v4', 'mechanic')) written.push(save('v4-mechanic', mechanicSheet()));
 for (const fam of vfx.FAMILY_IDS) {
   if (!want('family', fam)) continue;
   written.push(save(`family-${fam}`, familySheet(fam)));

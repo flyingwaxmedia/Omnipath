@@ -10,15 +10,23 @@
 // draws a player skill. A projectile's Image stays as its bus identity but is invisible. fxBurst / fxRing remain as
 // thin adapters onto the VFX runtime for MapScene's portal reveal and blink (docs/VFX.md §8.7); every other legacy
 // fx helper and the client `cfx_*` textures are gone (monsters, statuses and world moments are vfx/world.ts's).
+//
+// v4 kinds (docs/SPEC-v4.md §6.1): `zone` places a WorldObject (./objects.ts — the one helper for everything a skill
+// places; cap 12, oldest first) that ticks on a timer through the ordinary hit test (objectSpawn / objectTick /
+// objectEnd); `blink` moves the caster at once and may hit where it lands (blink); `mend` and `shield` are the
+// host's (Combat.applyMend / applyShield: mend, shieldUp / shieldHit / shieldEnd), the shield's burst comes back
+// here (burst). A class mechanic's boost arrives on the Cast (`skill` already carries the boosted shape).
 import Phaser from 'phaser';
 import type { DamageRoll } from '../../core/combat';
-import type { SkillDef, WeaponType } from '../../core/types';
+import type { SkillUse } from '../../core/mechanics';
+import type { CastBoost, SkillDef, SkillShape, StatusKind, WeaponType } from '../../core/types';
 import { isBlockedPx } from '../../core/world/compile';
 import type { CompiledMap } from '../../core/world/types';
 import type { Monster } from '../entities/Monster';
 import type { Player } from '../entities/Player';
 import { gameBus, type Pt, type SkillRef } from '../events';
 import { Y_BIAS, ySort } from '../render/depths';
+import { type ObjectEndReason, type WorldObject, WorldObjects, objectCovers, zoneTicks } from './objects';
 import { distToSegment } from './tellhit';
 
 export interface Cast {
@@ -42,6 +50,38 @@ export interface Cast {
   arcFrom?: Pt;
   /** How this copy's blow arrives when not directly (hit.via): an arc zap, a pierce, a returning projectile. */
   via?: 'arc' | 'pierce' | 'return';
+  // ---- v4: the class mechanic on this cast (Combat.fire fills these; `skill` already has the boosted shape)
+  /** The bar skill pressed (the book's records and the cooldown use it; a stance may cast another skill from it). */
+  barId?: string;
+  /** The facts the mechanic engine reads about this use (fed back with every hit). */
+  use?: SkillUse;
+  /** What the mechanic added to this cast. */
+  boost?: CastBoost;
+  /** Every hit of this cast crits (a finisher). */
+  crit?: boolean;
+  /** A status every hit of this cast also applies. */
+  status?: StatusKind;
+  /** A combo finisher: its name. */
+  finisher?: string;
+  /** Marks cashed in by this cast: foe id -> percent damage bonus against that foe. */
+  markPct?: ReadonlyMap<string, number>;
+  /** The whole cast runs once more at this multiplier (CastBoost.repeat). */
+  repeat?: number;
+  /** The class mechanic's object this cast places (mechanics.ts object id) and how long it stands (ms; 0 = until
+   *  replaced or used up). */
+  mechObject?: number;
+  mechLifeMs?: number;
+  /** The placed object (objectSpawn id) whose tick lands this copy's hits. */
+  objectId?: number;
+}
+
+/** Kinds that hit nothing by themselves and need no foe to be worth casting. */
+const SELF_KINDS: ReadonlySet<SkillShape['kind']> = new Set(['buff', 'mend', 'shield']);
+
+/** Whether a skill is cast on yourself (no target is looked for, AUTO needs none). */
+export function isSelfCast(skill: SkillDef): boolean {
+  const s = skill.shape;
+  return SELF_KINDS.has(s.kind) || (s.kind === 'blink' && s.to === 'self') || (s.kind === 'zone' && s.range <= 0 && !!s.follow);
 }
 
 /** The SkillRef of a player cast for bus payloads (castId links its parts; `reprise` marks the reprised copy). */
@@ -80,6 +120,14 @@ export interface CombatHost {
   canAct(): boolean;
   /** Pooled floating text. */
   float(x: number, y: number, text: string, color: string, size: number): void;
+  /** v4: a mend skill heals the player (Combat: heal now or over time; `mend` events). */
+  applyMend(cast: Cast): void;
+  /** v4: a shield skill raises a shell (Combat: soak pool, `shieldUp` / `shieldHit` / `shieldEnd`). */
+  applyShield(cast: Cast): void;
+  /** v4: a spot the player may stand on (walkable, not a portal tile): where a blink may land. */
+  canStand(x: number, y: number): boolean;
+  /** v4: a placed object ended (the class mechanic forgets its object). */
+  objectEnded(o: WorldObject, reason: ObjectEndReason): void;
 }
 
 interface Projectile {
@@ -136,8 +184,20 @@ export function isKnifeChain(skill: SkillDef): boolean {
 
 export class SkillSystem {
   private projectiles: Projectile[] = [];
+  /** Everything the player's skills have placed on this map (zones; later traps, summons, walls). */
+  readonly objects: WorldObjects;
+  /** The cast that placed each live object (its ticks hit through it). */
+  private readonly objectCasts = new Map<number, Cast>();
 
-  constructor(private host: CombatHost) {}
+  constructor(private host: CombatHost) {
+    this.objects = new WorldObjects((o, reason) => {
+      const cast = this.objectCasts.get(o.id);
+      this.objectCasts.delete(o.id);
+      const sk = cast?.skill ?? o.skill;
+      gameBus.emit('objectEnd', { skillId: sk.id, skill: sk, element: sk.element, ...(cast ? { castId: cast.id } : {}), id: o.id, kind: o.kind, obj: o, x: o.x, y: o.y, reason });
+      this.host.objectEnded(o, reason);
+    });
+  }
 
   /** Reserves a cast id at wind-up (castStart carries it; the cast that fires later reuses it). */
   reserveId(): number {
@@ -179,29 +239,33 @@ export class SkillSystem {
       case 'shield':
         return 0;
       case 'zone':
-        return s.range;
+        return s.line ? Math.max(s.range, s.line.length) : s.range + s.radius;
       case 'blink':
-        return s.distance;
+        return s.to === 'self' ? (s.arrive?.radius ?? 0) : s.distance;
     }
   }
 
   /** Executes a cast (and schedules its reprise rider: the whole cast once more after delayMs at `mult`). */
   execute(cast: Cast, aim: { x: number; y: number }, target: Monster | null): void {
     this.run(cast, aim, target);
-    const rep = cast.skill.riders?.reprise;
-    if (rep && !cast.reprise && cast.skill.shape.kind !== 'buff') {
+    const kind = cast.skill.shape.kind;
+    const again = (mult: number, delayMs: number, word: string | null) => {
       const color = this.host.colorFor(cast.skill);
-      this.host.world.time.delayedCall(rep.delayMs, () => {
+      this.host.world.time.delayedCall(delayMs, () => {
         if (!this.host.canAct()) return;
         const p = this.host.player;
         const t = target && target.alive ? target : null;
         const a = t ? { x: t.x, y: t.y } : { x: p.x + (aim.x - cast.origin.x), y: p.y + (aim.y - cast.origin.y) };
         if (t) p.face(t.x, t.y);
-        // The caster's mirror ghost is the VFX runtime's (riders.reprise on the reprised copy's first event).
-        this.host.float(p.x, p.y - 66, 'Reprise', hex(color), 10);
-        this.run({ ...cast, origin: { x: p.x, y: p.y }, mult: cast.mult * rep.mult, reprise: true }, a, t);
+        if (word) this.host.float(p.x, p.y - 66, word, hex(color), 10);
+        this.run({ ...cast, origin: { x: p.x, y: p.y }, mult: cast.mult * mult, reprise: true }, a, t);
       });
-    }
+    };
+    // A mechanic's repeat (CastBoost.repeat): the cast lands once more, weaker. Never for things that place or mend.
+    if (cast.repeat && !cast.reprise && cast.skill.power > 0 && !SELF_KINDS.has(kind) && kind !== 'zone' && kind !== 'blink') again(cast.repeat, 320, null);
+    const rep = cast.skill.riders?.reprise;
+    // The caster's mirror ghost is the VFX runtime's (riders.reprise on the reprised copy's first event).
+    if (rep && !cast.reprise && !SELF_KINDS.has(kind) && kind !== 'zone' && kind !== 'blink') again(rep.mult, rep.delayMs, 'Reprise');
   }
 
   private run(cast: Cast, aim: { x: number; y: number }, target: Monster | null): void {
@@ -283,7 +347,165 @@ export class SkillSystem {
       case 'buff':
         this.host.applyBuff(skill, cast.rank);
         break;
+      case 'zone':
+        this.placeZone(cast, s, aim, ang);
+        break;
+      case 'blink':
+        this.blink(cast, s, aim, ang, target);
+        break;
+      case 'mend':
+        this.host.applyMend(cast);
+        break;
+      case 'shield':
+        this.host.applyShield(cast);
+        break;
     }
+  }
+
+  // ------------------------------------------------------------ v4: zone (world objects), blink, burst
+
+  /**
+   * Places a zone: a disc at the aim point (at most `range` away; at the feet with range 0), or a lane of
+   * `line.length` from the caster toward the aim, `radius` each side. It ticks every `tickMs` (duration ÷ tick
+   * ticks, at most 8) and hits every monster standing in it. A class mechanic's object stands for the mechanic's
+   * own time (its ticks still end after the zone's duration).
+   */
+  private placeZone(cast: Cast, s: Extract<SkillShape, { kind: 'zone' }>, aim: Pt, ang: number): WorldObject {
+    const o = cast.origin;
+    const now = this.host.world.time.now;
+    let x = o.x;
+    let y = o.y;
+    let line: { x0: number; y0: number; x1: number; y1: number } | undefined;
+    if (s.line) {
+      line = { x0: o.x, y0: o.y, x1: o.x + Math.cos(ang) * s.line.length, y1: o.y + Math.sin(ang) * s.line.length };
+      x = (line.x0 + line.x1) / 2;
+      y = (line.y0 + line.y1) / 2;
+    } else if (s.range > 0) {
+      const d = Math.min(s.range, Math.hypot(aim.x - o.x, aim.y - o.y));
+      x = o.x + Math.cos(ang) * d;
+      y = o.y + Math.sin(ang) * d;
+    }
+    const ticks = zoneTicks(s.durationMs, s.tickMs);
+    const mech = cast.mechObject;
+    const lifeMs = mech !== undefined && cast.mechLifeMs !== undefined ? cast.mechLifeMs : s.durationMs;
+    const obj = this.objects.add({ kind: 'zone', skill: cast.skill, x, y, radius: s.radius, line, follow: s.follow, lifeMs, tickMs: s.tickMs, ticks: cast.skill.power > 0 ? ticks : 0, ...(mech !== undefined ? { mech } : {}) }, now);
+    this.objectCasts.set(obj.id, cast);
+    gameBus.emit('objectSpawn', {
+      ...castRef(cast),
+      owner: 'player',
+      id: obj.id,
+      kind: 'zone',
+      obj,
+      x,
+      y,
+      radius: s.radius,
+      ...(line ? { line: { ...line } } : {}),
+      follow: !!s.follow,
+      durationMs: Number.isFinite(obj.until) ? obj.until - now : Infinity,
+      untilMs: obj.until,
+      tickMs: s.tickMs,
+      ticks,
+      ...(mech !== undefined && this.mechName?.() ? { mechanic: this.mechName()! } : {}),
+    });
+    return obj;
+  }
+
+  /**
+   * A class object that no zone skill drew (a kit skill of another kind planted it): a bare marker of `radius` at
+   * (x, y) that stands for the mechanic's own time and never ticks.
+   */
+  placeMarker(cast: Cast, x: number, y: number, radius: number): WorldObject {
+    const now = this.host.world.time.now;
+    const obj = this.objects.add({ kind: 'zone', skill: cast.skill, x, y, radius, lifeMs: cast.mechLifeMs ?? 0, tickMs: 0, ticks: 0, ...(cast.mechObject !== undefined ? { mech: cast.mechObject } : {}) }, now);
+    this.objectCasts.set(obj.id, cast);
+    gameBus.emit('objectSpawn', { ...castRef(cast), owner: 'player', id: obj.id, kind: 'zone', obj, x, y, radius, follow: false, durationMs: Number.isFinite(obj.until) ? obj.until - now : Infinity, untilMs: obj.until, tickMs: 0, ticks: 0, ...(this.mechName?.() ? { mechanic: this.mechName()! } : {}) });
+    return obj;
+  }
+
+  /** The worn mechanic's name for objectSpawn.mechanic (set by Combat). */
+  mechName?: () => string | null;
+
+  /** One tick of a zone: every monster standing in it takes a hit (the first tick at full power, later ones 85%). */
+  private tickObject(o: WorldObject, index: number): void {
+    const cast = this.objectCasts.get(o.id);
+    if (!cast || !this.host.canAct()) return;
+    gameBus.emit('objectTick', { ...castRef(cast), id: o.id, kind: o.kind, obj: o, x: o.x, y: o.y, radius: o.radius, index, ticks: o.ticks + o.ticksLeft });
+    for (const m of this.host.liveMonsters()) {
+      if (objectCovers(o, m.x, m.y, m.radius)) this.host.hit(m, { ...cast, origin: { x: o.x, y: o.y }, objectId: o.id });
+    }
+  }
+
+  /** Monsters that would stand in a zone of this shape cast now at `aim` (AUTO: 2+ foes). */
+  zoneWouldCover(skill: SkillDef, origin: Pt, aim: Pt): number {
+    const s = skill.shape;
+    if (s.kind !== 'zone') return 0;
+    const ang = Math.atan2(aim.y - origin.y, aim.x - origin.x);
+    let probe: Pick<WorldObject, 'x' | 'y' | 'radius' | 'line'>;
+    if (s.line) probe = { x: origin.x, y: origin.y, radius: s.radius, line: { x0: origin.x, y0: origin.y, x1: origin.x + Math.cos(ang) * s.line.length, y1: origin.y + Math.sin(ang) * s.line.length } };
+    else {
+      const d = s.range > 0 ? Math.min(s.range, Math.hypot(aim.x - origin.x, aim.y - origin.y)) : 0;
+      probe = { x: origin.x + Math.cos(ang) * d, y: origin.y + Math.sin(ang) * d, radius: s.radius };
+    }
+    let n = 0;
+    for (const m of this.host.liveMonsters()) if (objectCovers(probe, m.x, m.y, m.radius)) n++;
+    return n;
+  }
+
+  /**
+   * Blink: the caster vanishes and appears at once — a point ahead (`distance` at most; in front of the target when
+   * there is one), next to the target, on one of their own placed objects, or in place. A spot that cannot be stood
+   * on is pulled back along the way. `arrive`: everything within that radius of the landing takes a hit.
+   */
+  private blink(cast: Cast, s: Extract<SkillShape, { kind: 'blink' }>, aim: Pt, ang: number, target: Monster | null): void {
+    const p = this.host.player;
+    const from = { x: p.x, y: p.y };
+    let want = { x: from.x, y: from.y };
+    let mode = s.to;
+    const ahead = (d: number) => ({ x: from.x + Math.cos(ang) * d, y: from.y + Math.sin(ang) * d });
+    if (s.to === 'object') {
+      const o = this.objects.nearest(from.x, from.y, s.distance);
+      if (o) want = { x: o.x, y: o.y };
+      else mode = 'point';
+    }
+    if (mode === 'target' || mode === 'point') {
+      if (target && target.alive) {
+        // Land beside the foe, on the caster's side of it (a 'point' blink never passes its target).
+        const gap = target.radius + 20;
+        const d = Math.hypot(target.x - from.x, target.y - from.y);
+        want = ahead(Math.max(0, Math.min(s.distance, d - gap)));
+      } else want = ahead(mode === 'point' ? Math.min(s.distance, Math.max(s.distance * 0.5, Math.hypot(aim.x - from.x, aim.y - from.y))) : 0);
+    }
+    // Pull the landing back toward the caster until it is a spot one can stand on.
+    let to = want;
+    const span = Math.hypot(want.x - from.x, want.y - from.y);
+    if (span > 0 && !this.host.canStand(want.x, want.y)) {
+      to = from;
+      for (let d = span - 8; d > 0; d -= 8) {
+        const q = { x: from.x + ((want.x - from.x) * d) / span, y: from.y + ((want.y - from.y) * d) / span };
+        if (this.host.canStand(q.x, q.y)) {
+          to = q;
+          break;
+        }
+      }
+    }
+    p.x = to.x;
+    p.y = to.y;
+    p.path = [];
+    if (target && target.alive) p.face(target.x, target.y);
+    const radius = s.arrive && cast.skill.power > 0 ? s.arrive.radius : undefined;
+    gameBus.emit('blink', { ...castRef(cast), owner: 'player', from, to: { ...to }, mode, ...(radius !== undefined ? { radius } : {}) });
+    if (radius !== undefined) this.burst(cast, to, radius);
+  }
+
+  /** One hit on every monster within `radius` of a point (a blink's arrival, a shield's burst). Returns the count. */
+  burst(cast: Cast, at: Pt, radius: number): number {
+    let n = 0;
+    for (const m of this.host.liveMonsters()) {
+      if (Math.hypot(m.x - at.x, m.y - at.y) > radius + m.radius) continue;
+      this.host.hit(m, { ...cast, origin: { x: at.x, y: at.y } });
+      n++;
+    }
+    return n;
   }
 
   private chain(cast: Cast, range: number, jumps: number, ang: number, target: Monster | null): void {
@@ -364,6 +586,11 @@ export class SkillSystem {
     const map = this.host.cm;
     const live = this.host.liveMonsters();
     const p = this.host.player;
+    // Placed objects: followers move with the caster, due ticks land, finished ones end.
+    if (this.objects.count) {
+      for (const o of this.objects.all()) if (o.follow) this.objects.moveTo(o, p.x, p.y);
+      this.objects.update(this.host.world.time.now, (o, i) => this.tickObject(o, i));
+    }
     for (let i = this.projectiles.length - 1; i >= 0; i--) {
       const pr = this.projectiles[i];
       if (pr.returning) {
@@ -527,8 +754,14 @@ export class SkillSystem {
     (this.host.world as unknown as { vfx?: { world: { legacyRing(x: number, y: number, r: number, c: number): void } } }).vfx?.world.legacyRing(x, y, radius, color);
   }
 
+  /** The world was frozen for `ms` (panel pause, hit-stop): placed objects resume where they were. */
+  shiftTime(ms: number): void {
+    this.objects.shiftTime(ms);
+  }
+
   clear(): void {
     for (const p of this.projectiles) p.img.destroy();
     this.projectiles = [];
+    this.objects.clear();
   }
 }
