@@ -1094,7 +1094,8 @@ export function mechanicPieces(type: MechanicFx, family: FamilyId, o: MechanicFx
   const pieces = ((): VfxPiece[] => {
     switch (type) {
       case 'full':
-        return [em('full', head), ring(feet, 24, 6, 'hot', 250), motes('glint', chest, rise(6, 14))];
+        // The chevrons climb the body itself (feet -> head): the lane over the head belongs to the game's words.
+        return [em('full', at('caster', -4)), ring(feet, 24, 6, 'hot', 250), motes('glint', chest, rise(6, 14))];
       case 'spent':
         return [ring(feet, 6, 20, 'mid', 167, 1), motes(look.hit, chest, { pattern: 'burst', count: 3, radius: 10 })];
       case 'comboStep': {

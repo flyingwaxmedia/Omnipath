@@ -561,7 +561,7 @@ export class Hud {
     document.documentElement.style.setProperty('--ui-px', `${s.px}px`);
     // The body face's pixel (CSS px): the HUD's own pixel where that reads well, else the next whole device pixel up
     // (phones: 5 device px instead of 3), so text is always on whole device pixels and never under TEXT_MIN_PX.
-    this.root.style.setProperty('--tx', `${textPixel(s.px, dpr)}px`);
+    this.el.style.setProperty('--tx', `${textPixel(s.px, dpr)}px`);
     for (const c of ['port', 'narrow', 'short', 'big'] as const) this.root.classList.toggle(`hud-${c}`, lay[c]);
     this.sizeFace();
   }

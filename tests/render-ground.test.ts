@@ -4,10 +4,12 @@
 import { describe, expect, it } from 'vitest';
 import { compileMap } from '../src/core/world/compile';
 import { T } from '../src/core/world/tiles';
-import { PROP_VARIANTS } from '../src/game/art/world';
+import { PAL, RAMPS, SHADOW_COLOR, WORLD_OUTLINE } from '../src/game/art/pixel';
+import { groundBase } from '../src/game/art/tiles';
+import { PROP_VARIANTS, TREE_LEAF_RAMPS } from '../src/game/art/world';
 import { TILE_PX, toneNoise } from '../src/game/render/autotile';
 import { planDressing } from '../src/game/render/dressing';
-import { APRON_VIEW_PX, apronTiles, extendMap } from '../src/game/render/ground';
+import { APRON_VIEW_PX, FOREST_TINTS, apronTiles, extendMap } from '../src/game/render/ground';
 import { MAPS } from '../src/data/world';
 
 const map = (id: string) => compileMap(MAPS.find((m) => m.id === id)!);
@@ -72,5 +74,86 @@ describe('town plaza rim', () => {
 describe('prop look variants', () => {
   it('rocks, boulders, bushes and tombstones have two extra looks each (the stage picks one per tile)', () => {
     for (const k of ['rock', 'boulder', 'bush', 'tombstone']) expect(PROP_VARIANTS[k], k).toEqual([`${k}~1`, `${k}~2`]);
+  });
+});
+
+// ------------------------------------------------------------------ v4 palette (SPEC-v4 §11.2 H)
+
+const lum = (c: string | number) => {
+  const n = typeof c === 'number' ? c : parseInt(c.slice(1), 16);
+  return (((n >> 16) & 255) * 0.299 + ((n >> 8) & 255) * 0.587 + (n & 255) * 0.114) / 255;
+};
+const hue = (c: string) => {
+  const n = parseInt(c.slice(1), 16);
+  const [r, g, b] = [(n >> 16) & 255, (n >> 8) & 255, n & 255].map((v) => v / 255);
+  const mx = Math.max(r, g, b);
+  const d = mx - Math.min(r, g, b);
+  if (!d) return 0;
+  const h = mx === r ? ((g - b) / d) % 6 : mx === g ? (b - r) / d + 2 : (r - g) / d + 4;
+  return (h * 60 + 360) % 360;
+};
+
+describe('palette ramps', () => {
+  it('match the SPEC-v4 §11.2 H table', () => {
+    expect(RAMPS.grass).toEqual(['#1f3b33', '#2f5435', '#47702f', '#6a8f36', '#93ab45', '#c4c765']);
+    expect(RAMPS.foliage).toEqual(['#17302f', '#23483a', '#32663a', '#4f8a3c', '#86ad45', '#c9cf6a']);
+    expect(RAMPS.dirt).toEqual(['#4a3340', '#6e4f48', '#94714f', '#b8955f', '#d9bd7c', '#efdc9e']);
+    expect(RAMPS.stone).toEqual(['#2b2a40', '#454660', '#69708a', '#959aa6', '#c2c2b4', '#e8e2c6']);
+    expect(RAMPS.wood).toEqual(['#2e1a26', '#4d2a2a', '#74432d', '#9c6534', '#c48e48', '#e3bb6c']);
+    expect(RAMPS.water).toEqual(['#1b2f5a', '#23508a', '#2f7fa8', '#4fb0b8', '#9adcc8', '#e4f6e0']);
+    expect(RAMPS.roofTerracotta).toEqual(['#4a1f33', '#7a2f33', '#a8472f', '#cf6b38', '#e89a52']);
+    expect(RAMPS.roofSlate).toEqual(['#232a4a', '#34466e', '#4d6c8f', '#7a9cab']);
+    expect(RAMPS.roofThatch).toEqual(['#5a4326', '#86682f', '#b3923f', '#d9bd5e']);
+    expect(RAMPS.roofVerdigris).toEqual(['#173b40', '#23605a', '#3a8a72', '#74b890']);
+  });
+
+  it('are hue-shifted: every step is lighter than the last, shadows sit cooler than lights', () => {
+    for (const [name, ramp] of Object.entries(RAMPS)) {
+      for (let i = 1; i < ramp.length; i++) expect(lum(ramp[i]), `${name}[${i}]`).toBeGreaterThan(lum(ramp[i - 1]));
+      // the darkest and the lightest step differ in hue (a value-only ramp keeps one hue)
+      const a = hue(ramp[0]);
+      const b = hue(ramp[ramp.length - 1]);
+      expect(Math.min(Math.abs(a - b), 360 - Math.abs(a - b)), name).toBeGreaterThanOrEqual(8);
+    }
+    // older call sites read shorter cuts of the same tables
+    expect(PAL.grass).toEqual(RAMPS.grass.slice(1));
+    expect(PAL.stone).toEqual(RAMPS.stone.slice(1, 5));
+  });
+
+  it('keeps the character outline for actors and a cooler shared dark for the world; shadows are violet', () => {
+    expect(PAL.outline).toBe('#24180f');
+    expect(WORLD_OUTLINE).toBe(RAMPS.stone[0]);
+    expect(WORLD_OUTLINE).not.toBe(PAL.outline);
+    expect(SHADOW_COLOR).toBe('#3a3560');
+  });
+});
+
+describe('value plan', () => {
+  // biome ground -> the tree whose masses stand on it
+  const BIOMES: readonly [ground: string, tree: string][] = [
+    ['grass', 'tree'],
+    ['dark', 'darktree'],
+    ['hill', 'pine'],
+    ['storm', 'pine'],
+    ['dusk', 'duskwillow'],
+    ['glade', 'duskwillow'],
+  ];
+  it('paths are at least 25% lighter than the ground, tree masses at least 20% darker', () => {
+    const path = lum(groundBase('path')!);
+    for (const [ground, tree] of BIOMES) {
+      const g = lum(groundBase(ground)!);
+      expect(path, `${ground}: path`).toBeGreaterThanOrEqual(g * 1.25);
+      // a canopy mass is painted a ramp step down (its mid tone is the leaf ramp's step 1 – 2) and tinted by its row
+      const leaf = TREE_LEAF_RAMPS[tree];
+      const tint = lum(FOREST_TINTS[2]);
+      expect(lum(leaf[2]) * tint, `${ground}: ${tree} mass`).toBeLessThanOrEqual(g * 0.8);
+    }
+  });
+
+  it('keeps the ground dark-mid: darker than the path, lighter than the tree masses, quieter than v3', () => {
+    expect(lum(groundBase('grass')!)).toBeLessThan(0.4); // v3 grass sat at 0.45
+    expect(lum(groundBase('grass')!)).toBeGreaterThan(0.25);
+    expect(lum(groundBase('path')!)).toBeGreaterThan(0.6); // v3 path sat at 0.56
+    for (let i = 1; i < FOREST_TINTS.length; i++) expect(lum(FOREST_TINTS[i])).toBeLessThan(lum(FOREST_TINTS[i - 1]));
   });
 });

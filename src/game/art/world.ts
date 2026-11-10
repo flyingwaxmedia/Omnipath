@@ -841,6 +841,9 @@ export const PROP_TIER_SIZE: Readonly<Record<string, readonly [w: number, h: num
   log_L: [112, 46],
 };
 
+/** Leaf ramps of the tree kinds (dark -> light): the value plan's test seam (tree masses sit below the ground). */
+export const TREE_LEAF_RAMPS: Readonly<Record<string, Ramp>> = { tree: R.leaf, darktree: LEAF_DARK, duskwillow: LEAF_DUSK, pine: PINE, frostpine: FROST_PINE };
+
 /** A ramp one step darker (the darkest step repeats): back canopy layers, second forest rows, canopy masses. */
 const darker = (r: Ramp): Ramp => [r[0], ...r.slice(0, r.length - 1)];
 
@@ -1436,7 +1439,7 @@ function wallPx(b: Ctx, x: number, y: number, w: number, h: number, kind: WallKi
   box(b, x - 1, y + h - 1, w + 2, 1, R.stone[1]);
   for (let xx = x + 2; xx < x + w; xx += 7) box(b, xx, y + h - 4, 1, 3, R.stone[1]);
   // right-hand corner falls into shade
-  box(b, x + w - 3, y, 3, h - 5, 'rgba(36,24,15,0.22)');
+  box(b, x + w - 3, y, 3, h - 5, 'rgba(58,53,96,0.3)');
 }
 
 /** Plank door in a dark frame (optionally arched) with iron straps, ring handle and a stone step. */
@@ -1591,7 +1594,7 @@ function drawStructures(scene: Phaser.Scene): void {
       fpoly(b, [112, 88, 123, 88, 121, 90, 119, 90, 119, 92, 121, 93, 113, 93, 115, 92, 115, 90, 113, 90], R.iron[1]);
       box(b, 112, 88, 11, 1, R.iron[3]);
       roofPx(b, 2, 126, 22, 77, 10, ROOF_RED, 'tile', rnd);
-      box(b, 8, 77, 112, 2, 'rgba(36,24,15,0.4)');
+      box(b, 8, 77, 112, 2, 'rgba(58,53,96,0.5)');
       chimneyPx(b, 92, 8, 14, 34);
       // anvil out front
       box(b, 54, 120, 10, 5, R.iron[1]);
@@ -1719,7 +1722,7 @@ function drawStructures(scene: Phaser.Scene): void {
       wallPx(b, 8, 84, 176, 68, 'plaster', rnd);
       for (const wx of [20, 44, 136, 160]) windowPx(b, wx, 102, 12, 14, R.teal);
       roofPx(b, 2, 190, 26, 91, 14, ROOF_GREEN, 'slate', rnd);
-      box(b, 8, 91, 176, 2, 'rgba(36,24,15,0.4)');
+      box(b, 8, 91, 176, 2, 'rgba(58,53,96,0.5)');
       chimneyPx(b, 30, 14, 12, 26);
       chimneyPx(b, 150, 10, 12, 28);
       // central gable porch
@@ -1763,7 +1766,7 @@ function drawStructures(scene: Phaser.Scene): void {
       box(b, 18, 85, 17, 1, R.leaf[3]);
       doorPx(b, 62, 102, 16, 24, R.teal, true);
       roofPx(b, 2, 94, 20, 67, 8, ROOF_RED, 'tile', rnd);
-      box(b, 10, 67, 76, 2, 'rgba(36,24,15,0.4)');
+      box(b, 10, 67, 76, 2, 'rgba(58,53,96,0.5)');
       chimneyPx(b, 18, 8, 10, 24);
     });
   });
@@ -2621,7 +2624,7 @@ function drawPortals(scene: Phaser.Scene): void {
       fpoly(s.c, [4, y + 9, 16, y - 2, 28, y + 9, 28, y + 13, 16, y + 3, 4, y + 13], '#ffffff');
       fpoly(s.c, [16, y + 3, 28, y + 13, 28, y + 10, 16, y], '#c8c8c8');
       seg(s.c, 5, y + 9, 16, y - 1, '#ffffff');
-      outline(s.c, 32, 32, 'rgba(36,24,15,0.85)');
+      outline(s.c, 32, 32, 'rgba(43,42,64,0.85)');
       c.globalAlpha = a;
       c.drawImage(s.el, 0, 0);
       c.globalAlpha = 1;

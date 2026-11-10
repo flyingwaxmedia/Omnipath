@@ -659,6 +659,11 @@ const G: Record<string, Ground> = {
   lava: lavaGround(),
 };
 
+/** Base colour (0xRRGGBB) of a ground material ('grass', 'dark', 'hill', 'storm', 'dusk', 'glade', 'path', …): the value plan's test seam. */
+export function groundBase(name: string): number | null {
+  return G[name]?.base ?? null;
+}
+
 // ================================================================== flowers
 
 const BLOOMS: readonly [string, string][] = [

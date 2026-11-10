@@ -400,7 +400,7 @@ function drawGroundBits(scene: Phaser.Scene): void {
         rockLump(b, 7, 8, 4, 3, R.stone);
         rockLump(b, 11, 6, 4, 3, R.warm);
       },
-      'rgba(36,24,15,0.55)',
+      'rgba(58,53,96,0.55)',
     ),
   );
   tex(scene, 'dr_stone', 16, 12, (c) => {
@@ -709,7 +709,7 @@ function drawFences(scene: Phaser.Scene): void {
   // Horizontal segment: one tile wide; posts at x 0 and 16, rails run edge to edge so segments chain seamlessly.
   // The right end of a run is closed with dr_fence_post placed at the next tile's left edge.
   tex(scene, 'dr_fence_h', 32, H, (c) => {
-    box(c, 0, foot, 32, 1, 'rgba(36,24,15,0.16)');
+    box(c, 0, foot, 32, 1, 'rgba(58,53,96,0.16)');
     sprite(c, 32, H, (b) => {
       rail(b, 0, 32, foot - 15);
       rail(b, 0, 32, foot - 8);

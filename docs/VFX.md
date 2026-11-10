@@ -1,4 +1,4 @@
-# Omnipath — VFX v1 ("every spell gets a pixel effect")
+# Omnipath — VFX v1 ("every spell gets a pixel effect") + v4 Phase 1 kinds
 
 Adopted design and code contract for skill and combat effects. It merges the research spec (Sprite Fusion / pixelfx
 techniques, free-pack conventions, Saint11, open-source generators, Phaser 3.90 facts) with its critique. Each critique
@@ -11,6 +11,11 @@ item is fixed below; §2.1 says where.
   auto-attacks, telegraphs, statuses, deaths, hit feel, camera), an in-game QA pass over every skill and technique
   (§8.10), its adversarial review (§8.11) and the polish pass (§8.12: body-flash gate, warden pan trigger, cone and
   blink reads, bolt strip pool, long ring chunks, monster shots); open items in §13.
+- **v4 Phase 1** (docs/SPEC-v4.md §6.1, §3.6, §15.2 lane F) is built on the same system: the four new skill kinds
+  (zone, blink, mend, shield) with their own carriers and components for every family (§6.9), the fist impact set and
+  bare-handed swings (§6.9), the status overlays root / launch / expose / lure (§6.4), the class mechanic feedback
+  (§6.10), 9 class-kit signatures (§6.7) and the bridge for the v4 bus events (§8.2). `VFX_VERSION` is 3; the
+  contract gained 5 components (22 in all).
 - 15-minute path: §2, §5, §6.1–6.3, §7 and §10. The rest is reference for the package that needs it.
 
 Counts in this document come from the data at the time of writing: 160 authored `SkillDef`s in `SKILLS` (10
@@ -31,7 +36,8 @@ numbers from the data and never hard-code them.
 5. Effects stay readable on a phone. Each telegraph covers the hit test exactly, player and enemy effects never look
    alike, and the screen stays readable with 12 or more monsters.
 6. Effects run within hard mobile budgets (§9), and a quality governor degrades them before the frame rate drops.
-7. The system stays as simple as the job allows: 17 components instead of 34, and 40 signature patches instead of 80.
+7. The system stays as simple as the job allows: 17 components instead of 34, and 40 signature patches instead of 80
+   (v4 Phase 1 added 5 components and 9 signatures for four new skill kinds: 22 and 49).
 
 ## 2. Principles
 
@@ -312,7 +318,7 @@ Not changed, by design: staff strikes draw a shorter smear (0.8 R, 60 % of the a
 strikes a ki burst at 0.8 R, as §6.2 specifies; monster area cores keep the monster LUT (accent → danger R3), so a
 monster blast reads as hostile.
 
-## 5. Components (17)
+## 5. Components (22: 17 of v1 + 5 of v4)
 
 Frame times are `VSYNC_MS` values. "Key params" are the bake params in `types.ts` (`ComponentParams`). Runtime
 placement (counts, patterns, speeds) lives in `VfxPiece.place` and is never part of a bake key.
@@ -336,6 +342,12 @@ placement (counts, patterns, speeds) lives in `VfxPiece.place` and is never part
 | **aura** | buff activation + sustained loop with a motif per stat; hex ward; halo | activate 6 × 83; loop 16 × 100 (1.6 s, seamless); break 6 × 50 | motif, phase, activation, body, halo | 1 | body, back half y − 1 / front half y + 1 |
 | **tell** | lane chevrons (8×8), arrowheads, aim beads (2–3 px), lock flash, off-screen edge indicator, fizzle | chevrons march 1 px per 2 ticks; lock = 1 frame × 50 ms | piece, danger | 16 for chevron and arrow | tell / rim |
 | **afterimage** | dash ghosts, blink slices, reprise mirror: a snapshot of the actor's own frame | runtime only: tintFill family R3, stepped alpha `steps` at 50 ms | mode, steps | — | body (actor.y − 1) |
+
+| **field** (v4) | a zone's living interior: one small ground-hugging unit per family (§6.9 table) | loop 6 × 117 | size (s 22 px / m 31 px cell); look by motif | 1 | body (sorts by its own ground row); ≤ 12 px tall |
+| **warp** (v4) | a blink's two ends: `out` (the body turns to a column, folds into a seam, the seam closes, family marks thrown sideways) and `in` (the seam opens over a landing ring) | out 33 · 33 · 50 · 50 · 67 · 67; in 33 · 50 · 50 · 50 · 67 · 67. No WHITE | phase, body; shadow / stealth / twilight draw the seam inverted | 1 | body |
+| **mend** (v4) | a heal: `pulse` (a ring of light climbs feet → head, heal crosses rise and pop) and `loop` (the over-time trickle) | pulse 7 frames, 500 ms; loop 8 × 100 | phase, body; family-free (one bake, `heal` ramp) | 1 | body, back / front halves |
+| **shell** (v4) | a shield: `form` (rises from the ground), `loop`, `absorb` (a family-free rim flash over the loop), `break` (pieces fly out and fall) | form 5 × 67 · loop 8 × 117 · absorb 33 · 50 · 50 · break 6 × 50. No WHITE | phase, body; skin by motif (§6.9 table) | 1 | body, back / front halves |
+| **emblem** (v4) | class mechanic marks (§6.10): full, finisher, cashIn, stance, step, mark | 285–470 ms one-shots; `mark` loops 4 × 150 | kind, n, of; family-free | 1 | body |
 
 Component notes (exact geometry):
 - **slash**
@@ -424,6 +436,8 @@ Component notes (exact geometry):
 | fist | !`blade` && !`pierce` && (`technique` \|\| `spirit`) | burst `ki` at 0.8·range + 3 line motes; knockback → an upward slash flick r40/90° | palm_strike, rising_kick, soaring_heel, crack_armor |
 | crescent | else | slash; `rune` when `arcane` && `blade` | slash, heavy_cleave, crescent_sweep, tidal_crescent, twin_fang, felling_cut, runic_blade, umbral_rend, dusk_lash |
 | claw | monster auto-attacks only | slash `rakes: 3` | (`deriveAttackVfx`) |
+| punch (v4) | tag `fist`, delivery not `kick` (first rule of the table) | 2–3 line motes + the fist burst of its blow at size s at 0.8·range + a snap ring r3→10 (palm: the ki double ring); slam adds a ground ring + cracks | jab, haymaker, one_two, body_blow, drumroll, roadhouse |
+| kick (v4) | tag `fist`, delivery `kick` | a light crescent slash at the reach + dust + line motes | dust_kick |
 
 slash: `r = nearestBucket(range, REACH)`, `arc = nearestBucket(arc, ARC)`, and `sense` = −1 on odd swings.
 
@@ -436,6 +450,7 @@ slash: `r = nearestBucket(range, REACH)`, `arc = nearestBucket(arc, ARC)`, and `
 | wail | owner monster && family shadow | `inverted` expand + wisps | mon_wail |
 | ripple | `spirit` && !`blade` | `double` 3 px apart, expand | rippling_palm |
 | ring | !`blade` && !`pierce` | 2 concentric expand 0.3R → R | inferno_ring, static_field, tidal_ripple, thunder_peal, resonant_pulse, prism_burst, spore_burst, vortex_dancer_sig, stormreaver_sig, echo_sovereign_sig |
+| kick (v4) | tag `fist` (first rule) | a single-head `sweep` smear 6 (the leg), 5 dust puffs on the rim, 4 line motes; a dim floor band | sweep_kick, windmill |
 | blades | else | `sweep` blade smear (`smear` 6, heavy 8), heads 3 (pierce) or 2 (blade), one turn in 117 ms, + 6 rim sparks staggered round the band | whirlwind, flame_spin, rotspore_whirl, thousand_cuts, blight_whirl, arcane_cyclone |
 
 **projectile** (body; cell = CELL by `size`, one bucket up for monsters)
@@ -547,8 +562,13 @@ Imbue and echo overlays add their spokes and motes.
 | knockback | 3 speedlines opposite the push + 3 dust puffs + ring r4→16 | one-shot 300 ms |
 | pull | 6 spiral streak motes into the chest + 3 ground arcs | one-shot |
 
-- At most 2 loops per target, with priority freeze > stun > shock > burn > poison > bleed > soak > slow. One-shots are
-  exempt.
+| root (v4) | `shackle`: a cuff closed round the feet (near arc bright, far arc dim), three teeth biting upward, a stake at each end; source family | tightens every 133 ms; 2.0 s |
+| launch (v4) | `updraft`: a shrinking ground shadow and three chevrons of air rushing up under the lifted body (the game lifts the sprite) | 100 ms; 1.2 s |
+| expose (v4) | `breach`: a guard plate on the chest split by a zig-zag crack, a chip falling | 150 ms; 4.0 s |
+| lure (v4) | `beckon`: a hook on a line bobbing over the head, its barb glinting | 150 ms; 3.0 s |
+
+- At most 2 loops per target, with priority freeze > stun > launch > root > shock > burn > poison > bleed > expose >
+  lure > soak > slow. One-shots are exempt. The four v4 statuses have 5×5 pip glyphs like the rest (`glyphs.ts`).
 - Hidden loops show as 7×7 pips with the status glyph.
 - Targets that are off-screen, or more than 8 affected targets, get pips only.
 
@@ -600,9 +620,33 @@ Imbue and echo overlays add their spokes and motes.
 - Monster recipes never flash the screen.
 - Reprise replays carry no juice.
 
-### 6.7 Signatures (40, keyed by root id; `signatures.ts`)
+### 6.7 Signatures (49, keyed by root id; `signatures.ts`)
 
 Each patch uses only §5 components. A test fails on an unknown id or a non-root id.
+
+v4 re-authored several signature skills as **zones** or **shields** under the same ids. Their patches read the carrier:
+on a zone the old look becomes the zone's dressing (firestorm: the funnel turns on every tick; gloom_shroud /
+moonveil: smoke sheets roll in on spawn and on every tick; thunderstorm: the cloud head hangs for the duration, one
+sky-bolt per tick, only the first with white; starfall_lattice: 5 shards fall per tick; glacial_orb: the shard orb
+hovers over the middle of its frost field; halo_ward: a light pillar where it is placed and a static rune circle).
+On a shield (blade_aura = Measured Guard) the three orbiting blades loop over the shell. The rows below describe the
+original carriers; a patch whose carrier does not match does nothing.
+
+v4 class-kit signatures (the looks SPEC-v4 §3.6 names):
+
+| id | patch |
+|---|---|
+| high_toss (Knife Juggler) | five spinning blades fall onto the spot through the nova delay |
+| thread_bolt (Spellwright) | the bolt pays out a thread: a bead wake every 4 px |
+| dust_kick (Wayfarer) | a fan of road dust thrown across the kick's arc |
+| slag_arc (Pyroblade) | orb `wave` cell 48 in fire + crust chips (magma) on the trail |
+| white_heat (Pyroblade) | the execute chop lands in a flame column and leaves a scorch |
+| shadow_pin (Shadowstalker) | the needle stays stuck in the foe for 600 ms (missile `pose: 'wrap'`) |
+| kindle_hearth (Pyromancer) | the Hearth itself: three tall tongues at the middle of its field for as long as it stands |
+| hurl_hearth (Pyromancer) | the meteor patch (falling glob, growing shadow, blast c56, flame columns) |
+| tidal_hand (Tidereader) | orb `wave` cell 32 in water |
+
+Original 40:
 
 | id | patch |
 |---|---|
@@ -676,6 +720,86 @@ Files: `families.ts` (familyOf + each family's motif language as data), `pieces.
 - **Timings.** Charge pieces span exactly `castMs`. A player nova rim spans the delay. Monster tells span
   `monsterTellMs` (the tell plus the wind-up). Cast, impact and area pieces end within the skill's cooldown (or the
   weapon delay). Status loops live for Combat's durations, and aura loops for the buff duration.
+
+### 6.9 v4 kinds: zone, blink, mend, shield, and bare hands
+
+All four go through `deriveVfx` like every other skill: family from `familyOf`, numbers from the composed shape,
+signature patches last. None borrows a v2 carrier (`Carrier` gained `zone | blink | mend | shield`). A class mechanic
+may scale a cast's shape without changing its id (systems/boost.ts): the bridge derives the recipe from the skill
+**as cast** (`deriveVfxAsCast`, uncached), so a boosted rim is as big as its hit test.
+
+**Hit tests** (SkillSystem / objects.ts): a zone is a circle of `radius` at the aim (at the feet with range 0), or a
+lane from the caster along the aim, `radius` each side with round ends (`HitGeometry` `capsule`); a blink's arrival
+and a shield's burst are circles. Player circles are aspect 1.
+
+| kind | phases | pieces |
+|---|---|---|
+| **zone** | `area` on objectSpawn | the field opens: ring expand 0.3R → R (3 px, family ring style, never gapped or dashed) + 8 family hit motes |
+| | `aura` while it stands | **the truthful rim**: ring `static`, solid, 2 px, exactly R, on the `preview` layer (never thinned, never governed away) + a 12.5 % `shadow` tint + 4–8 `field` units (poisson, inside 0.78 R) |
+| | `riders.zone.tick` per objectTick | ring pulse 0.55R → R (a pulling field contracts R → 0.45R instead) + 6 rising family motes (+ heal motes for heal / shield fields); `firstHitOnly` / `laterHits` tags pick the tick |
+| | `riders.zone.end` on objectEnd | ring contract R → 0.7R (1 px, dim) + 5 motes; nothing on a map clear |
+| | lane (`shape.line`) | rim = two bead rows 2R apart from the caster to the far end (a bead every ≤ 12 px) closed by half rings of radius R at both ends (aim-relative arcs); units along the lane in two rows |
+| **blink** | `cast` where the caster stood | `warp out` + the actor's own frame slicing away (afterimage `blink`) + veil / dust puffs |
+| | `trail` | 3–6 line motes (+ family trail motes) from the old spot to the new one, scaled to the real jump |
+| | `area` where they land | `warp in` + ring r4→20; with an arrival hit: the family nova core c24 + a ring to the arrival radius + hit motes |
+| **mend** | `cast` on the first pulse | `mend pulse` (heal ramp: the green crosses every family shares) inside the caster family's ring r8→32 and 6 rising family motes |
+| | `aura` (heal over time) | `mend loop` until `overMs`; with a resting circle its 2 px rim + 12.5 % fill in the heal ramp |
+| | `area` / `trail` | the circle opening (double ring to its radius) / 3 heal motes per later pulse |
+| **shield** | `cast` on shieldUp | `shell form` + ring r8→28 |
+| | `aura` | `shell loop` until the shield ends |
+| | `riders.shield` | `absorb` (rim flash + 4 hit motes, at most once per 120 ms), `break` (shell break + 8 motes + a thin ring), `burst` (family core c24 + a 3 px ring to the burst radius) |
+
+A zone never hit-stops or shakes (many small ticks): its juice is light.
+
+**Family language** (grayscale-readable, §3.3):
+
+| family | zone unit (`field`) | shield skin (`shell`) |
+|---|---|---|
+| fire | two low tongues over coals, an ember rising | a heat rim with tongues licking up the lower arc |
+| water | two ripple rings | a wobbling bubble with a sheen and a glint |
+| earth | three outlined chips, one hopping | four turning rock plates (outlined) |
+| wind | a turning swirl with a leaf | three hoops of air round the body |
+| lightning / storm | a ground arc re-seeded every frame (storm: + slanted rain) | a cage of re-seeded arcs (storm: + a cloud cap) |
+| shadow / stealth | an ink pool with a waving tendril / a low smoke wisp | a dark dithered veil with a bright rim |
+| holy | a ground ring with a cross and a rising sparkle | the hex dome |
+| ice | three frost spikes with a travelling glint (outlined) | a faceted octagon with a travelling glint |
+| magma | a crust blob with glowing cracks and a bursting bubble | turning crust plates with glowing seams |
+| twilight | a crescent and a twinkling star | a dithered rim, two orbiting crescents, a star on top |
+| steel | caltrops (outlined) with a glint | a pair of guard brackets |
+| arcane | a woven rune: two crossing threads under a glyph | a rim with four orbiting runes |
+| toxin | a bubbling puddle with the violet rim | a bubble with the violet rim |
+| spirit | ki double rings | a double ki rim 3 px apart |
+
+**Bare hands** (tag `fist`): the **fist impact set** is five `burst` classes — `jab` (three speed lines into a white
+knuckle point, a snap ring), `hook` (a short thick arc whipping in onto a four-ray star), `palm` (a flat disc, then
+double rings with five finger rays), `kick` (a wide flat crescent with dust), `slam` (a white streak dropping onto
+the spot, a ground ring, rock chips). jab / hook / kick face the blow (8 dirs). `fistClassOf(skill, weight)` picks:
+execute or heavy area blow → slam; kick delivery, spins and light dashes → kick; novas → palm; heavy → hook; spirit /
+technique → palm; else jab. The hit on the target is always that burst, never smaller than `m`. An element-less fist
+skill draws its blows, guard and mend ring in the warm **spirit** ramp (bare knuckles are not steel); an elemental
+fist class keeps its element. The Bare Hands basic (`jab`) is the auto-attack: weight light, a size-s jab at the fist
+on every swing and the m jab on the target.
+
+### 6.10 Class mechanic feedback (`mechanicPieces(type, family, opts)`)
+
+One short flourish per `MechanicEffect` type (core/mechanics.ts), on the actor or the class object, in the class's
+family (`classFamily`: its element; element-less classes by weapon: bare hands spirit, rod arcane, else steel).
+Never a screen flash: nothing uses the `glow` layer or a ring wider than 32 px; only `finisher` carries WHITE (two
+small hero frames, ~200 px against the 19 000 px budget, R5 under reduce-flash). Under 'Reduce shake & flashes' the
+bridge passes `calm`: the emblem alone plays (no rings, no motes).
+
+| effect | where | pieces |
+|---|---|---|
+| ★ full (meter full) | player | emblem `full`: three chevrons climbing the body (the lane over the head is the game's words) + ring r6→24 + 6 rising glints |
+| ★ finisher | player | emblem `finisher`: a crossed cut with a 4-point star + ring r8→32 + 6 streaks |
+| ★ cashIn | each foe that held marks | emblem `cashIn`: the mark diamond splits into four shards + ring r4→20 + 6 motes |
+| ★ stance | player | emblem `stance`: two half rings trade places round the feet; the lit one ends on the new stance's side + 4 rising lines |
+| comboStep | player | emblem `step`: `length` pips over the head, `step` lit, the newest popping |
+| comboBreak | player | a grey fizzle over the head |
+| marked | the foe | emblem `mark` loop: a bobbing diamond with one pip per mark; one per foe, replaced as marks grow, ended by the cash-in, the marks running out or the foe dying |
+| markEnd | the foe | a small magic burst (the stored damage landing) |
+| spent | player | a 1 px ring closing r20→6 + 3 motes |
+| placed / expired / levelUp / consumed | the class object | ring r4→20 + motes / grey fizzle / chevrons + ring + one family unit / ring closing + glint |
 
 ## 7. Variants
 
@@ -785,6 +909,25 @@ subscribe through `sceneScope(scene)` and play recipes; the table maps every fie
 | monsterTelegraph | monsterTelegraph (`shape`, `at`, `durationMs`, `radius`) | tell from the §8.1 rules (zone rx = radius + m.radius, ry 0.65·rx; cone r = range + m.radius; lane to dashEnd; aim to the player; range circle); timing = { now, now + durationMs }; state `cancel` when the monster dies or `monsterTelegraphEnd` says so | telegraph + charge |
 | spark / levelUp (extra) | spark / levelUp | spark at = last hit target | extras |
 | (chain links) | **chainLaunch** (runtime addition) `{ from, to, index, target \| null, knives, flightMs }` | — | a link leaves: lightning shows at once, knives fly `flightMs` (90) before their chainHop; also the fizzle of a chain with no target |
+
+v4 Phase 1 events (lane C; payloads in `src/game/events.ts` "v4 Phase 1 payloads"), all handled by `bridge.ts`:
+
+| GameEvents | bridge | VFX |
+|---|---|---|
+| castFire (`shape: 'zone'`) | the hand flick of a thrown zone | zone `cast` |
+| objectSpawn | anchors on the LIVE `obj` record (follow zones move; class objects stand until removed: `durationMs` Infinity drops the standing pieces' `lifeMs`); a lane runs `line.x0,y0 → x1,y1`; `r` = the event radius | zone `area` + `aura` |
+| objectTick | `index` picks first / later tick pieces | `riders.zone.tick` |
+| objectEnd | ends the standing group; plays the goodbye at the fixed point unless `reason: 'clear'` | `riders.zone.end` |
+| blink | the vanish snapshots the player's frame at `from` (they already stand at `to`); streaks rescaled to the real jump; `r` = the arrival radius | blink `cast` / `trail` / `area` |
+| mend | `first` → bloom (+ circle, + trickle until `overMs`, replaced by a recast); later pulses → the lift | mend `cast` / `area` / `aura` / `trail` |
+| shieldUp / shieldHit / shieldEnd | one shell at a time; absorb at most once per 120 ms; `broken` / `expired` play the break (+ `burst`), `replaced` / `clear` just end it | shield `cast` + `aura`, `riders.shield` |
+| mechanic | §6.10; `calm` under reduce-flash | `mechanicPieces` |
+| statusApplied (`root` / `launch` / `expose` / `lure`) | as every status (monsters here, the player in world.ts) | §6.4 |
+
+Audio for the same events: `src/game/audio/bridge.ts` (cast templates `cast_zone|blink|mend|shield_<element>`,
+`zone_tick` / `zone_end`, `mend_tick`, `shield_absorb` / `shield_break`, `swing_fists_*`, the `fist_<blow>` layer over
+the element hit, `status_root|launch|expose|lure`, `mech_full|finisher|cashin|stance|step|break|mark|grow`), all
+loudness-normalised and inside the bank's category windows (tests/audio-bank.test.ts).
 
 Bus additions requested from the events.ts owner (one-line emits; behaviour unchanged):
 1. **`skillPulse`** `{ skill, owner, index, count, x, y, aim }`, emitted per strike swing and spin pulse (player and
@@ -1392,6 +1535,22 @@ Each test file pins its module to the contract at compile time, for example `con
 
 ### 11.1 Headless tests (vitest)
 
+- **vfx-v4** (docs/SPEC-v4.md §14 vfx row)
+  - every new kind × every player family derives a valid recipe with its own carrier (no nova / dash / buff stand-in),
+    every piece in the family or a shared utility ramp; every authored zone / blink / mend / shield skill likewise
+  - zone rims equal the hit test (circle radius; lane bead rows 2R apart + half-ring caps) and stand for the duration;
+    units stay inside the rim; a boosted cast (`deriveVfxAsCast`) draws at the boosted radius
+  - blink out / in anchors, arrival ring radius; mend bloom in the heal ramp, trickle and circle lengths; shield
+    form / loop / absorb / break, burst radius, ≥ 11 distinct skins, no white outside the burst core
+  - the fist impact set: five classes by blow, spirit ramp, never size s on a target; five distinct bakes; the audio
+    layer picks the same blow as the picture
+  - root / launch / expose / lure: own unit, source family, exact duration, pip, four distinct silhouettes
+  - a flourish for every `MechanicEffect` type in every family; body / ground layers only, rings ≤ 32 px, white only
+    on the finisher (well under the flash budget, none under reduce-flash); `calm` leaves the emblem alone
+  - the bridge: zones follow the live object, tick, end (silently on a map clear), stand without a time limit as class
+    objects; blink ghost at the old spot; mend bloom / trickle / lift; shield absorb gap, break, burst, replace;
+    mechanic marks per foe; reduce-flash plays emblems only
+
 - **vfx-recipes (R)**
   - Coverage: deriveVfx succeeds and has ≥ 1 cast or body piece for:
     - every authored skill
@@ -1441,6 +1600,10 @@ Each test file pins its module to the contract at compile time, for example `con
   the Phaser-free modules with esbuild (installed with vite; no new dependency), bakes **every authored recipe**
   (player skills, techniques as player and monster) and writes PNG sheets plus grayscale copies with Node's zlib.
   Output goes outside the repo. Bake errors are listed in `index.txt` and fail the run.
+  - `v4-feedback.png`: the fist impact set, the mend strips, the four new status units and pips, every emblem;
+    `v4-mechanic.png`: the 13 mechanic effects composited on the dummy (start / peak / under reduce-flash).
+    `skills-fists`, `skills-kits-<n>` (the class kits) and `skills-v4kinds` show zones (open / tick / hit), blinks
+    (vanish / between / arrive), mends (cast / bloom / over time) and shields (form / absorb / break).
   - `family-<id>.png` (17): each component's frames for that family (unique direction 0), aligned on the anchor, once
     over mid grass #5f8a3a and once over a dark dungeon floor #1e1a24, with frame times (hero frames in yellow) and
     glow twins added at the biome gain.

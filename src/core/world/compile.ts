@@ -506,7 +506,7 @@ export function compileMap(def: MapDef): CompiledMap {
   }
 
   // Tree lines, from the open side inward (SPEC-v4 §11.2 E): undergrowth, a front row of full trees of three
-  // heights, a darker second row, then one solid canopy mass. A notch (a fallen log or a low bay) every 8 tiles.
+  // heights, a darker second row, then one solid canopy mass. About one front cell in six is a notch (a fallen log or a low bay): one per 12 tiles of border.
   if (treeLine) {
     for (let y = 0; y < h; y++) {
       for (let x = 0; x < w; x++) {
@@ -558,7 +558,7 @@ export function compileMap(def: MapDef): CompiledMap {
         const jy = ((hsh >>> 21) % 5) - 2;
         if (minD === 1) {
           const front = cell.filter(([x, y]) => forest[y * w + x] === 1);
-          const notch = h32('notch', cx >> 2, cy >> 2) % 16 === (cx & 3) * 4 + (cy & 3);
+          const notch = h32('notch', cx, cy) % 6 === 0;
           // open ground to the north: the canopy would rise over it, so stand the tree a row back and keep it low
           const [fx, fy] = front[hsh % front.length];
           const south = inB(fx, fy - 1) && !forest[(fy - 1) * w + fx];
@@ -585,14 +585,15 @@ export function compileMap(def: MapDef): CompiledMap {
             else if (pick < 7 || !fungal) props.push({ kind, tx: x, ty: y, tier: 'S', look: (u >>> 4) % 3, ox, oy, flip: (u & 1) === 1 });
             else props.push({ kind: 'mushroom', tx: x, ty: y, ox, oy });
           }
-        } else if (minD === 2) {
+        } else if (minD <= 4) {
+          // (tree lines are authored in 2 x 2 cells, so the cell behind a front cell starts at depth 3)
           const [x, y] = cell[hsh % cell.length];
           const r = (hsh >>> 8) % 100;
           if (r < 62) props.push({ kind, tx: x, ty: y, tier: 'L', look: lookFor(kind, 'L', x, y), ox: jx, oy: jy, shade: 1, flip: (hsh & 4) !== 0 });
           else if (r < 72) props.push({ kind, tx: x, ty: y, ox: jx >> 1, oy: jy, shade: 1 });
           else props.push({ kind, tx: cell[0][0], ty: cell[0][1], mass: true, look: (hsh >>> 4) % 3, ox: (cell[0][0] === cx * 2 ? 16 : -16) + jx, oy: jy, shade: 1, flip: (hsh & 4) !== 0 });
-        } else if (minD === 3 || ((cx + cy) & 1) === 0) {
-          props.push({ kind, tx: cell[0][0], ty: cell[0][1], mass: true, look: (hsh >>> 4) % 3, ox: (cell[0][0] === cx * 2 ? 16 : -16) + jx, oy: jy, shade: Math.min(4, minD - 1), flip: (hsh & 4) !== 0 });
+        } else if (minD <= 5 || ((cx + cy) & 1) === 0) {
+          props.push({ kind, tx: cell[0][0], ty: cell[0][1], mass: true, look: (hsh >>> 4) % 3, ox: (cell[0][0] === cx * 2 ? 16 : -16) + jx, oy: jy, shade: Math.min(4, minD >> 1), flip: (hsh & 4) !== 0 });
         }
       }
     }

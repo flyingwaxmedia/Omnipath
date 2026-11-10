@@ -240,8 +240,8 @@ export interface CompiledMap {
   coll: Uint8Array;
   props: PropInst[];
   /**
-   * Forest depth per cell (row-major): 0 = not forest, 1 = the front row beside open ground, 2 = the second row,
-   * 3+ = interior. Only tree-line borders ('T' in a biome whose tree is a tree) carry it; absent on older data.
+   * Forest depth per cell (row-major): 0 = not forest, 1 = beside open ground, then one more per tile inward (capped at 7).
+   * The front row of trees stands on depths 1 – 2, the second row on 3 – 4, the trunkless interior from 5. Only tree-line borders ('T' in a biome whose tree is a tree) carry it; absent on older data.
    */
   forest?: Uint8Array;
   /**

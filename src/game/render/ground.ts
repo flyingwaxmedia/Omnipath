@@ -61,7 +61,7 @@ export function extendMap(cm: CompiledMap, ax: number, ay: number): CompiledMap 
         const sx = Math.min(cm.w - 1, Math.max(0, x - ax));
         const d = cm.forest[sy * cm.w + sx];
         // past the map edge a tree line only gets deeper
-        forest[y * W + x] = d && (x < ax || y < ay || x >= ax + cm.w || y >= ay + cm.h) ? Math.max(d, 3) : d;
+        forest[y * W + x] = d && (x < ax || y < ay || x >= ax + cm.w || y >= ay + cm.h) ? Math.max(d, FOREST_DEEP_FROM) : d;
       }
     }
   }
@@ -77,6 +77,9 @@ export interface GroundShadows {
 }
 
 /** Forest floor: the shade under a tree line, a second step darker from the third row in (multiply strengths). */
+/** Forest depth (cm.forest) from which the floor is shaded / deep: behind the front trunks, and the interior. */
+const FOREST_SHADE_FROM = 2;
+const FOREST_DEEP_FROM = 5;
 const FOREST_SHADE = 0.5;
 const FOREST_DEEP = 0.62;
 
@@ -108,11 +111,11 @@ function forestFloor(ext: CompiledMap, seed: number, tx0: number, ty0: number, t
       const Y = ty0 + y;
       const d = at(X, Y);
       if (!d) continue;
-      if (d >= 2) sc.fillRect(x * TILE_PX, y * TILE_PX, TILE_PX, TILE_PX);
-      if (d >= 3) dc.fillRect(x * TILE_PX, y * TILE_PX, TILE_PX, TILE_PX);
+      if (d >= FOREST_SHADE_FROM) sc.fillRect(x * TILE_PX, y * TILE_PX, TILE_PX, TILE_PX);
+      if (d >= FOREST_DEEP_FROM) dc.fillRect(x * TILE_PX, y * TILE_PX, TILE_PX, TILE_PX);
       // ragged rim: the front row takes blocks of shade along its sides that touch the second row (and the second
       // row takes blocks of the deep tone along the third)
-      for (const [c2, need] of [[sc, 2], [dc, 3]] as const) {
+      for (const [c2, need] of [[sc, FOREST_SHADE_FROM], [dc, FOREST_DEEP_FROM]] as const) {
         if (d !== need - 1) continue;
         for (const [dx, dy] of [[0, -1], [0, 1], [-1, 0], [1, 0]] as const) {
           if (at(X + dx, Y + dy) < need) continue;
@@ -137,7 +140,7 @@ const UNDERGROUND_MOSS_TINT = 0x9c9ea8;
 const UNDERGROUND: ReadonlySet<string> = new Set(['cave', 'crypt']);
 
 /** Tone wash colours (RGBA): deeper, cooler grass where the noise is low; drier olive where it is high. */
-const TONE_DARK = [31, 59, 51, 70] as const;
+const TONE_DARK = [31, 59, 51, 46] as const;
 const TONE_LIGHT = [147, 171, 69, 46] as const;
 /** The wash fades out over this many px toward ground it does not cover. */
 const FADE_PX = 28;
