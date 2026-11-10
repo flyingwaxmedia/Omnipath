@@ -211,6 +211,9 @@ export function createAudioBridge(scene: AudioScene, sink: AudioSink, bus: Event
     if (e.first) here(castSound('mend', e.element ?? e.skill.element));
     else here('mend_tick', { gain: 0.8 });
   });
+  scope.on('mendEnd', (e) => {
+    if (e.reason === 'left') here('zone_end', { gain: 0.6 });
+  });
   scope.on('shieldUp', (e) => here(castSound('shield', e.element ?? e.skill.element)));
   scope.on('shieldHit', (e) => {
     // Lean toward the blow, like a hurt.

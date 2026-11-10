@@ -15,7 +15,7 @@
 // such gaps (syncClock): nothing recharges, expires or lands while the player cannot act.
 import Phaser from 'phaser';
 import { BURN_SPREAD_RADIUS, STATUS, computeDamage, exposedPct, statusFor, statusMs, type DamageRoll } from '../../core/combat';
-import type { MechanicEffect, SkillUse } from '../../core/mechanics';
+import { type MechanicEffect, type SkillUse, mergeBoost } from '../../core/mechanics';
 import { MASTERY, monsterThreat } from '../../core/mastery';
 import { cooldownPctFor, regenStillPct, spCostPctFor, vsFamilyPct, vsStatusPct } from '../../core/passives';
 import type { Family, MonsterRank, SkillDef, StatusKind, WeaponType } from '../../core/types';
@@ -33,7 +33,9 @@ import { TILE } from '../world/runtime';
 import { type Cast, type CombatHost, PLAYER_R, SkillSystem, castRef, clearShot, hex, isSelfCast } from './SkillSystem';
 import { boostSkill, withSize } from './boost';
 import type { MechanicRuntime } from './mechanic';
-import type { ObjectEndReason, WorldObject } from './objects';
+import { EXTRA, isStatusWord, selfEffectMs } from './extras';
+import { GIFT, GiftRuntime } from './gifts';
+import { type ObjectEndReason, type WorldObject, objectCovers, objectDistance } from './objects';
 
 const GLOOMCAPS_FOR_SHADOW = 5;
 /** Dealt or took damage within this window = in combat (buff use XP). */
@@ -65,12 +67,7 @@ const AUTO_SURROUNDED = 3;
 const AUTO_SURROUNDED_RANGE = 70;
 /** A heal over time lands a pulse this often (ms). */
 const MEND_PULSE_MS = 500;
-/**
- * What a skill's `extra` word does at run time when no other field already says it (SPEC-v4 §6.2). All [T]:
- * `haste` — a self-cast skill also quickens your step; `cleanse` — it also shakes off what ails you; `interrupt` —
- * its hit stops a common or elite mid wind-up; `execute` — it hits harder against a foe that is nearly down.
- */
-export const EXTRA = { hastePct: 25, hasteMs: 4000, executeBelow: 0.3, executePct: 40 } as const;
+export { EXTRA };
 /** In-world words for the v4 statuses (SPEC-v4 §12). */
 const STATUS_WORD: Partial<Record<StatusKind, string>> = { root: 'Held', launch: 'Airborne', expose: 'Exposed', lure: 'Lured' };
 
@@ -171,6 +168,10 @@ export class Combat implements CombatHost {
   /** Last cast or swing (the mechanic's `attacking`). */
   private lastAttackAt = -1e9;
   private lastPos: { x: number; y: number } | null = null;
+  /** v4: the worn class's Gift rules (trigger passives): counters live for this map. */
+  readonly gifts: GiftRuntime;
+  /** Seconds counted while SP comes back near a fire (its small cue plays every other one). */
+  private fireBeat = 0;
   /** `placed` effects of the cast being fired, announced once its object stands. */
   private placedNow: Extract<MechanicEffect, { type: 'placed' }>[] | null = null;
 
@@ -179,6 +180,7 @@ export class Combat implements CombatHost {
     // A new map: the mechanic starts over, and this map's Combat applies what it reports.
     this.rt.onEffects = (effects) => this.applyMech(effects);
     this.rt.reset();
+    this.gifts = new GiftRuntime(() => scene.book.totals().triggers);
   }
 
   // ---------------------------------------------------------------- CombatHost
@@ -253,6 +255,7 @@ export class Combat implements CombatHost {
     if (this.shield) this.shield.until += ms;
     for (const h of this.hots) h.next += ms;
     this.lastAttackAt += ms;
+    this.gifts.shiftTime(ms);
     this.scene.skills.shiftTime(ms);
     this.player?.shiftTime(ms);
     for (const m of this.monsters) m.shiftTime(ms);
@@ -291,6 +294,7 @@ export class Combat implements CombatHost {
           { x: tx * TILE + TILE / 2, y: ty * TILE + TILE / 2, r: z.r * TILE },
           def.element ? s.reg.element(def.element) : undefined,
           slot,
+          zi * 3 + i, // the spawn index: the same monster wears the same look on every visit
         );
         m.nextWander = s.time.now + rnd.between(500, 4000);
         const eliteBack = s.session.eliteDeaths.get(slot);
@@ -706,7 +710,8 @@ export class Combat implements CombatHost {
     const s = this.scene;
     const pl = s.session.player;
     const pre = this.rt.preview(this.rt.useOf(barId, skill), { weapon: this.weapon(), target: this.foeId(target ?? this.target), nearLevel: this.nearLevel() });
-    if (!pre.free && pre.hpCostPct === undefined && pl.sp < this.spCost(skill)) {
+    const giftFree = this.gifts.nextFree(barId === WEAPONS[pl.weapon].basic);
+    if (!pre.free && !giftFree && pre.hpCostPct === undefined && pl.sp < this.spCost(skill)) {
       if (say) this.gateToast('Not enough SP.');
       return false;
     }
@@ -760,7 +765,12 @@ export class Combat implements CombatHost {
       return;
     }
     const ms = rt.stats(this.nearLevel());
-    const boost = withSize(used.boost, ms.size);
+    // The worn class's Gift may make this cast free, bigger or stronger (Tidy Weave, Ebb and Flow).
+    const gift = this.gifts.cast({ basic, now });
+    let boost = withSize(used.boost, ms.size);
+    if (gift.boost) boost = mergeBoost(boost, gift.boost);
+    if (gift.free && this.spCost(skill) > 0) boost = { ...boost, free: true };
+    this.sayGift(gift.fired);
     p.attackAnim();
     const cost = this.spCost(skill);
     if (boost.hpCostPct !== undefined) this.spendHp(boost.hpCostPct);
@@ -827,10 +837,34 @@ export class Combat implements CombatHost {
     if (target && !this.target && skill.shape.kind !== 'dash') this.setTarget(target);
   }
 
-  /** What a self-cast skill's `extra` word adds (EXTRA): `haste` quickens your step, `cleanse` shakes statuses off. */
-  private applyExtra(skill: SkillDef, _cast: Cast): void {
-    if (!isSelfCast(skill)) return;
+  /**
+   * What a skill's `extra` word adds when it is cast (./extras.ts has the whole table): `haste` on a self-cast skill
+   * or a dash quickens your step; on a self-cast skill `cleanse` shakes statuses off, `crit` sharpens your hits while
+   * it lasts, `shield` (on a buff) raises a thin shell and `reposition` breaks you free.
+   */
+  private applyExtra(skill: SkillDef, cast: Cast): void {
+    const self = isSelfCast(skill);
+    if (!self && !(skill.extra === 'haste' && skill.shape.kind === 'dash')) return;
     const now = this.scene.time.now;
+    const p = this.player;
+    if (skill.extra === 'crit' && !(skill.shape.kind === 'buff' && skill.shape.stat === 'crit')) {
+      const ms = selfEffectMs(skill.shape);
+      const source = `${skill.id}:crit`;
+      this.buffs = this.buffs.filter((b) => b.source !== source);
+      this.buffs.push({ stat: 'crit', amount: EXTRA.critPct, until: now + ms, source });
+      gameBus.emit('buffApplied', { target: 'player', skillId: skill.id, skill, element: skill.element, stat: 'crit', amount: EXTRA.critPct, durationMs: ms, untilMs: now + ms, x: p.x, y: p.y });
+    } else if (skill.extra === 'shield' && skill.shape.kind === 'buff') {
+      this.raiseShell(cast, EXTRA.shieldPct, selfEffectMs(skill.shape));
+    } else if (skill.extra === 'reposition') {
+      // You float free: nothing holds or slows you.
+      if (now < p.rootUntil || now < p.slowUntil) this.scene.floatText(p.x, p.y - 72, 'Free', '#d8f4ff', 12);
+      p.rootUntil = 0;
+      p.slowUntil = 0;
+      p.slowMult = 1;
+      delete p.marks.root;
+      delete p.marks.slow;
+      delete p.marks.soak;
+    }
     if (skill.extra === 'haste') {
       const source = `${skill.id}:haste`;
       this.buffs = this.buffs.filter((b) => b.source !== source);
@@ -905,9 +939,17 @@ export class Combat implements CombatHost {
     const totals = book.totals();
     const weapon = s.session.player.weapon;
     // The mechanic on this cast: marks cashed in against this foe, the standing damage bonus, an execute.
+    // The Gift on this blow: a hit on the foe's back, the 3rd in a row, every 4th basic attack.
+    const dx = cast.origin.x - m.x;
+    const gift = this.gifts.hit({ foe, basic: cast.use?.basic ?? false, weapon, behind: Math.abs(dx) > 6 && dx * m.facing < 0, now, direct: !cast.arcZap });
+    // `mark` (outside a class that counts marks): the foe was marked by another skill — this hit is a critical hit.
+    const marksClass = this.rt.mech()?.kind === 'marks';
+    const openHit = !marksClass && skill.extra !== 'mark' && m.markedUntil > now && !cast.arcZap;
+    if (openHit) m.markedUntil = 0;
     const mechMult =
       (1 + (cast.markPct?.get(foe) ?? 0) / 100) *
       (1 + this.rt.stats(this.nearLevel()).damage / 100) *
+      (1 + gift.pct / 100) *
       (skill.extra === 'execute' && m.hp < m.maxHp * EXTRA.executeBelow ? 1 + EXTRA.executePct / 100 : 1);
     const roll = computeDamage(
       reg.elements,
@@ -927,7 +969,7 @@ export class Combat implements CombatHost {
         familyPct: vsFamilyPct(totals, m.def.family),
         statusPct: vsStatusPct(totals, skill.element, statuses),
         falloff: falloff * cast.mult * mechMult,
-        forceCrit: cast.crit === true,
+        forceCrit: cast.crit === true || gift.crit || openHit,
       },
     );
     this.provoke(m, now);
@@ -962,7 +1004,14 @@ export class Combat implements CombatHost {
     if (skill.status && !kinds.includes(skill.status)) kinds.push(skill.status);
     if (skill.riders?.knockback && !kinds.includes('knockback')) kinds.push('knockback');
     if (cast.status && !kinds.includes(cast.status)) kinds.push(cast.status);
+    // A status named as the skill's `extra` lands even when `status` does not repeat it.
+    if (isStatusWord(skill.extra) && !kinds.includes(skill.extra)) kinds.push(skill.extra);
     for (const k of kinds) this.applyStatus(m, k, roll.amount, cast.origin, skill);
+    if (skill.extra === 'mark' && !marksClass && m.hp > 0) {
+      m.markedUntil = now + EXTRA.markMs;
+      s.floatText(m.x, top - 14, 'Marked', '#ffd76a', 11);
+    }
+    if ((gift.crit || openHit) && roll.crit) this.sayGift(gift.fired.length && gift.crit ? gift.fired : [], openHit ? 'Opened!' : undefined, m);
     // `interrupt`: the blow stops a common or elite mid wind-up.
     if (skill.extra === 'interrupt' && !m.warden) s.monsterSkills.interruptBy(m);
     // Deed-style counters (SPEC-v4 §8.5): a hit landed while holding this weapon; whose element struck last.
@@ -1010,6 +1059,23 @@ export class Combat implements CombatHost {
         s.time.delayedCall(50 + i * 40, () => {
           if (!o.alive || this.dead) return;
           this.hit(o, zap, falloff);
+        }),
+      );
+    }
+
+    // A Gift throws this blow at more foes (Spare Knife: every 4th basic attack).
+    if (gift.arc > 0) {
+      const from = { x: m.x, y: m.y - 10 };
+      const others = this.monsters
+        .filter((o) => o !== m && o.alive && Math.hypot(o.x - m.x, o.y - m.y) <= GIFT.arcRadius)
+        .sort((a, b) => Math.hypot(a.x - m.x, a.y - m.y) - Math.hypot(b.x - m.x, b.y - m.y))
+        .slice(0, gift.arc);
+      const thrown: Cast = { ...cast, arcZap: true, arcFrom: from, via: 'arc' };
+      if (others.length) this.sayGift(gift.fired.filter((id) => !!id));
+      others.forEach((o, i) =>
+        s.time.delayedCall(60 + i * 40, () => {
+          if (!o.alive || this.dead) return;
+          this.hit(o, thrown, falloff);
         }),
       );
     }
@@ -1171,6 +1237,43 @@ export class Combat implements CombatHost {
     else m.flash(color);
     this.scene.floatText(m.x, m.y - m.sprite.displayHeight, `${amount}`, hex(color), 11);
     if (m.hp <= 0) this.kill(m);
+  }
+
+  /** A burn ran out on a living foe: the worn Gift may pop it for a small burst around it (Banked Coals). */
+  private burnEnded(m: Monster, now: number): void {
+    const mult = this.gifts.statusEnds('burn', now);
+    if (mult <= 0) return;
+    const s = this.scene;
+    const st = s.stats();
+    const amount = Math.max(1, Math.round(Math.max(st.atk, st.matk) * mult));
+    s.vfx?.extra('pop', m.x, m.y);
+    const near = this.monsters.filter((o) => o.alive && Math.hypot(o.x - m.x, o.y - m.y) <= GIFT.burstRadius + o.radius);
+    for (const o of near) this.damageMonsterRaw(o, amount, 0xff8a3a);
+  }
+
+  /** Names the Gift that just did something, above the player (or `over` a foe); `word` replaces the name. */
+  private sayGift(ids: readonly string[], word?: string, over?: Monster): void {
+    const s = this.scene;
+    const p = this.player;
+    const text = word ?? (ids.length ? s.reg.passive(ids[0])?.name : undefined);
+    if (!text || !p) return;
+    if (over) s.floatText(over.x, over.y - over.sprite.displayHeight - 14, text, '#ffd76a', 11);
+    else s.floatText(p.x, p.y - 58, text, '#ffd76a', 11);
+  }
+
+  /** Whether the player stands near a fire: a campfire, the class object (a Hearth) or burning ground of their own. */
+  private nearFire(): boolean {
+    const s = this.scene;
+    const p = this.player;
+    const reach = GIFT.fireTiles * TILE;
+    for (const o of s.def.objects ?? []) {
+      if (o.kind === 'campfire' && Math.hypot(o.tx * TILE + TILE / 2 - p.x, o.ty * TILE + TILE / 2 - p.y) <= reach) return true;
+    }
+    for (const o of s.skills.objects.all()) {
+      if (!o.alive || (o.skill.element !== 'fire' && o.skill.element !== 'magma')) continue;
+      if (objectCovers(o, p.x, p.y) || objectDistance(o, p.x, p.y) <= reach) return true;
+    }
+    return false;
   }
 
   // ---------------------------------------------------------------- kills & rewards
@@ -1514,7 +1617,7 @@ export class Combat implements CombatHost {
     this.pushDest = null;
     // Down: the shell, heals in progress, placed objects and the class mechanic all end.
     this.endShield('clear');
-    this.hots = [];
+    this.endHots('clear');
     s.skills.objects.clear();
     this.rt.reset();
     const lost = Math.floor(pl.exp * 0.05);
@@ -1556,7 +1659,11 @@ export class Combat implements CombatHost {
           if (!m.alive) return;
         }
       }
+      const burnt = m.status.dots.some((d) => d.until <= now && d.kind === 'burn');
       m.status.dots = m.status.dots.filter((d) => d.until > now);
+      // A burn that ran its whole time (never one a combo used up): Banked Coals pops it.
+      if (burnt) this.burnEnded(m, now);
+      if (!m.alive) return;
     }
     // Status units on monsters are the VFX runtime's (statusApplied).
     if (m.buffs.length) {
@@ -1727,6 +1834,15 @@ export class Combat implements CombatHost {
     const still = (this.player.moving ? 1 : 1 + regenStillPct(this.scene.book.totals()) / 100) * (this.resting ? 4 : 1);
     pl.hp = Math.min(st.maxHp, pl.hp + st.maxHp * ((calm ? 0.02 : 0.005) * still + st.regen / 100));
     pl.sp = Math.min(st.maxSp, pl.sp + (st.maxSp * (calm ? 0.05 : 0.02) + 0.5) * still);
+    // Warm Hands: standing near any fire restores SP (a campfire, your Hearth, your own burning ground).
+    const fireSp = pl.sp < st.maxSp ? this.gifts.fireSp(this.nearFire()) : 0;
+    if (fireSp > 0) {
+      pl.sp = Math.min(st.maxSp, pl.sp + (st.maxSp * fireSp) / 100);
+      if (this.fireBeat++ % 2 === 0) {
+        this.scene.vfx?.extra('warm', this.player.x, this.player.y);
+        this.scene.floatText(this.player.x, this.player.y - 56, 'Warm', '#ffb060', 11);
+      }
+    } else this.fireBeat = 0;
     if (this.resting && pl.hp >= st.maxHp && pl.sp >= st.maxSp) {
       this.resting = false;
       this.scene.floatText(this.player.x, this.player.y - 56, 'Rested', '#9fffb8', 12);
@@ -1757,7 +1873,7 @@ export class Combat implements CombatHost {
     this.target = null;
     this.windup = null;
     this.shield = null;
-    this.hots = [];
+    this.endHots('clear');
     // The next map binds its own Combat; until then nothing listens.
     this.rt.onEffects = () => undefined;
   }
@@ -1778,6 +1894,7 @@ export class Combat implements CombatHost {
       return;
     }
     const pulses = Math.max(2, Math.round(sh.overMs / MEND_PULSE_MS));
+    for (const h of this.hots) if (h.cast.skill.id === cast.skill.id) this.endHot(h, 'replaced');
     this.hots = this.hots.filter((h) => h.cast.skill.id !== cast.skill.id);
     this.hots.push({ cast, per: total / pulses, left: pulses - 1, next: this.scene.time.now + MEND_PULSE_MS, origin: { x: p.x, y: p.y }, ...(sh.radius ? { radius: sh.radius } : {}), overMs: sh.overMs });
     this.healBy(cast, total / pulses, true, sh);
@@ -1797,6 +1914,32 @@ export class Combat implements CombatHost {
       this.rt.step({ type: 'prevented', pct: (healed / Math.max(1, maxHp)) * 100 });
     }
     return healed;
+  }
+
+  /** A shell worth `pct` of max HP for `ms`, raised by something that is not a shield skill (`extra: 'shield'`). */
+  private raiseShell(cast: Cast, pct: number, ms: number): void {
+    const now = this.scene.time.now;
+    const p = this.player;
+    const total = (this.scene.stats().maxHp * pct) / 100;
+    if (this.shield) this.endShield('replaced');
+    this.shield = { cast, left: total, total, until: now + ms };
+    gameBus.emit('shieldUp', { ...castRef(cast), x: p.x, y: p.y, amount: total, durationMs: ms, untilMs: now + ms });
+  }
+
+  /**
+   * A zone ticked. One whose extra is `shield` guards the player standing in it: its thin shell goes up when they
+   * step in, is made whole again on every tick, and drops when they step out or the zone ends.
+   */
+  zoneTicked(o: WorldObject, cast: Cast): void {
+    if (cast.skill.extra !== 'shield' || this.dead) return;
+    const p = this.player;
+    const mine = this.shield?.cast.skill.id === cast.skill.id;
+    if (!objectCovers(o, p.x, p.y)) {
+      if (mine) this.endShield('expired');
+      return;
+    }
+    if (mine) this.shield!.left = this.shield!.total;
+    else if (!this.shield) this.raiseShell(cast, EXTRA.shieldPct, Math.max(500, (Number.isFinite(o.until) ? o.until : this.scene.time.now + 8000) - this.scene.time.now));
   }
 
   /** A shield skill: a shell worth `pct` of max HP for `durationMs` (a new shell replaces the old one). */
@@ -1851,6 +1994,8 @@ export class Combat implements CombatHost {
     const p = this.player;
     for (const h of this.hots) {
       if (h.radius !== undefined && Math.hypot(p.x - h.origin.x, p.y - h.origin.y) > h.radius) {
+        // Stepped out of the resting circle: the heal stops, and so does everything drawn for it.
+        this.endHot(h, 'left');
         h.left = 0;
         continue;
       }
@@ -1858,8 +2003,20 @@ export class Combat implements CombatHost {
       h.next += MEND_PULSE_MS;
       h.left--;
       this.healBy(h.cast, h.per, false, { overMs: h.overMs, ...(h.radius !== undefined ? { radius: h.radius } : {}) });
+      if (h.left <= 0) this.endHot(h, 'done');
     }
     this.hots = this.hots.filter((h) => h.left > 0);
+  }
+
+  /** Tells the world a heal over time is over (once per heal). */
+  private endHot(h: Hot, reason: 'done' | 'left' | 'replaced' | 'clear'): void {
+    const p = this.player;
+    gameBus.emit('mendEnd', { ...castRef(h.cast), x: p?.x ?? h.origin.x, y: p?.y ?? h.origin.y, reason, lost: Math.max(0, h.left) });
+  }
+
+  private endHots(reason: 'clear'): void {
+    for (const h of this.hots) this.endHot(h, reason);
+    this.hots = [];
   }
 
   // ---------------------------------------------------------------- v4: the class mechanic

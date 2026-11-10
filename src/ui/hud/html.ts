@@ -61,23 +61,15 @@ export interface SlotLock {
   owned: boolean;
 }
 
-/** 9 × 9 pixel glyphs of the four weapons (the small icon on a locked slot and on lock lines). */
-const WEAPON_BITS: Record<string, string[]> = {
-  sword: ['.......##', '......###', '.....###.', '....###..', '#..###...', '.####....', '..##.....', '.#.##....', '#...#....'],
-  dagger: ['.........', '......#..', '.....##..', '....###..', '.#.###...', '..###....', '..##.....', '.#..#....', '#........'],
-  staff: ['.....###.', '....#####', '....##.##', '....#####', '...#.###.', '..#......', '.#.......', '#........', '.........'],
-  fists: ['.........', '..#.#.#..', '.#######.', '.#######.', '.#######.', '#.#####..', '.######..', '..####...', '.........'],
-};
+const WEAPON_GLYPHS: ReadonlySet<string> = new Set(['sword', 'dagger', 'staff', 'fists']);
 
-/** A weapon's pixel glyph as crisp inline SVG (coloured by CSS `color`); '' for unknown weapons. */
+/**
+ * A weapon's drawn glyph (art/ui.ts `ui_ico_w_<weapon>`, 24 × 24 art px, shown through the `.ui-ico-w_<weapon>`
+ * class the UI art injects); '' for unknown weapons. Size it in whole multiples of 24 px where it can be.
+ */
 export function weaponGlyph(weapon: string, cls = ''): string {
-  const rows = WEAPON_BITS[weapon];
-  if (!rows) return '';
-  let d = '';
-  rows.forEach((row, y) => {
-    for (let x = 0; x < row.length; x++) if (row[x] === '#') d += `M${x} ${y}h1v1h-1z`;
-  });
-  return `<svg class="wi ${cls}" viewBox="0 0 9 9" shape-rendering="crispEdges" aria-hidden="true"><path fill="currentColor" d="${d}"/></svg>`;
+  if (!WEAPON_GLYPHS.has(weapon)) return '';
+  return `<i class="wi ui-ico-w_${weapon}${cls ? ` ${cls}` : ''}" data-w="${weapon}" aria-hidden="true"></i>`;
 }
 
 const attr = (s: string): string => esc(s);

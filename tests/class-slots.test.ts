@@ -50,17 +50,26 @@ describe('class slots: classSkills', () => {
 
   it('takes one skill per base before doubling up on variants', () => {
     const b = bookWith(['whirlwind', 'whirlwind@fire', 'sword_throw', 'heavy_cleave']);
-    // Knowing 4 blade skills also unlocks Blademaster, whose signature (Blade Aura) is a blade skill too.
+    // v4: knowing blade skills no longer makes a Blademaster (60 sword hits do), so no kit skill is known here
+    // and every slot is a fill.
+    expect(b.state.classes.blademaster).toBeUndefined();
     const pick = b.classSkills('blademaster');
     for (const id of ['whirlwind', 'sword_throw', 'heavy_cleave']) expect(pick).toContain(id);
-    expect(b.classSkills('blademaster', 4).filter((id) => id.startsWith('whirlwind')).length).toBe(1);
+    const three = b.classSkills('blademaster', 3);
+    expect(three.filter((id) => id.startsWith('whirlwind')).length).toBe(1);
+    expect(new Set(three.map((id) => reg.baseOf(id) ?? id)).size).toBe(3);
+    // The variant only takes a slot once every base has one.
+    expect(b.classSkills('blademaster', 4).filter((id) => id.startsWith('whirlwind')).length).toBe(2);
   });
 
-  it('elemental classes spread across elements first', () => {
-    const b = bookWith(['firebolt', 'meteor', 'aqua_lance', 'wind_cutter', 'inferno_ring']);
-    const pick = b.classSkills('elementalist', 3);
-    const els = new Set(pick.map((id) => reg.skill(id)!.element));
-    expect(els.size).toBe(3);
+  it('a kit skill keeps its own slot; unknown kit slots take fills usable with the class weapon (§3.4)', () => {
+    // Prismcaller's kit: prism_burst, prism_sage_sig, glacial_orb, inferno_ring, tidal_ripple.
+    const b = bookWith(['firebolt', 'meteor', 'aqua_lance', 'wind_cutter', 'inferno_ring', 'whirlwind']);
+    const pick = b.classSkills('elementalist');
+    expect(pick.length).toBe(CLASS_SLOTS);
+    expect(pick[3]).toBe('inferno_ring'); // kit slot 4, whatever the fills' tiers
+    expect(pick).not.toContain('whirlwind'); // needs a sword: a rod class never equips it
+    expect([...pick].sort()).toEqual(['aqua_lance', 'firebolt', 'inferno_ring', 'meteor', 'wind_cutter']);
   });
 
   it('barEligible excludes basics and monster-only attacks', () => {
@@ -79,21 +88,28 @@ const SWORD = [
 describe('class slots: related skills (owner: "auto equip RELATED skills")', () => {
   it('reads the tree tags from the class tree (main tag first)', () => {
     expect(classTreeTags(reg, cls('pyroblade'))).toEqual(['fire', 'blade']);
-    expect(classTreeTags(reg, cls('arcanist'))).toEqual(['arcane', 'aoe']);
-    expect(classTreeTags(reg, cls('tidecaller'))).toEqual(['water']);
+    // v4: the class weapon's grip tag joins the theme (once).
+    expect(classTreeTags(reg, cls('arcanist'))).toEqual(['arcane', 'aoe', 'rod']);
+    expect(classTreeTags(reg, cls('tidecaller'))).toEqual(['water', 'rod']);
+    expect(classTreeTags(reg, cls('wayfarer'))).toEqual(['dash', 'buff', 'fist']);
   });
 
-  it('classSkillFit: pattern match, related (shared tag or named element), or nothing', () => {
+  it('classSkillFit: a kit skill is a match, anything else the class weapon can cast is related, the rest is nothing', () => {
     const fit = (c: string, id: string) => classSkillFit(reg, cls(c), reg.skill(id)!);
-    expect(fit('pyroblade', 'flame_spin')).toBe('match'); // blade + fire
-    expect(fit('pyroblade', 'whirlwind')).toBe('related'); // blade
-    expect(fit('pyroblade', 'firebolt')).toBe('related'); // fire
-    expect(fit('pyroblade', 'focus')).toBeNull();
-    expect(fit('arcanist', 'whirlwind')).toBe('related'); // area: the Arcanist tree's second tag
-    expect(fit('arcanist', 'sword_throw')).toBeNull();
-    expect(fit('earthshaper', 'crack_armor')).toBe('related'); // heavy
-    expect(fit('magma_knight', 'magma_spit')).toBe('related'); // magma: named by its requirement and bonus
+    for (const id of cls('pyroblade').kit!) expect(fit('pyroblade', id), id).toBe('match');
+    expect(fit('magma_knight', 'flame_spin')).toBe('match'); // a legacy kit skill
+    expect(fit('magma_knight', 'guillotine@fire')).toBe('match'); // and a variant of one
+    expect(fit('pyroblade', 'flame_spin')).toBe('related'); // sword skill, not in the kit
+    expect(fit('pyroblade', 'whirlwind')).toBe('related');
+    expect(fit('pyroblade', 'firebolt')).toBe('related'); // free of a weapon: any class may hold it
+    expect(fit('pyroblade', 'focus')).toBe('related');
+    expect(fit('pyroblade', 'slash')).toBeNull(); // basic attacks never sit on the bar
+    expect(fit('pyroblade', 'backstab')).toBeNull(); // needs a dagger
+    expect(fit('pyroblade', 'last_word')).toBeNull(); // Blademaster's own skill
+    expect(fit('arcanist', 'whirlwind')).toBeNull(); // needs a sword
     expect(fit('tidecaller', 'whirlwind')).toBeNull();
+    expect(fit('mimic', 'whirlwind')).toBe('related'); // any weapon
+    expect(fit('mimic', 'last_word')).toBeNull();
   });
 
   it('a Pyroblade who knows only sword skills fills all 5 class slots with them, best first', () => {
@@ -120,19 +136,20 @@ describe('class slots: related skills (owner: "auto equip RELATED skills")', () 
   });
 
   it('an Arcanist with the staff starters equips all of them (plus its Mana Surge) and leaves the rest empty', () => {
-    // The basic Bolt counts toward unlocking Arcanist (4 arcane skills) but never takes a slot.
+    // v4: sixty rod hits make a Spellwright; Class Level 1 teaches kit skills 1 and 2. The basic Bolt never takes a slot.
     const b = bookWith(['bolt', 'arcane_orb', 'arcane_nova', 'focus']);
+    expect(b.state.classes.arcanist).toBeUndefined();
+    b.incFlag('hits:staff', 60);
     expect(b.state.classes.arcanist).toBeDefined();
     const pick = classSkills(reg, b.state, cls('arcanist'));
-    expect([...pick].sort()).toEqual(['arcane_nova', 'arcane_orb', 'focus', 'mana_surge']);
-    expect(pick[0]).toBe('mana_surge'); // tier 2 signature first
+    expect([...pick].sort()).toEqual(['arcane_nova', 'arcane_orb', 'focus', 'mana_surge', 'thread_bolt']);
+    expect(pick.slice(0, 2)).toEqual(['mana_surge', 'thread_bolt']); // the kit, in kit order
+    for (const id of pick.slice(2)) expect(classSkillFit(reg, cls('arcanist'), reg.skill(id)!)).toBe('related');
   });
 
-  it('an Arcanist who knows only sword skills takes the area ones (its tree) and nothing unrelated', () => {
+  it('a Spellwright who knows only sword skills equips none of them: a rod cannot cast them', () => {
     const b = bookWith(SWORD);
-    const pick = classSkills(reg, b.state, cls('arcanist'));
-    expect(pick.length).toBe(CLASS_SLOTS);
-    for (const id of pick) expect(reg.skill(id)!.tags).toContain('aoe');
+    expect(classSkills(reg, b.state, cls('arcanist'))).toEqual([]);
   });
 
   it('a class with nothing related known leaves its slots empty', () => {
@@ -140,14 +157,18 @@ describe('class slots: related skills (owner: "auto equip RELATED skills")', () 
     expect(classSkills(reg, b.state, cls('tidecaller'))).toEqual([]);
   });
 
-  it('one skill per base first, across pattern matches and related skills', () => {
-    const b = bookWith(['whirlwind', 'whirlwind@fire', 'sword_throw', 'heavy_cleave']);
-    // whirlwind@fire is a blade + fire match; plain Whirlwind shares its base, so the other blades come first
-    // (4 blade skills also unlock Blademaster, whose Blade Aura is a related blade skill too).
-    const four = classSkills(reg, b.state, cls('pyroblade'), 4);
-    expect(four[0]).toBe('whirlwind@fire');
-    expect([...four].sort()).toEqual(['blade_aura', 'heavy_cleave', 'sword_throw', 'whirlwind@fire']);
-    expect(classSkills(reg, b.state, cls('pyroblade'), 5).at(-1)).toBe('whirlwind'); // only when nothing else fits
+  it('one skill per base first, across kit skills and fills', () => {
+    const b = bookWith(['guillotine', 'guillotine@fire', 'whirlwind', 'whirlwind@fire', 'sword_throw', 'heavy_cleave']);
+    // Magma Knight's kit holds guillotine in slot 5; the other slots are fills, one per base first.
+    const four = classSkills(reg, b.state, cls('magma_knight'), 4);
+    expect(four.at(-1)).toBe('guillotine'); // the kit skill itself, never its variant; seated even on a short bar
+    expect(four.filter((id) => id.startsWith('whirlwind')).length).toBe(1);
+    expect(four).toContain('sword_throw');
+    expect(four).toContain('heavy_cleave');
+    const five = classSkills(reg, b.state, cls('magma_knight'), 5);
+    expect(five[4]).toBe('guillotine');
+    expect(new Set(five.map((id) => reg.baseOf(id) ?? id)).size).toBe(4); // one double, only once nothing else fits
+    expect(new Set(five).size).toBe(5);
   });
 });
 

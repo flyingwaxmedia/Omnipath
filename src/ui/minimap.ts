@@ -76,6 +76,8 @@ const PROP_RGB: Partial<Record<PropKind, RGB>> = {
   rock: [120, 120, 126],
   boulder: [108, 106, 112],
   crystal: [150, 204, 232],
+  menhir: [132, 130, 138],
+  log: [104, 78, 54],
 };
 
 const ROOF_RGB: RGB = [156, 84, 62];
@@ -104,6 +106,21 @@ export function paintGround(cm: CompiledMap, ppt: number, hide: readonly PortalD
   const def = cm.def;
   const props = new Map<number, PropKind>();
   for (const p of cm.props) props.set(p.ty * w + p.tx, p.kind);
+  // Forest borders (cm.forest): every cell is canopy, though only some carry a tree prop. The canopy takes the colour
+  // of the trees standing in it and darkens toward the interior, as the drawn forest does.
+  const forest = cm.forest;
+  let canopy: RGB = PROP_RGB.tree!;
+  if (forest) {
+    const count = new Map<PropKind, number>();
+    for (const p of cm.props) if (forest[p.ty * w + p.tx] && PROP_RGB[p.kind]) count.set(p.kind, (count.get(p.kind) ?? 0) + 1);
+    let best = 0;
+    for (const [k, c] of count) {
+      if (c > best) {
+        best = c;
+        canopy = PROP_RGB[k]!;
+      }
+    }
+  }
   const roofs = new Uint8Array(w * h);
   for (const s of def.structures ?? []) {
     const fp = STRUCTURE_FOOTPRINT[s.kind];
@@ -124,6 +141,8 @@ export function paintGround(cm: CompiledMap, ppt: number, hide: readonly PortalD
     if (isWater(i)) return { c: lift(base, n * 0.6), kind: 'water' };
     const blocked = (cm.coll[i] & COLL.BLOCK) !== 0 && !(cm.coll[i] & COLL.PORTAL);
     if (blocked) {
+      const depth = forest?.[i] ?? 0;
+      if (depth > 0) return { c: lift(shade(canopy, 1 - 0.07 * Math.min(5, depth - 1)), n), kind: 'prop' };
       const prop = props.get(i);
       if (prop && PROP_RGB[prop]) return { c: lift(PROP_RGB[prop]!, n), kind: 'prop' };
       if (g === T.LAVA) return { c: lift(base, n), kind: 'water' };

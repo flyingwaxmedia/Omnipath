@@ -1,5 +1,7 @@
 // HUD v4 pure helpers (docs/SPEC-v4.md §11.7: HUD diet, one mechanic widget, the weapon lock line) — on top of the
 // HUD v3 pure helpers (HUD lane): layout maths and HTML builders (docs/CLIENT-v3.md §2, docs/UX-SIMPLE.md).
+import { MECHANIC_HINTS, REBUILT, RHYTHM_HINT } from '../src/data/classes';
+import { UI_GLYPHS } from '../src/game/art/icons';
 import { describe, expect, it } from 'vitest';
 import { becomeSwapLine, classRewards, kitRows, nextRewardLine, weaponLock } from '../src/ui/classinfo';
 import type { BarSlotView, PursuitView, SlotPickerView, ZoneView } from '../src/ui/controller';
@@ -205,12 +207,17 @@ describe('skill bar slots', () => {
     expect(v).toContain('data-need="sword"');
     expect(v).toContain('aria-label="Whirlwind: Needs a sword — Equip"');
     expect(v).toContain('class="wlock can"');
-    expect(v).toContain('<svg class="wi ');
+    expect(v).toContain('<i class="wi ui-ico-w_sword"'); // the drawn weapon glyph (art/ui.ts ui_ico_w_sword)
     // Not owned: the line alone (no Equip to offer).
     const no = slotHtml(slot({ skillId: 'knife_fan', name: 'Knife Fan' }), art, { auto: false, lock: { need: 'dagger', line: 'Needs a dagger', owned: false } });
     expect(no).toContain('aria-label="Knife Fan: Needs a dagger"');
     expect(no).toContain('class="wlock"');
-    for (const w of ['sword', 'dagger', 'staff', 'fists']) expect(weaponGlyph(w)).toContain('<path');
+    // Every weapon has a drawn glyph in the UI art, and weaponGlyph() shows exactly that texture.
+    for (const w of ['sword', 'dagger', 'staff', 'fists']) {
+      expect(UI_GLYPHS).toContain(`w_${w}`);
+      expect(weaponGlyph(w)).toContain(`ui-ico-w_${w}`);
+      expect(weaponGlyph(w)).not.toContain('<svg');
+    }
     expect(weaponGlyph('spoon')).toBe('');
   });
 });
@@ -524,6 +531,17 @@ describe('the class mechanic widget', () => {
       expect(hint).toContain('Heat');
     }
     expect(mechanicHint({ ...base, hint: 'Hits build Heat.' })).toBe('Hits build Heat.');
+    // A class line that does not name its mechanic gets the name in front; it is text, never markup.
+    expect(mechanicHint({ ...base, name: 'Cadence', kind: 'combo', hint: 'Three <b> skills.' })).toBe('<b>Cadence</b>: Three &lt;b&gt; skills.');
+    expect(asMechView({ ...base, hint: 'x', classId: 'pyroblade' })).toMatchObject({ hint: 'x', classId: 'pyroblade' });
+  });
+
+  it('every rebuilt class has its own first-time line: plain, at most 60 characters', () => {
+    expect(Object.keys(MECHANIC_HINTS).sort()).toEqual([...REBUILT].sort());
+    for (const line of [...Object.values(MECHANIC_HINTS), RHYTHM_HINT]) {
+      expect(line.length, line).toBeLessThanOrEqual(60);
+      expect(line, line).not.toMatch(/gauge|combo|stance|kit|mechanic|%|\d{2,}/i);
+    }
   });
 });
 

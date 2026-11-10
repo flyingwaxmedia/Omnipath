@@ -993,17 +993,27 @@ describe('discovery triggers (incFlag)', () => {
         study: {},
       };
     }
-    saved.classes.sword_saint = { rank: 6, xp: 0 };
-    saved.classes.archmage = { rank: 6, xp: 0 };
-    saved.worn = 'sword_saint';
+    // v4 (§3.6): Ascendant asks for a mastered Stormwhirl and the storm relic; knowing skills no longer counts.
+    saved.classes.stormreaver = { rank: 9, xp: 0 };
+    saved.worn = 'stormreaver';
+    saved.flags.relic_storm = 1;
     const b = new SkillBook(real, saved);
     b.evaluateClasses();
     const ascendant = real.classDef('ascendant')!;
+    expect(b.classProgress(ascendant).requires).toEqual([
+      { text: 'Master Stormwhirl', ok: false },
+      { text: "Claim Thunderhoof's storm relic", ok: true },
+    ]);
+    expect(b.state.classes.ascendant).toBeUndefined(); // the relic alone is not enough
+    delete b.state.flags.relic_storm;
+    b.state.classes.stormreaver.rank = 10;
     const before = b.classProgress(ascendant);
     expect(before.discovered).toBe(false);
-    expect(before.clauses.every((c) => c.have >= c.clause.count)).toBe(true);
-    expect(before.parents?.every((p) => p.have >= p.need)).toBe(true);
-    expect(before.requires).toEqual([{ text: "Claim Thunderhoof's storm relic", ok: false }]);
+    expect(before.clauses).toEqual([]);
+    expect(before.requires).toEqual([
+      { text: 'Master Stormwhirl', ok: true },
+      { text: "Claim Thunderhoof's storm relic", ok: false },
+    ]);
     b.incFlag('kills');
     b.incFlag('kill_thunderhoof');
     expect(b.state.classes.ascendant).toBeUndefined();

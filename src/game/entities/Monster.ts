@@ -100,6 +100,8 @@ export class Monster implements TextAnchor {
   provoked = false;
   respawnAt = 0;
   facing = 1;
+  /** `mark` (a skill's extra): until this time the next hit of another skill on it is a critical hit (0 = not marked). */
+  markedUntil = 0;
   nextAttack = 0;
   nextWander = 0;
   wanderTo: { x: number; y: number } | null = null;
@@ -166,11 +168,13 @@ export class Monster implements TextAnchor {
     readonly element: ElementDef | undefined,
     /** Spawn slot id (elite respawn timers survive map changes). */
     readonly slot: string,
+    /** Spawn index within the map: picks this monster's size / hue variation, stable across visits (SPEC-v4 §11.8). */
+    instance?: number,
   ) {
     this.x = spawn.x;
     this.y = spawn.y;
     this.hp = def.hp;
-    const look = monsterTexture(scene, def);
+    const look = monsterTexture(scene, def, instance);
     const tex = look.key;
     this.baked = look.baked;
     this.shadow = scene.add.image(this.x, this.y, shadowKey(scene, monsterShadowW(def.rank, def.scale ?? 1))).setDepth(DEPTH.SHADOW);
@@ -550,6 +554,7 @@ export class Monster implements TextAnchor {
     this.chaseAt += ms;
     if (this.nextTechAt) this.nextTechAt += ms;
     if (Number.isFinite(this.respawnAt)) this.respawnAt += ms;
+    if (this.markedUntil) this.markedUntil += ms;
   }
 
   /** Fresh instance state for a respawn (new uid: per-instance caps and witness marks reset). */
@@ -562,6 +567,7 @@ export class Monster implements TextAnchor {
     this.status = freshStatus();
     this.hitGrants.clear();
     this.lastBlow = null;
+    this.markedUntil = 0;
     this.witnessed.clear();
     this.eyeShown = false;
     this.techReadyAt.clear();

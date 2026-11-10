@@ -28,6 +28,7 @@
 //   blink            vanish where the caster stood (their own frame slices away), streaks to where they land, arrive
 //   mend             the bloom on the first pulse, the trickle loop and resting circle for a heal over time, a small
 //                    lift on each later pulse
+//   mendEnd          a heal over time stopped (also early: the player left its resting circle): its loop ends
 //   shieldUp / shieldHit / shieldEnd   the shell forms and holds; each soaked blow flashes it; it breaks (and bursts)
 //   mechanic         the worn class's mechanic: meter full, finisher, combo step, stance swap on the player; mark
 //                    pips, cash-in and stored-damage pops on the marked foes; class objects placed / grown / used.
@@ -106,6 +107,10 @@ interface ZoneState {
   group: VfxGroup;
   recipe: VfxRecipe;
   ctx: PlayCtx;
+  /** The live record (a class object grows: `level`). */
+  obj: { alive: boolean; radius: number };
+  /** The extra fire a grown class object wears (replaced at every level). */
+  grow?: VfxGroup;
 }
 
 /** Body bucket of a monster from its sprite height. */
@@ -190,6 +195,7 @@ export class VfxBridge {
       .on('shieldUp', (e) => this.shieldUp(e))
       .on('shieldHit', (e) => this.shieldHit(e))
       .on('shieldEnd', (e) => this.shieldEnd(e))
+      .on('mendEnd', (e) => this.mendEnd(e))
       .on('mechanic', (e) => this.mechanic(e));
     return this;
   }
@@ -221,6 +227,7 @@ export class VfxBridge {
       bus.on('shieldUp', (e) => this.shieldUp(e)),
       bus.on('shieldHit', (e) => this.shieldHit(e)),
       bus.on('shieldEnd', (e) => this.shieldEnd(e)),
+      bus.on('mendEnd', (e) => this.mendEnd(e)),
       bus.on('mechanic', (e) => this.mechanic(e)),
     ];
     return () => offs.forEach((o) => o());
@@ -762,7 +769,7 @@ export class VfxBridge {
     const life = timed ? Math.max(1, Math.round(e.durationMs)) : undefined;
     const standing = (r.phases.aura ?? []).map((q) => (q.lifeMs === undefined ? q : ({ ...q, lifeMs: life } as VfxPiece)));
     const group = this.stage.play(standing, { ...ctx, alive: () => obj.alive && this.stage.now() < end });
-    this.zones.set(e.id, { group, recipe: r, ctx });
+    this.zones.set(e.id, { group, recipe: r, ctx, obj });
   }
 
   objectTick(e: GameEvents['objectTick']): void {
@@ -778,6 +785,7 @@ export class VfxBridge {
     if (!z) return;
     this.zones.delete(e.id);
     z.group.end();
+    z.grow?.end();
     // A map change clears every object at once: nothing to show.
     if (e.reason === 'clear') return;
     const end = z.recipe.riders.zone?.end;
@@ -830,6 +838,14 @@ export class VfxBridge {
     if (!aura.length || !e.overMs) return;
     const end = this.stage.now() + e.overMs;
     this.mends.set(e.skillId, this.stage.play(aura, { ...base, aim: at, target: at, r: e.radius, alive: () => this.stage.now() < end }));
+  }
+
+  /** A heal over time stopped (finished, or cut short by leaving its circle): its trickle and resting rim let go now. */
+  mendEnd(e: GameEvents['mendEnd']): void {
+    const g = this.mends.get(e.skillId);
+    if (!g) return;
+    g.end();
+    this.mends.delete(e.skillId);
   }
 
   shieldUp(e: GameEvents['shieldUp']): void {
@@ -931,10 +947,29 @@ export class VfxBridge {
       case 'levelUp':
       case 'consumed': {
         const at = e.at ? { x: e.at.x, y: e.at.y } : { x: p.x, y: p.y };
+        if (type === 'levelUp' && e.objectId !== undefined && e.effect.type === 'levelUp') this.growZone(e.objectId, e.effect.level);
         this.stage.play(mechanicPieces(type, fam, { calm }), { owner: 'player', target: at, caster: p, ang: 0, seed });
         return;
       }
     }
+  }
+
+  /**
+   * A class object grew a level (Pyromancer's Hearth): its fire is visibly bigger for as long as it stands — more
+   * and larger units of the zone's own field, packed toward the middle, replaced at every level. No new textures:
+   * the recipe's own field piece, re-placed.
+   */
+  private growZone(objectId: number, level: number): void {
+    const z = this.zones.get(objectId);
+    if (!z || level < 2) return;
+    z.grow?.end();
+    const field = (z.recipe.phases.aura ?? []).find((q) => q.component === 'field');
+    if (!field || !field.place) return;
+    const R = z.obj.radius;
+    const n = Math.min(4, level - 1); // levels 2..5 → 1..4
+    const core: VfxPiece = { ...field, params: { size: 'm' }, place: { ...field.place, count: 2 + 2 * n, radius: Math.round(R * (0.16 + 0.07 * n)), spacing: 10 }, lifeMs: undefined } as VfxPiece;
+    const more: VfxPiece = { ...field, place: { ...field.place, count: 3 * n, radius: Math.round(R * 0.9), spacing: 14 }, lifeMs: undefined } as VfxPiece;
+    z.grow = this.stage.play([core, more], { ...z.ctx, seed: hashSeed(z.ctx.seed, `grow${level}`), alive: () => z.obj.alive });
   }
 
   private endMark(m: Monster): void {

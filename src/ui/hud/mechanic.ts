@@ -27,8 +27,10 @@ export interface MechWidgetView {
   tap?: boolean;
   /** The class colour, '#rrggbb'. */
   color?: string;
-  /** One-line first-time hint written by the class data, if any. */
+  /** One-line first-time hint written by the class data, if any (plain text). */
   hint?: string;
+  /** The worn class (the first-time hint is remembered per class when it has its own line). */
+  classId?: string;
 }
 
 
@@ -55,6 +57,7 @@ export function asMechView(raw: unknown): MechWidgetView | null {
     ...(v.tap ? { tap: true } : {}),
     ...(typeof v.color === 'string' && /^#[0-9a-f]{3,8}$/i.test(v.color) ? { color: v.color } : {}),
     ...(typeof v.hint === 'string' && v.hint ? { hint: v.hint } : {}),
+    ...(typeof v.classId === 'string' && v.classId ? { classId: v.classId } : {}),
   };
 }
 
@@ -78,8 +81,10 @@ export function mechanicTap(ctrl: GameController): { ok: boolean; message?: stri
 
 /** The one-line hint shown the first time a kind of widget appears (docs/UX-SIMPLE.md rule 9). */
 export function mechanicHint(v: MechWidgetView): string {
-  if (v.hint) return v.hint;
   const n = `<b>${esc(v.name)}</b>`;
+  // The class's own line; the mechanic's name goes in front unless the line already says it (a stance's widget is
+  // named after the side you are in, so its line stands alone).
+  if (v.hint) return v.kind === 'stance' || v.hint.includes(v.name) ? esc(v.hint) : `${n}: ${esc(v.hint)}`;
   switch (v.kind) {
     case 'gauge':
       return `${n} fills as you fight. Full, it powers your next class skill.`;

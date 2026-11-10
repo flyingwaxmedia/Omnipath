@@ -100,6 +100,8 @@ export interface MechanicHudView {
   tap: boolean;
   /** The class colour, '#rrggbb'. */
   color: string;
+  /** One plain line saying what this class's widget does (shown once, the first time it appears). */
+  hint?: string;
 }
 
 /** One choice in the own-slot picker grid (docs/UX-SIMPLE.md §3). */

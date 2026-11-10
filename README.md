@@ -8,8 +8,11 @@ pick skills from a menu: you **discover** them by fighting, exploring and helpin
 - **Find elements** by doing things: forging, fishing, mining, meditating, hunting a warden.
 - **Fuse** skills and elements at the altar. Fire + Whirlwind makes **Flame Spin**; Flame Spin + Tornado makes
   **Firestorm**.
-- **Become a class.** Classes unlock by themselves when the skills you know fit a pattern. A class puts its own
-  skills on your bar and changes your outfit. There are 30 classes in three tiers.
+- **Become a class.** A class is a weapon plus a way of fighting, and it finds you: fight with one weapon long enough
+  and its first class unlocks; bring an element to it and rarer ones follow. Each class has five skills of its own,
+  one thing only it can do (Heat, a Hearth, a turning tide, a pinned shadow…) and its own outfit. There are 26.
+- **Hold a weapon, or none.** Sword, Dagger, Rod and **Bare Hands** each have their own skills. A weapon's skills need
+  that weapon in your hand; spells and body moves work with anything.
 - **Help everyone.** Every NPC has quests, and trainers teach their skills only as quest rewards.
 
 Everything you see and hear (tiles, characters, monsters, icons, effects, sounds) is generated in code when the game
@@ -39,7 +42,7 @@ game from its icon.
 **One file you can host anywhere**
 
 ```bash
-npm run build:single # writes dist-single/omnipath.html (about 1.4 MB)
+npm run build:single # writes dist-single/omnipath.html (about 1.7 MB)
 ```
 
 The game, its CSS and its two pixel fonts are inside that one HTML file; only Phaser loads from the jsDelivr CDN.
@@ -64,20 +67,40 @@ The bar has **8 slots**. The **5 on the left are class slots**: they carry your 
 them by itself with related skills. The **3 on the right are your slots**: hold one (or tap an empty one) to pick any
 skill you like from a grid of icons. Hold a class slot to see that skill's card. With no class, all 8 slots are yours.
 
-Skills you learn work with **any weapon**. Only the basic attack (Slash, Quick Stab, Arcane Bolt) comes from the weapon you hold.
+**Weapons matter.** Sword, dagger, rod and bare-hand skills need that weapon in your hand. With another one, the
+slot goes dim and shows the weapon it needs ("Needs a sword — Equip"): tap it once to swap. Spells such as Ember Dart
+and body moves such as Rising Kick work with any weapon. **Bare Hands** is a weapon too (Bag → put your weapon away),
+with its own tree that starts at Jab. Changing weapons takes a moment in a fight.
 
 ### Classes equip themselves
 
-- A class unlocks when the skills you know fit its pattern; you get one card: "New class: Pyroblade".
+- A class unlocks by what you do: land 60 hits with a sword and you are a **Blademaster**; with bare hands, a
+  **Wayfarer**; defeat 20 foes with fire while holding a sword and **Pyroblade** finds you. You get one card.
 - Your first class is put on for you. Later, open **Class** and tap **Become** on any unlocked class (not in the
-  middle of a fight).
-- Becoming a class fills the 5 class slots with its best related skills, changes your outfit, and shows one line:
-  "All class slots filled", "3 class skills equipped", or what to learn when it has nothing to use yet.
-- New related skills you learn drop into the class slots by themselves, or replace a weaker one, with a short toast.
+  middle of a fight). Becoming a class also equips its weapon.
+- The 5 class slots hold the class's **own five skills**. Two come at once, the others at Class Levels 2, 4 and 6; a
+  slot whose skill you do not have yet borrows another skill you know.
+- A class levels up only while you wear it (to Class Level 10: **Mastered**). Its rarity (Common … Epic) says how
+  hard it is to find, never how strong it is.
+- Each class has **one widget above the bar** for the one thing only it does. Eight classes are fully rebuilt so far:
+
+  | Class | Weapon | What only it does |
+  |---|---|---|
+  | Blademaster | Sword | **Cadence**: three different sword skills, the third always crits |
+  | Knife Juggler | Dagger | **Juggle**: every thrown knife that hits makes the next one faster |
+  | Spellwright | Rod | **Weave**: three different spells, the fourth is free and bigger |
+  | Wayfarer | Bare Hands | **Road Rhythm**: Jab, Jab, then a class skill lands a Roadhouse hit |
+  | Pyroblade | Sword + Fire | **Heat**: sword hits build it; full, the next class skill is huge and costs HP |
+  | Shadowstalker | Dagger + Shadow | **Pinned Shadow**: pin a foe, half your damage lands again when the pin ends |
+  | Pyromancer | Rod + Fire | **Hearth**: a fire you place; kills beside it make it grow, then you throw it |
+  | Tidereader | Rod + Water | **High Tide / Low Tide**: the tide turns by itself and changes your spells |
+
+  The other 18 classes already have their own five skills and a simple three-skill rhythm; their full rebuilds come
+  in later phases (docs/SPEC-v4.md §15).
 
 ### The Star Chart (Skills button)
 
-Every skill is a star in a night sky: the sword, dagger and staff constellations, the elements at the centre, and the
+Every skill is a star in a night sky: the sword, dagger, rod and bare-hands constellations, the elements at the centre, and the
 techniques, wild echoes and class signatures around them. Drag to look around, pinch to zoom, tap a star to see its
 card. A card always has **one** button: **Equip**, **Transform** when the skill is ready, or the next step ("Reach rank
 10 to transform."). Unknown stars show a **?** only when they are one step away from something you know.
@@ -142,14 +165,15 @@ URL options: `?fast` speeds up mastery for testing; `?k=3` forces the pixel scal
 ## Code map
 
 ```
-src/core     the rules: mastery, transforms, fusion, classes, quests, combat, saves (no Phaser or DOM, so a server can run it)
-src/data     all content: 160 skills, 30 classes, 55 quests, 41 monsters, 11 elements, 28 maps
+src/core     the rules: mastery, transforms, fusion, weapons, classes and their mechanics, quests, combat, saves
+             (no Phaser or DOM, so a server can run it)
+src/data     all content: about 200 skills, 26 classes, 55 quests, 41 monsters, 11 elements, 28 maps
 src/game     the Phaser client: procedural pixel art (art/), pixel-perfect rendering (render/), actors (entities/),
              combat and interactions (systems/), spell effects (vfx/), procedural sound (audio/), scenes
 src/ui       the DOM overlay: HUD, skill bar and picker, Star Chart, panels (Class, Codex, Bag, Fuse, Map), dialogs
 tests        Vitest suites
 scripts      playtest, single-file build, VFX contact sheets
-docs         design and build specs (start with docs/DESIGN.md)
+docs         design and build specs (start with docs/DESIGN.md; the design of record is docs/SPEC-v4.md)
 ```
 
 ### Adding a skill
@@ -157,7 +181,13 @@ docs         design and build specs (start with docs/DESIGN.md)
 1. Add a `SkillDef` to the right file in `src/data/skills/`.
 2. Connect it: a transform (`src/data/morphs/`), a fusion recipe (`src/data/recipes/`), a class signature, a quest
    reward or an item.
-3. Run `npm test`. It fails on broken references, duplicate recipes, and skills that can't be reached.
+3. Give it `weapons` if it needs one in hand, and a `delivery` / `extra` that no other skill of its kind shares.
+4. Run `npm test`. It fails on broken references, duplicate recipes, skills that can't be reached, two skills that
+   are the same in all but name (`distinct.test`), and a skill or Gift that promises an effect the game does not
+   have (`skill-promises.test`).
+
+Old saves load: a save from before the class rebuild keeps every skill, class and level (four old classes merged
+into others; the rules are in docs/SPEC-v4.md §13).
 
 ## Ship to phones as an app
 

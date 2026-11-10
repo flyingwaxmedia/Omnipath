@@ -373,6 +373,9 @@
 .hud-layer .g-menu { background-image: var(--ui-ico-menu); }
 .hud-layer .g-quest { background-image: var(--ui-ico-quest); }
 .hud-layer .g-attack { background-image: var(--ui-ico-attack); }
+.hud-layer .atk[data-w="fists"] .g-attack { background-image: var(--ui-ico-w_fists); }
+.hud-layer .atk[data-w="staff"] .g-attack { background-image: var(--ui-ico-w_staff); }
+.hud-layer .atk[data-w="dagger"] .g-attack { background-image: var(--ui-ico-w_dagger); }
 .hud-layer .g-auto { background-image: var(--ui-ico-auto); }
 .hud-layer .g-target { background-image: var(--ui-ico-target); }
 .hud-layer .g-potion { background-image: var(--ui-ico-potion); }
@@ -2628,17 +2631,16 @@
   position: absolute;
   left: 50%;
   top: 50%;
-  width: calc(18 * var(--px));
-  height: calc(18 * var(--px));
+  width: calc(24 * var(--px));
+  height: calc(24 * var(--px));
   transform: translate(-50%, -50%);
-  color: var(--h-mute);
-  filter: drop-shadow(calc(1 * var(--px)) 0 0 var(--h-out)) drop-shadow(calc(-1 * var(--px)) 0 0 var(--h-out)) drop-shadow(0 calc(1 * var(--px)) 0 var(--h-out))
-    drop-shadow(0 calc(-1 * var(--px)) 0 var(--h-out));
+  /* a weapon you do not own yet: the glyph is greyed; one you can equip with a tap wears its colours */
+  filter: grayscale(1) brightness(0.8);
   pointer-events: none;
 }
 
 .slot .wlock.can {
-  color: var(--h-gold);
+  filter: none;
 }
 
 .slot .wlock .wi {

@@ -5,6 +5,7 @@ import { CLASS_SLOTS, barEligible, canBuyNode, classMaxRank, classXpNeed, ownSlo
 import { weaponLockLine } from '../core/requirements';
 import type { QuestView } from '../core/skillbook';
 import type { ElementId, QuestDef, QuestReward, Requirement } from '../core/types';
+import { MECHANIC_HINTS, RHYTHM_HINT } from '../data/classes';
 import { NPCS } from '../data/npcs';
 import { QUEST_LORE } from '../data/quests';
 import { WEAPONS } from '../data/weapons';
@@ -164,6 +165,7 @@ export function mechanicHud(s: MapScene): MechanicHudView | null {
     ...(mech.kind === 'stance' ? { names: [mech.names[0], mech.names[1]] as [string, string] } : {}),
     tap: rt.canSwap(),
     color: classColor(cls.id),
+    hint: MECHANIC_HINTS[cls.id] ?? (mech.kind === 'combo' && mech.name === 'Rhythm' ? RHYTHM_HINT : undefined),
   };
 }
 

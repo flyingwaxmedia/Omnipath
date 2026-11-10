@@ -26,6 +26,8 @@
 import { CLASS_SLOTS, barEligible, classSkillFit, isKitClass, ownSlotEligible } from '../core/classes';
 import type { SkillBook } from '../core/skillbook';
 import type { Registry } from '../core/registry';
+import { weaponOk } from '../core/requirements';
+import type { WeaponType } from '../core/types';
 import { gameBus, type BarChangedEvent } from './events';
 
 export type Bar = readonly (string | null)[];
@@ -94,6 +96,12 @@ export interface FillOptions {
    * never loses its slot to a fill, and slot order is the kit's order. Null / missing entries are fill slots.
    */
   fixed?: readonly (string | null)[];
+  /**
+   * How much a skill is worth keeping on the bar (its use count): when the class pushes more skills out of its slots
+   * than you have empty slots, the most used ones are rehomed first and only the least used leave the bar (an old
+   * save whose class now brings its own five skills). Ties keep slot order.
+   */
+  keep?: (id: string) => number;
   /** Whether a skill may sit in one of YOUR slots (class-only skills may not): gates `rehome`. Default: any. */
   ownOk?: (id: string) => boolean;
 }
@@ -167,6 +175,10 @@ export function fillClassSlots(bar: Bar, picks: readonly string[], opts: FillOpt
   }
   const after = next.slice(0, n);
   const displaced = before.filter((x): x is string => !!x && !after.includes(x));
+  if (opts.keep) {
+    const worth = new Map(displaced.map((id) => [id, opts.keep!(id)]));
+    displaced.sort((a, b) => worth.get(b)! - worth.get(a)!); // stable: equal use keeps slot order
+  }
   const dropped: string[] = [];
   for (const id of displaced) {
     const at = opts.rehome && (opts.ownOk?.(id) ?? true) ? next.indexOf(null, n) : -1;
@@ -281,7 +293,7 @@ export function placeLearned(
 export interface LoadoutHost {
   readonly reg: Registry;
   readonly book: SkillBook;
-  readonly player: { hotbar: (string | null)[] };
+  readonly player: { hotbar: (string | null)[]; weapon?: WeaponType };
 }
 
 /**
@@ -290,7 +302,17 @@ export interface LoadoutHost {
  */
 export function classPicks(host: LoadoutHost): string[] | null {
   const worn = host.book.state.worn;
-  return worn ? host.book.classSkills(worn, Infinity) : null;
+  if (!worn) return null;
+  const picks = host.book.classSkills(worn, Infinity);
+  // An any-weapon class (Mimic) relates to skills of every weapon: its FILLS must be castable with the weapon in
+  // hand, or a class slot would hold a skill that only reads "Needs a sword". Its own kit skills always stay.
+  const cls = host.reg.classDef(worn);
+  const held = host.player.weapon;
+  if (!cls || cls.weapon !== 'any' || !held) return picks;
+  return picks.filter((id) => {
+    const s = host.reg.skill(id);
+    return !!s && (classSkillFit(host.reg, cls, s) === 'match' || weaponOk(s, held));
+  });
 }
 
 /** Skills an active quest asks the player to use (a `use` objective that names the skill and is not met yet). */
@@ -414,6 +436,7 @@ export function refillClassSlots(
     prefer: questSkills(host),
     fixed: kitFixed(host, n),
     ownOk: own,
+    keep: (id) => host.book.state.skills[id]?.uses ?? 0,
   });
   const next = opts.backfill ? backfillOwn(fill.bar, n, spareSkills(host, fill.bar)) : fill.bar;
   const changed = diffSlots(bar, next);

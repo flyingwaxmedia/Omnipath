@@ -309,7 +309,7 @@ describe('discovery', () => {
 
 describe('discoverableNow agrees with classProgress', () => {
   const hasComponents = (c: ClassDef): boolean =>
-    (c.clauses?.length ?? 0) > 0 || !!c.distinctElements || !!c.parents?.length || !!c.requires?.length;
+    (c.clauses?.length ?? 0) > 0 || !!c.distinctElements || !!c.parents?.length || !!c.requires?.length || !!c.discover?.requires.length;
 
   function expectAgreement(r: Registry, states: SkillBookState[]): number {
     let discoverable = 0;
@@ -353,12 +353,30 @@ describe('discoverableNow agrees with classProgress', () => {
       }),
     ];
     expect(expectAgreement(real, states)).toBeGreaterThan(0);
+    // v4: the Commons are found by using the weapon, not by which skills are known.
+    const hits = stateWith({}, { flags: { 'hits:sword': 60, 'hits:fists': 59 } });
+    expectAgreement(real, [hits]);
+    expect(discoverableNow(real, hits, real.classDef('blademaster')!, ctxOf(hits, real))).toBe(true);
+    expect(discoverableNow(real, hits, real.classDef('wayfarer')!, ctxOf(hits, real))).toBe(false);
+    expect(discoverableNow(real, stateWith(all), real.classDef('blademaster')!, ctxOf(stateWith(all), real))).toBe(false);
   });
 });
 
 describe('hardened distinct elements', () => {
   const real = createRegistry();
-  const prism = real.classDef('prism_sage')!;
+  // v4 merged Prism Sage into Prismcaller, so no real class counts distinct elements any more. The rule still
+  // serves kit-less (v2) classes: the old Prism Sage as data, against the real skills.
+  const prism: ClassDef = {
+    id: 'prism_sage_v2',
+    name: 'Prism Sage',
+    icon: '💎',
+    desc: 'Five elements in one voice.',
+    hint: 'Five elements.',
+    bonus: {},
+    tier: 2,
+    distinctElements: 5,
+    parents: [{ id: 'elementalist', rank: 10 }],
+  };
   const withElementalist = (ranks: Record<string, number>) =>
     stateWith(ranks, { classes: { elementalist: cp(10) } });
 

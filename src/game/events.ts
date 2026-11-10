@@ -59,6 +59,8 @@
 //   objectEnd           a placed object is gone: expire / cap (the 12-object cap) / replaced / consumed / clear
 //   blink               the player vanished at `from` and appeared at `to` (an arrival hit follows when `radius`)
 //   mend                a mend skill healed the player (each pulse of a heal over time; `first` on the cast)
+//   mendEnd             a heal over time stopped: done / left (the player stepped out of its resting circle) /
+//                       replaced (cast again) / clear (down, or the map changed)
 //   shieldUp            a shield skill raised a shell; shieldHit: it soaked a blow; shieldEnd: broken / expired /
 //                       replaced (a burst of `burst` px follows when the skill has one)
 //   weaponChanged       the held weapon changed (bag, the "Needs a sword — Equip" line, becoming a class)
@@ -557,6 +559,13 @@ export interface MendEvent extends SkillRef, Pt {
   radius?: number;
 }
 
+/** A heal over time is over (the VFX resting circle and trickle end with it). */
+export interface MendEndEvent extends SkillRef, Pt {
+  reason: 'done' | 'left' | 'replaced' | 'clear';
+  /** Pulses that never came. */
+  lost: number;
+}
+
 export interface ShieldUpEvent extends SkillRef, Pt {
   /** HP the shell soaks. */
   amount: number;
@@ -665,6 +674,7 @@ export interface GameEvents {
   shieldEnd: ShieldEndEvent;
   weaponChanged: WeaponChangedEvent;
   mechanic: MechanicEventPayload;
+  mendEnd: MendEndEvent;
 }
 
 export type GameEventName = keyof GameEvents;

@@ -4455,20 +4455,26 @@ img.px {
 
 .wi {
   display: inline-block;
-  width: 18px;
-  height: 18px;
+  width: 24px;
+  height: 24px;
   flex: none;
   vertical-align: middle;
+  image-rendering: pixelated;
+}
+
+.wpn .ico:has(.wi) {
+  width: 48px;
+  height: 48px;
 }
 
 .wpn .ico .wi {
-  width: 36px;
-  height: 36px;
-  color: #f2e6c9;
+  display: block;
+  width: 48px;
+  height: 48px;
 }
 
 .wpn.locked .ico .wi {
-  color: var(--p-mute);
+  filter: grayscale(1) brightness(0.7);
 }
 
 .sc-card .sc-act .sc-lock {
@@ -4480,8 +4486,8 @@ img.px {
 }
 
 .sc-card .sc-lock .wi {
-  width: 27px;
-  height: 27px;
+  width: 24px;
+  height: 24px;
 }
 
 .skill-card.sc-tile.wlocked .sc-tico img {
@@ -4500,8 +4506,8 @@ img.px {
 }
 
 .sc-tile .sc-wl .wi {
-  width: 27px;
-  height: 27px;
+  width: 24px;
+  height: 24px;
 }
 
 .sc-card .sc-locknote {

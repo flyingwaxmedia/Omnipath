@@ -368,8 +368,14 @@ game.events.once('omnipath:ready', async () => {
       delete w.__busTap;
       if (!on) return null;
       const counts: Record<string, number> = {};
-      const names = ['hit', 'kill', 'castStart', 'castFire', 'projectileSpawn', 'projectileEnd', 'chainHop', 'novaTelegraph', 'novaBlast', 'dash', 'buffApplied', 'statusApplied', 'combo', 'heal', 'playerHurt', 'death', 'levelUp', 'gather', 'mapEnter', 'warp', 'talk', 'interact', 'questChanged', 'uiOpen', 'uiClose', 'discovery', 'classChanged', 'skillLearned', 'barChanged', 'spark', 'monsterTelegraph', 'dotTick', 'skillPulse', 'monsterTelegraphEnd', 'enrage', 'objectSpawn', 'objectTick', 'objectEnd', 'blink', 'mend', 'shieldUp', 'shieldHit', 'shieldEnd', 'weaponChanged', 'mechanic'] as const;
-      const offs = names.map((n) => gameBus.on(n, () => (counts[n] = (counts[n] ?? 0) + 1)));
+      const names = ['hit', 'kill', 'castStart', 'castFire', 'projectileSpawn', 'projectileEnd', 'chainHop', 'novaTelegraph', 'novaBlast', 'dash', 'buffApplied', 'statusApplied', 'combo', 'heal', 'playerHurt', 'death', 'levelUp', 'gather', 'mapEnter', 'warp', 'talk', 'interact', 'questChanged', 'uiOpen', 'uiClose', 'discovery', 'classChanged', 'skillLearned', 'barChanged', 'spark', 'monsterTelegraph', 'dotTick', 'skillPulse', 'monsterTelegraphEnd', 'enrage', 'objectSpawn', 'objectTick', 'objectEnd', 'blink', 'mend', 'shieldUp', 'shieldHit', 'shieldEnd', 'weaponChanged', 'mechanic', 'mendEnd'] as const;
+      const offs = names.map((n) =>
+        gameBus.on(n, (e) => {
+          counts[n] = (counts[n] ?? 0) + 1;
+          // the class mechanic by what it did ('mechanic:full', 'mechanic:finisher'…)
+          if (n === 'mechanic') counts[`mechanic:${(e as { type: string }).type}`] = (counts[`mechanic:${(e as { type: string }).type}`] ?? 0) + 1;
+        }),
+      );
       w.__busTap = { counts, off: () => offs.forEach((o) => o()) };
       return counts;
     },

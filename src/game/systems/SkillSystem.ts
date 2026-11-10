@@ -27,6 +27,7 @@ import type { Player } from '../entities/Player';
 import { gameBus, type Pt, type SkillRef } from '../events';
 import { Y_BIAS, ySort } from '../render/depths';
 import { type ObjectEndReason, type WorldObject, WorldObjects, objectCovers, zoneTicks } from './objects';
+import { SELF_KINDS, isSelfCast } from './extras';
 import { distToSegment } from './tellhit';
 
 export interface Cast {
@@ -75,14 +76,7 @@ export interface Cast {
   objectId?: number;
 }
 
-/** Kinds that hit nothing by themselves and need no foe to be worth casting. */
-const SELF_KINDS: ReadonlySet<SkillShape['kind']> = new Set(['buff', 'mend', 'shield']);
-
-/** Whether a skill is cast on yourself (no target is looked for, AUTO needs none). */
-export function isSelfCast(skill: SkillDef): boolean {
-  const s = skill.shape;
-  return SELF_KINDS.has(s.kind) || (s.kind === 'blink' && s.to === 'self') || (s.kind === 'zone' && s.range <= 0 && !!s.follow);
-}
+export { isSelfCast };
 
 /** The SkillRef of a player cast for bus payloads (castId links its parts; `reprise` marks the reprised copy). */
 export function castRef(cast: Cast): SkillRef {
@@ -128,6 +122,8 @@ export interface CombatHost {
   canStand(x: number, y: number): boolean;
   /** v4: a placed object ended (the class mechanic forgets its object). */
   objectEnded(o: WorldObject, reason: ObjectEndReason): void;
+  /** v4: a zone ticked (a zone whose extra is `shield` keeps its shell on the player standing in it). */
+  zoneTicked?(o: WorldObject, cast: Cast): void;
 }
 
 interface Projectile {
@@ -433,6 +429,7 @@ export class SkillSystem {
     for (const m of this.host.liveMonsters()) {
       if (objectCovers(o, m.x, m.y, m.radius)) this.host.hit(m, { ...cast, origin: { x: o.x, y: o.y }, objectId: o.id });
     }
+    this.host.zoneTicked?.(o, cast);
   }
 
   /** Monsters that would stand in a zone of this shape cast now at `aim` (AUTO: 2+ foes). */

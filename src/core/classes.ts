@@ -708,10 +708,16 @@ function kitSlots(reg: Registry, state: Readonly<SkillBookState>, cls: ClassDef 
       bases.add(baseOf(x.s.id));
     }
   }
+  // Fewer slots than the kit (a short bar): known kit skills are seated first, fills only in what is left.
+  let fillRoom = Math.max(0, n - taken.size);
   const out: string[] = [];
   for (const id of held) {
-    const pick = id ?? ordered.shift();
-    if (pick !== undefined && out.length < n) out.push(pick);
+    if (out.length >= n) break;
+    if (id !== undefined) out.push(id);
+    else if (fillRoom > 0 && ordered.length > 0) {
+      out.push(ordered.shift()!);
+      fillRoom--;
+    }
   }
   // Spare kit variants (a kit skill and its variant both known), then the remaining fills.
   for (const x of known) if (x.fit === 'match' && !taken.has(x.s.id) && !ordered.includes(x.s.id)) ordered.push(x.s.id);

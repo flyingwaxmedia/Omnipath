@@ -81,7 +81,8 @@ import {
 } from '../world/runtime';
 import { statPct } from '../../core/passives';
 import { weaponLockLine, weaponOk } from '../../core/requirements';
-import { canSwap, nextSwapAt } from '../systems/weapons';
+import { canSwap, classWeapon, nextSwapAt } from '../systems/weapons';
+import { refillClassSlots } from '../loadout';
 import { gameBus } from '../events';
 import { attachAudio } from '../audio';
 import { attachAmbient } from '../render/ambient';
@@ -613,10 +614,13 @@ export class MapScene extends Phaser.Scene implements GameController {
     );
     add(ev.on('charge', () => (this.hotbarDirty = true)));
     add(
-      ev.on('classDiscovered', () => {
+      ev.on('classDiscovered', ({ worn }) => {
         // Discovered-and-worn: the Session refills the class slots and emits classChanged (run-wide).
         this.hotbarDirty = true;
         ui.updateVitals();
+        // A class found (and worn) with another weapon in hand: its weapon is equipped once the fight is over, so
+        // its five class slots never stay locked (SPEC-v4 §2.2).
+        if (worn) this.classWeaponPending = true;
       }),
     );
     add(
@@ -632,6 +636,28 @@ export class MapScene extends Phaser.Scene implements GameController {
     );
     add(ev.on('morphed', () => (this.hotbarDirty = true)));
     add(ev.on('fused', () => (this.hotbarDirty = true)));
+  }
+
+  /** A class was found and worn by itself: equip its weapon at the first quiet moment (see settleClassWeapon). */
+  private classWeaponPending = false;
+
+  /**
+   * Equips the worn class's weapon after an automatic discovery, as soon as nothing is in the way: not mid-fight,
+   * not during a wind-up, not while down or travelling. Does nothing when the weapon is held already or not owned
+   * (the locked slots then read "Needs a sword" and the card says where to get one).
+   */
+  private settleClassWeapon(): void {
+    if (!this.classWeaponPending) return;
+    const id = this.book.state.worn;
+    const pl = this.session.player;
+    const w = classWeapon(id ? this.reg.classDef(id) : undefined, pl.ownedWeapons, pl.weapon);
+    if (!w) {
+      this.classWeaponPending = false;
+      return;
+    }
+    if (this.combat.dead || this.warping || this.combat.windup || this.inCombat()) return;
+    this.classWeaponPending = false;
+    this.equipWeapon(w, 'class');
   }
 
   markHotbarDirty(): void {
@@ -771,6 +797,7 @@ export class MapScene extends Phaser.Scene implements GameController {
     this.uiT += dt;
     if (this.uiT > 0.1) {
       this.uiT = 0;
+      this.settleClassWeapon();
       this.ui.tick();
       this.combat.updateTargetUi();
       const w = this.combat.windup;
@@ -1118,8 +1145,7 @@ export class MapScene extends Phaser.Scene implements GameController {
   }
 
   respecClass(classId: string): Outcome {
-    if (!this.isSafe()) return { ok: false, message: 'Reset class points in a town.' };
-    const r = this.book.respec(classId);
+        const r = this.book.respec(classId);
     this.clampVitals();
     this.save();
     return r;
@@ -1182,6 +1208,8 @@ export class MapScene extends Phaser.Scene implements GameController {
     if (this.reg.skill(def.basic) && !this.book.has(def.basic)) this.book.learn(def.basic, `Picked up the ${def.name}`);
     // The old weapon's swing is not this weapon's: a queued basic attack starts fresh.
     this.combat?.cooldowns.delete(WEAPONS[prev].basic);
+    // An any-weapon class fills its class slots with what the new weapon can cast.
+    if (this.reg.classDef(this.book.state.worn ?? '')?.weapon === 'any') refillClassSlots(this.session, 'class', { stable: true });
     gameBus.emit('weaponChanged', { weapon: w, prev, reason });
     this.ui.log(`${def.icon} Equipped <b>${def.name}</b>.`, 'info');
     this.ui.renderHotbar();

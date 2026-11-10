@@ -2791,6 +2791,11 @@ export const UI_GLYPHS = [
   'recall',
   'rest',
   'close',
+  // the four weapons (lock lines, locked slots, the bag's weapon rows)
+  'w_sword',
+  'w_dagger',
+  'w_staff',
+  'w_fists',
 ] as const;
 export type UiGlyph = (typeof UI_GLYPHS)[number];
 
@@ -2866,6 +2871,29 @@ export function paintUiGlyph(c: Ctx, name: UiGlyph): void {
         rect(l, 5, 20, 14, 2, LEATHER[3]);
         rect(l, 11, 6, 2, 8, R.blood[3]);
         rect(l, 11, 16, 2, 2, R.blood[3]);
+        break;
+      case 'w_sword':
+        swordAt(l, 8, 16, -45 * DEG, 15);
+        break;
+      case 'w_dagger':
+        daggerAt(l, 9, 15, -45 * DEG, 11);
+        break;
+      case 'w_staff':
+        staffAt(l, 5, 19, -45 * DEG, 16, R.arcane);
+        break;
+      case 'w_fists':
+        // a closed hand, knuckles up, over a cloth wrap
+        paint(l, 5, 5, 19, 15, (x, y) => {
+          const rx = x < 7 || x > 16 ? 1 : 0;
+          if (y - 5 < rx || 14 - y < rx) return null;
+          if (y <= 9 && (x === 8 || x === 11 || x === 14)) return R.cream[2]; // between the fingers
+          if (y === 10) return R.cream[2];
+          if (y >= 11 && x >= 6 && x <= 13) return y === 11 ? R.cream[5] : R.cream[4]; // the thumb across
+          return y <= 6 ? R.cream[5] : x >= 15 ? R.cream[3] : R.cream[4];
+        });
+        rect(l, 7, 15, 10, 5, R.blood[3]);
+        rect(l, 7, 15, 10, 1, R.blood[4]);
+        seg(l, 7, 18, 16, 17, R.blood[2]);
         break;
       case 'attack':
         swoosh(l, 12, 12, 10, 3.5, 160 * DEG, 200 * DEG, R.steel);

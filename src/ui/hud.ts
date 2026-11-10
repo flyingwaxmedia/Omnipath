@@ -1386,6 +1386,8 @@ export class Hud {
    * slot → that skill's card; tap an empty slot of yours → the picker.
    */
   renderHotbar(): void {
+    // The attack button wears the weapon in hand (a fist for Bare Hands, a rod, a dagger; the sword swing otherwise).
+    this.atkBtn.dataset.w = this.ctrl.session.player.weapon;
     const c = this.ctrl;
     const p = c.session.player;
     let slots: BarSlotView[];
@@ -1451,7 +1453,7 @@ export class Hud {
       this.hotbar.classList.toggle('has-mech', !!html);
       this.queueLayout();
     }
-    if (v) this.hint(`mech_${v.kind}`, mechanicHint(v));
+    if (v) this.hint(v.hint && v.classId ? `mech_${v.kind}_${v.name === 'Rhythm' ? 'rhythm' : v.classId}` : `mech_${v.kind}`, mechanicHint(v));
   }
 
   private applyAuto(on: boolean): void {

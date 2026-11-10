@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { classTreeTemplate } from '../src/core/balance';
-import { classXpNeed, classXpToNext } from '../src/core/classes';
+import { classXpNeed, classXpToNext, kitSkillsAt } from '../src/core/classes';
 import { MASTERY, overmasteryCost, xpToNext } from '../src/core/mastery';
 import { Registry } from '../src/core/registry';
 import { hashSeed } from '../src/core/rng';
@@ -413,9 +413,23 @@ const LANDED: GameData = (() => {
   };
 })();
 
+/**
+ * The content of the build between the contract commit and the class merges: today's data with the four merged
+ * classes still present (plain v2 stubs). Rule 3 waits while the registry still has them.
+ */
+const PREMERGE: GameData = {
+  ...GAME_DATA,
+  classes: [
+    ...GAME_DATA.classes,
+    ...Object.keys(MERGED_CLASSES).map((id): ClassDef => ({ id, name: id, icon: 'i', desc: id, hint: id, bonus: {}, tier: 2, imprint: `imprint_${id}` })),
+  ],
+};
+
 describe('v2 → v3 migration of a real late-v2 save (SPEC-v4 §13)', () => {
   const real = createRegistry();
   const landed = new Registry(LANDED);
+  const premerge = new Registry(PREMERGE);
+  const merged = new Set([...Object.keys(MERGED_CLASSES), ...Object.values(MERGED_CLASSES)]);
 
   it('the fixture is a v2 book of the old build, and the merge table matches the data', () => {
     expect(LATE.version).toBe(2);
@@ -424,10 +438,13 @@ describe('v2 → v3 migration of a real late-v2 save (SPEC-v4 §13)', () => {
     expect(Object.keys(LATE.skills).length).toBeGreaterThan(100);
     for (const [from, to] of Object.entries(MERGED_CLASSES)) {
       expect(real.classDef(to), to).toBeDefined();
+      expect(real.classDef(from), from).toBeUndefined(); // the content lane merged them away
       expect(landed.classDef(from), from).toBeUndefined();
+      expect(premerge.classDef(from), from).toBeDefined();
     }
     // The legacy caps are exactly the v2 tiers of today's data.
     for (const c of real.classes) expect(LEGACY_CLASS_MAX[c.id] ?? 10, c.id).toBe({ 1: 10, 2: 8, 3: 5 }[c.tier ?? 1]);
+    for (const from of Object.keys(MERGED_CLASSES)) expect(LEGACY_CLASS_MAX[from], from).toBe(8);
   });
 
   it('rule 16 and rule 1: becomes version 3 with every new field empty and all four weapons at level 0', () => {
@@ -440,18 +457,30 @@ describe('v2 → v3 migration of a real late-v2 save (SPEC-v4 §13)', () => {
   });
 
   it('rule 2: rescales class levels 10 / 8 / 5 → 10, keeps the share of the bar, drops tree points', () => {
-    const s = migrateBookState(late(), real);
-    for (const [id, old] of Object.entries(LATE.classes)) {
-      const oldMax = LEGACY_CLASS_MAX[id] ?? 10;
-      const want = Math.max(1, Math.round((old.rank * 10) / oldMax));
-      const got = s.classes[id];
-      expect(got.rank, id).toBe(want);
-      expect(got).not.toHaveProperty('spent');
-      const cls = real.classDef(id)!;
-      const need = classXpNeed(cls, want);
-      if (want >= 10) expect(got.xp, id).toBe(0);
-      else expect(got.xp, id).toBe(Math.min(need - 1, Math.floor((old.xp / v2Need(old.rank, oldMax)) * need)));
+    // Every one of the 30 old classes while the registry still has the merged four; on today's data the same
+    // holds for every class the merges do not touch (rule 3 has its own test).
+    for (const [r, ids] of [
+      [premerge, Object.keys(LATE.classes)],
+      [real, Object.keys(LATE.classes).filter((id) => !merged.has(id))],
+    ] as const) {
+      const s = migrateBookState(late(), r);
+      expect(ids.length).toBeGreaterThanOrEqual(22);
+      for (const id of ids) {
+        const old = LATE.classes[id];
+        const oldMax = LEGACY_CLASS_MAX[id] ?? 10;
+        const want = Math.max(1, Math.round((old.rank * 10) / oldMax));
+        const got = s.classes[id];
+        expect(got.rank, id).toBe(want);
+        expect(got).not.toHaveProperty('spent');
+        const cls = r.classDef(id)!;
+        const need = classXpNeed(cls, want);
+        if (want >= 10) expect(got.xp, id).toBe(0);
+        else expect(got.xp, id).toBe(Math.min(need - 1, Math.floor((old.xp / v2Need(old.rank, oldMax)) * need)));
+      }
+      // Levels are scaled up, never down.
+      for (const id of ids) expect(s.classes[id].rank, id).toBeGreaterThanOrEqual(LATE.classes[id].rank);
     }
+    const s = migrateBookState(late(), real);
     // By hand: Tier I unchanged, Tier II 8 → 10 and 2 → 3, Tier III 5 → 10 and 3 → 6.
     expect(s.classes.blademaster).toEqual({ rank: 10, xp: 0 });
     expect(s.classes.pyroblade.rank).toBe(7);
@@ -459,13 +488,20 @@ describe('v2 → v3 migration of a real late-v2 save (SPEC-v4 §13)', () => {
     expect(s.classes.sword_saint.rank).toBe(3);
     expect(s.classes.ascendant).toEqual({ rank: 10, xp: 0 });
     expect(s.classes.eclipse_walker.rank).toBe(6);
-    // Levels are scaled up, never down.
-    for (const [id, old] of Object.entries(LATE.classes)) expect(s.classes[id].rank, id).toBeGreaterThanOrEqual(old.rank);
   });
 
   it('rule 4: every discovered class stays discovered, whatever its requirements are now', () => {
     const s = migrateBookState(late(), real);
-    expect(Object.keys(s.classes).sort()).toEqual(Object.keys(LATE.classes).sort());
+    // The 30 old classes are the 26 of today: the four merged ones live on in their targets.
+    expect(Object.keys(s.classes).sort()).toEqual(
+      [...new Set(Object.keys(LATE.classes).map((id) => MERGED_CLASSES[id] ?? id))].sort(),
+    );
+    expect(Object.keys(s.classes).sort()).toEqual(real.classes.map((c) => c.id).sort());
+    // None of them meets today's `discover` rules (no hits or kills were ever counted), and all are kept.
+    const fresh = new SkillBook(real, s);
+    fresh.evaluateClasses();
+    expect(Object.keys(fresh.state.classes)).toHaveLength(26);
+    expect(fresh.state.flags['hits:sword']).toBeUndefined();
     const book = new SkillBook(landed, late() as unknown as SkillBookState);
     // Pyroblade now has a kit and (here) no discovery data the player meets: it is still theirs.
     expect(book.state.classes.pyroblade.rank).toBe(7);
@@ -474,24 +510,27 @@ describe('v2 → v3 migration of a real late-v2 save (SPEC-v4 §13)', () => {
   });
 
   it('rule 3: merged classes wait while the registry still has them, then fold into their targets', () => {
-    const before = migrateBookState(late(), real);
+    const before = migrateBookState(late(), premerge);
     expect(before.classes.phantom).toBeDefined();
     expect(before.worn).toBe('phantom');
+    expect(before.imprints).toEqual(LATE.imprints);
 
-    const s = migrateBookState(late(), landed);
-    for (const from of Object.keys(MERGED_CLASSES)) expect(s.classes[from], from).toBeUndefined();
-    // Both discovered: the higher level after rule 2, +1, at most 10.
-    expect(s.classes.shadowstalker).toEqual({ rank: 10, xp: 0 }); // 10 and Phantom 8/8 → 10
-    expect(s.classes.tempest_dancer).toEqual({ rank: 10, xp: 0 }); // 6 and Vortex Dancer 10 → 10
-    expect(s.classes.elementalist).toEqual({ rank: 10, xp: 0 }); // 9 and Prism Sage 6/8 → 8: 9 + 1
-    expect(s.classes.mimic).toEqual({ rank: 4, xp: 0 }); // 3 and Echo Sovereign 2/8 → 3: 3 + 1
-    // `worn`, whispers and Keepsakes follow the target.
-    expect(s.worn).toBe('shadowstalker');
-    expect(s.imprints).toEqual(['blademaster', 'elementalist', 'tempest_dancer']);
-    expect(Object.keys(s.classes)).toHaveLength(26);
+    for (const r of [landed, real]) {
+      const s = migrateBookState(late(), r);
+      for (const from of Object.keys(MERGED_CLASSES)) expect(s.classes[from], from).toBeUndefined();
+      // Both discovered: the higher level after rule 2, +1, at most 10.
+      expect(s.classes.shadowstalker).toEqual({ rank: 10, xp: 0 }); // 10 and Phantom 8/8 → 10
+      expect(s.classes.tempest_dancer).toEqual({ rank: 10, xp: 0 }); // 6 and Vortex Dancer 10 → 10
+      expect(s.classes.elementalist).toEqual({ rank: 10, xp: 0 }); // 9 and Prism Sage 6/8 → 8: 9 + 1
+      expect(s.classes.mimic).toEqual({ rank: 4, xp: 0 }); // 3 and Echo Sovereign 2/8 → 3: 3 + 1
+      // `worn`, whispers and Keepsakes follow the target.
+      expect(s.worn).toBe('shadowstalker');
+      expect(s.imprints).toEqual(['blademaster', 'elementalist', 'tempest_dancer']);
+      expect(Object.keys(s.classes)).toHaveLength(26);
 
-    // A v3 save written while the merged classes still existed is folded the same way later.
-    expect(migrateBookState(JSON.parse(JSON.stringify(before)), landed).classes).toEqual(s.classes);
+      // A v3 save written while the merged classes still existed is folded the same way later.
+      expect(migrateBookState(JSON.parse(JSON.stringify(before)), r).classes).toEqual(s.classes);
+    }
     // Without a registry the table alone decides, for pre-v3 books only.
     expect(migrateBookState(late()).classes.phantom).toBeUndefined();
     expect(migrateBookState(JSON.parse(JSON.stringify(before))).classes.phantom).toBeDefined();
@@ -514,9 +553,20 @@ describe('v2 → v3 migration of a real late-v2 save (SPEC-v4 §13)', () => {
     expect(s.pouch.mote).toBe(3);
     // Pyroblade is discovered: its class skills stay known, ranks kept.
     for (const id of PYRO_KIT) expect(s.skills[id].rank, id).toBe(LATE.skills[id].rank);
-    // Nothing is shelved while the content has no class skills.
+    // On today's data every class of the fixture is discovered, so nothing is shelved…
     expect(migrateBookState(late(), real).shelved).toEqual({});
     expect(migrateBookState(late(), real).pouch.mote).toBe(0);
+    // …but a player who never found Pyroblade or Blademaster loses their old signatures to the shelf (and is paid).
+    const raw = late();
+    delete (raw.classes as Record<string, unknown>).pyroblade;
+    delete (raw.classes as Record<string, unknown>).blademaster;
+    expect(real.skill('searing_edge')!.classOf).toBe('pyroblade');
+    expect(real.skill('blade_aura')!.classOf).toBe('blademaster');
+    const r = migrateBookState(raw, real);
+    expect(Object.keys(r.shelved).sort()).toEqual(['blade_aura', 'searing_edge']);
+    expect(r.shelved.searing_edge.rank).toBe(LATE.skills.searing_edge.rank);
+    expect(r.skills.searing_edge).toBeUndefined();
+    expect(r.pouch.mote).toBe(2 * SHELVE_PAY_MOTES);
   });
 
   it('rule 8: a shelved skill comes back, rank kept, when its class is discovered', () => {
@@ -579,9 +629,24 @@ describe('v2 → v3 migration of a real late-v2 save (SPEC-v4 §13)', () => {
     for (const key of ['elements', 'flags', 'attempts', 'discoveries', 'hints', 'essences', 'lessons', 'witness', 'bestiary', 'whispered', 'spark'] as const) {
       expect(s[key], key).toEqual(LATE[key]);
     }
-    expect(Object.keys(s.skills).sort()).toEqual(Object.keys(LATE.skills).sort());
+    // Every skill the player knew is still known at its rank…
     for (const [id, p] of Object.entries(LATE.skills)) expect(s.skills[id].rank, id).toBe(p.rank);
-    expect(s.imprints).toEqual(LATE.imprints);
+    // …and the only new ones are the class skills their classes have unlocked at their level (rule 9), at rank 1.
+    const added = Object.keys(s.skills).filter((id) => !(id in LATE.skills));
+    expect(added.length).toBeGreaterThan(0);
+    for (const id of added) {
+      const owner = real.skill(id)!.classOf!;
+      expect(owner, id).toBeDefined();
+      expect(s.skills[id], id).toMatchObject({ rank: 1, source: `class:${owner}` });
+      expect(kitSkillsAt(real.classDef(owner)!, s.classes[owner].rank), id).toContain(id);
+    }
+    // A class below the level of a kit skill has not learned it: Pyromancer is Class Level 2.
+    expect(s.classes.pyromancer.rank).toBe(2);
+    expect(s.skills.stoke).toBeDefined(); // level 2
+    expect(s.skills.ember_flock).toBeUndefined(); // level 4
+    expect(s.skills.backdraft).toBeUndefined(); // level 6
+    expect(s.imprints).toEqual((LATE.imprints as string[]).map((id) => MERGED_CLASSES[id] ?? id));
+    expect(migrateBookState(late(), premerge).imprints).toEqual(LATE.imprints);
   });
 
   it('is pure, deterministic and idempotent', () => {

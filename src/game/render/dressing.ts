@@ -1024,11 +1024,12 @@ export interface DressingHandle {
  * Adds one Image per planned item: origin (0.5, 1), depth = item.depthY (flat decals already carry
  * DRESSING_DECAL_DEPTH). Items whose texture is missing are skipped. Returns a destroy handle.
  */
-export function placeDressing(scene: Phaser.Scene, plan: readonly DressingItem[]): DressingHandle {
+export function placeDressing(scene: Phaser.Scene, plan: readonly DressingItem[], atlas?: { key: string; has: ReadonlySet<string> }): DressingHandle {
   const images: Phaser.GameObjects.Image[] = [];
   for (const it of plan) {
     if (!scene.textures.exists(it.key)) continue;
-    const img = scene.add.image(it.x, it.y, it.key).setOrigin(0.5, 1).setDepth(it.depthY);
+    // (the stage atlas holds the same pixels in one shared texture: fewer batch flushes)
+    const img = (atlas?.has.has(it.key) ? scene.add.image(it.x, it.y, atlas.key, it.key) : scene.add.image(it.x, it.y, it.key)).setOrigin(0.5, 1).setDepth(it.depthY);
     if (it.flipX) img.setFlipX(true);
     images.push(img);
   }

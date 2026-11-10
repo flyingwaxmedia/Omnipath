@@ -920,6 +920,8 @@ v4 Phase 1 events (lane C; payloads in `src/game/events.ts` "v4 Phase 1 payloads
 | objectEnd | ends the standing group; plays the goodbye at the fixed point unless `reason: 'clear'` | `riders.zone.end` |
 | blink | the vanish snapshots the player's frame at `from` (they already stand at `to`); streaks rescaled to the real jump; `r` = the arrival radius | blink `cast` / `trail` / `area` |
 | mend | `first` → bloom (+ circle, + trickle until `overMs`, replaced by a recast); later pulses → the lift | mend `cast` / `area` / `aura` / `trail` |
+| mendEnd | a heal over time stopped — finished, replaced, cleared, or cut short because the player left its resting circle: the trickle and the circle's rim end at once | ends the mend `aura` |
+| mechanic `levelUp` on a class object | the zone wears more and bigger units of its own `field` for as long as it stands (Pyromancer's Hearth grows per level) | the zone recipe's `field` piece, re-placed |
 | shieldUp / shieldHit / shieldEnd | one shell at a time; absorb at most once per 120 ms; `broken` / `expired` play the break (+ `burst`), `replaced` / `clear` just end it | shield `cast` + `aura`, `riders.shield` |
 | mechanic | §6.10; `calm` under reduce-flash | `mechanicPieces` |
 | statusApplied (`root` / `launch` / `expose` / `lure`) | as every status (monsters here, the player in world.ts) | §6.4 |

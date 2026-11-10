@@ -8,8 +8,8 @@ import { LOOK_FRAMES, drawPlayerLook, drawPlayerLookFrame, lookAnimDefs, lookFra
 import { classOutfit, lookAnims, lookBase, lookFrames } from '../art/classLooks';
 import { textureDataUrl } from '../art/pixel';
 
-/** Bare Hands has no drawn look yet (art lane, SPEC-v4 §11.8): it borrows the dagger frames until then. */
-const artWeapon = (w: WeaponType): Exclude<WeaponType, 'fists'> => (w === 'fists' ? 'dagger' : w);
+/** The frame set a weapon is drawn with: its own (Bare Hands has drawn fists frames — SPEC-v4 §11.8). */
+const artWeapon = (w: WeaponType): WeaponType => w;
 
 /** Removes a class look's frames after a failed draw (a half-painted canvas must not be reused as the look). */
 function dropLook(scene: Phaser.Scene, base: string): void {

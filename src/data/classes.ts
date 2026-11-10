@@ -168,6 +168,22 @@ const TIDE: ClassMechanic = {
   autoRule: { swap: 'never' },
 };
 
+/**
+ * The one line the HUD says the first time a class's widget shows (docs/UX-SIMPLE.md rule 9: plain words, at most 60
+ * characters, the mechanic's own name is put in front by the HUD). Legacy kits share RHYTHM_HINT.
+ */
+export const RHYTHM_HINT = 'Three different skills in a row. The third hits harder.';
+export const MECHANIC_HINTS: Readonly<Record<string, string>> = {
+  blademaster: 'Three different sword skills. The third always crits.',
+  knife_juggler: 'Each thrown knife that hits makes the next one faster.',
+  arcanist: 'Three different rod spells. The fourth is free and bigger.',
+  wayfarer: 'Jab, Jab, then a class skill lands a Roadhouse hit.',
+  pyroblade: 'Sword hits build Heat. Full, your next class skill is huge.',
+  shadowstalker: 'Pin a foe. Half your damage lands again when the pin ends.',
+  pyromancer: 'Fight near your Hearth. Kills beside it make it grow.',
+  tidecaller: 'The tide turns by itself. High pushes, Low pulls harder.',
+};
+
 // ------------------------------------------------------------------ the classes
 
 const SEEDS: ClassSeed[] = [

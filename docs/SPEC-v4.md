@@ -1759,6 +1759,40 @@ Fixes sentence 1 ("classes … same abilities"), 13, 14 and the first half of 4 
    heroes tall, clean clearings round monsters, a layered forest edge, the slimmer HUD. Side-by-side with the audit's
    shots in the review.
 
+**Phase 1 status: built** (closed out by the integration pass; the seven checks above pass — `README.md` and
+`docs/DESIGN.md` describe the game as it now is).
+
+What landed beyond the table, and where it differs from the text above:
+
+- **Classes.** 26 classes, all with kits (`tests/class-kits.test.ts`); 8 rebuilt with their own mechanic, five
+  `classOf` skills, a Gift and a Level 8 upgrade; the other 18 on legacy kits with the combo "Rhythm". A kit skill
+  always holds its own class slot, also on a bar with fewer class slots than the kit.
+- **Gifts are live.** The trigger passives of §4 are fired by the game layer (`src/game/systems/gifts.ts`): Clean
+  Edge, Spare Knife, Tidy Weave, Banked Coals, From Nowhere, Warm Hands, Ebb and Flow. The implemented `when` → `do`
+  pairs and rule names are listed there.
+- **`extra` words are promises.** §6.2's words all have a run-time rule (`src/game/systems/extras.ts`, constants
+  `EXTRA`, all **[T]**): a status word lands on hit; `crit`, `execute`, `interrupt`, `haste`, `cleanse`, `heal`,
+  `leech` as written there; `shield` on a buff or a zone raises a thin shell (8% of max HP; a zone keeps it up while
+  you stand in it); `reposition` on a self-cast skill breaks you free; `mark` outside a marks class makes the next
+  hit of another skill on that foe a critical hit. `tests/skill-promises.test.ts` fails on a declared word or trigger
+  with nothing behind it.
+- **Weapons.** Becoming a class equips its weapon in the same tap; a class found and worn by itself with another
+  weapon in hand gets its weapon as soon as the fight is over, and its card says so (or says where to buy one). An
+  any-weapon class (Mimic) only fills its class slots with skills the held weapon can cast.
+- **Save rule 9, refined.** When a migrated class brings its kit and pushes more old skills out of the class slots
+  than there are free slots of the player's, the most used ones keep a slot (`FillOptions.keep`).
+- **Events** (append-only, `src/game/events.ts`): `mendEnd` — a heal over time stopped, also early when the player
+  leaves its resting circle; the VFX circle ends with it.
+- **Visuals.** A class object that grows (the Hearth) wears more and bigger fire per level. Tall props fade for any
+  living monster standing behind them, not only for the hero. The minimap paints forest borders as canopy and knows
+  the new props. Weapon glyphs are drawn art (`ui_ico_w_*`).
+- **Performance.** A map's props, dressing and buildings are packed into one texture per map
+  (`src/game/render/atlas.ts`), same pixels: Gloomwood went from 14 – 17 draw calls back to 8 – 9 (iPad and phone).
+
+Left for the phases that own them: `kills:<weapon>` deeds and the fists T2 / T3 gates read plain counters until the
+deed engine (Phase 2); Keepsakes are still the v2 `imprint_*` passives (Phase 2); the 18 legacy kits are not rebuilt
+(Phases 2 – 5).
+
 ### 15.3 Phase 2 — "Echoes, drops, deeds and a real town"
 
 Fixes sentences 2, 5, 6, 10 and the town half of 7.

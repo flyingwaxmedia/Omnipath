@@ -17,6 +17,7 @@ import { STRUCTURE_FOOTPRINT } from '../../core/world/compile';
 import type { CompiledMap, MapDef, PropInst, PropKind } from '../../core/world/types';
 import { PROP_VARIANTS, propKey } from '../art/world';
 import { TILE } from '../world/runtime';
+import { STAGE_ATLAS, packAtlas } from './atlas';
 import { cellHash } from './autotile';
 import { CameraRig, type RigScene } from './camera';
 import { currentScale } from './config';
@@ -316,6 +317,7 @@ class PixelStage implements Stage {
     this.decor = new Culler(cols, rows, TILE * 2);
     // Plan everything static first: the ground baker paints its cast shadows into the ground (render/shadows.ts).
     const casters: Caster[] = [];
+    this.atlas = this.buildAtlas();
     this.buildDressing(casters);
     this.buildProps(casters);
     this.buildStructures(casters);
@@ -481,12 +483,30 @@ class PixelStage implements Stage {
     this.syncShadows();
   }
 
-  /** Tall things in front of the hero go see-through while they cover him, in a few alpha steps (never a tween). */
+  /**
+   * Tall things in front of an actor go see-through while they cover it, in a few alpha steps (never a tween): the
+   * hero, and every living monster on screen — a foe behind a tall crown must stay readable (and tappable by eye).
+   */
   private fadeTall(p: { x: number; y: number }): void {
+    const cam = this.scene.cameras.main;
+    const view = cam.worldView;
+    const pts: { x: number; y: number }[] = [p];
+    const foes = (this.host as unknown as { combat?: { monsters?: { x: number; y: number; alive: boolean }[] } }).combat?.monsters;
+    if (foes) {
+      for (const m of foes) {
+        if (m.alive && m.x > view.x - 40 && m.x < view.right + 40 && m.y > view.y - 20 && m.y < view.bottom + 180) pts.push(m);
+      }
+    }
     for (const t of this.tall) {
       const img = t.img;
       if (!img.visible) continue;
-      const covers = p.y < img.y - 2 && p.y > img.y - t.h - 4 && p.y - 30 < img.y - FADE_FOOT && Math.abs(p.x - img.x) < t.hw + 6;
+      let covers = false;
+      for (const q of pts) {
+        if (q.y < img.y - 2 && q.y > img.y - t.h - 4 && q.y - 30 < img.y - FADE_FOOT && Math.abs(q.x - img.x) < t.hw + 6) {
+          covers = true;
+          break;
+        }
+      }
       const want = covers ? BEHIND_ALPHA : 1;
       if (img.alpha === want) continue;
       const a = img.alpha < want ? Math.min(want, img.alpha + FADE_STEP) : Math.max(want, img.alpha - FADE_STEP);
@@ -656,15 +676,42 @@ class PixelStage implements Stage {
     return { key, x: Math.floor(x - f.width / 2), y: y - f.height, flip };
   }
 
-  private buildDressing(casters: Caster[]): void {
+  /** Keys of the textures this map's stage atlas holds (empty: every image keeps its own texture). */
+  private atlas: ReadonlySet<string> = new Set();
+
+  private planOfDressing(): readonly DressingItem[] {
     const id = this.host.def.id;
     let plan = dressingPlans.get(id);
     if (!plan) {
       plan = planDressing(this.host.cm);
       dressingPlans.set(id, plan);
     }
+    return plan;
+  }
+
+  /** One shared texture for this map's props, dressing and buildings (render/atlas.ts). */
+  private buildAtlas(): ReadonlySet<string> {
+    const keys = new Set<string>();
+    const has = (k: string) => this.scene.textures.exists(k);
+    for (const it of this.planOfDressing()) keys.add(it.key);
+    const seed = this.host.def.seed ?? 0;
+    for (const pr of this.host.cm.props) {
+      const v = propView(pr, seed, has);
+      if (v) keys.add(v.key);
+    }
+    for (const st of this.host.def.structures ?? []) keys.add(`struct_${st.kind}`);
+    return packAtlas(this.scene, keys);
+  }
+
+  /** An image of a world texture: from the stage atlas when it holds it. */
+  private worldImage(x: number, y: number, key: string): Phaser.GameObjects.Image {
+    return this.atlas.has(key) ? this.scene.add.image(x, y, STAGE_ATLAS, key) : this.scene.add.image(x, y, key);
+  }
+
+  private buildDressing(casters: Caster[]): void {
+    const plan = this.planOfDressing();
     this.dressingPlan = plan;
-    const handle = placeDressing(this.scene, plan);
+    const handle = placeDressing(this.scene, plan, { key: STAGE_ATLAS, has: this.atlas });
     for (const img of handle.images) this.decor.add(img);
     for (const it of plan) {
       if (it.depthY === DRESSING_DECAL_DEPTH || !this.scene.textures.exists(it.key)) continue;
@@ -685,7 +732,7 @@ class PixelStage implements Stage {
     for (const pr of this.host.cm.props) {
       const v = propView(pr, seed, has);
       if (!v) continue;
-      const img = this.scene.add.image(v.x, v.y, v.key).setOrigin(0.5, 1).setDepth(ySort(v.y, Y_BIAS.PROP));
+      const img = this.worldImage(v.x, v.y, v.key).setOrigin(0.5, 1).setDepth(ySort(v.y, Y_BIAS.PROP));
       if (v.flip) img.setFlipX(true);
       if (v.tint !== 0xffffff) img.setTint(v.tint);
       this.props.add(img);
@@ -702,7 +749,7 @@ class PixelStage implements Stage {
       if (!fp || !this.scene.textures.exists(key)) continue;
       const x = (st.tx + fp.w / 2) * TILE;
       const y = (st.ty + fp.h) * TILE;
-      const img = this.scene.add.image(Math.round(x), y + 4, key).setOrigin(0.5, 1).setDepth(ySort(y));
+      const img = this.worldImage(Math.round(x), y + 4, key).setOrigin(0.5, 1).setDepth(ySort(y));
       casters.push(this.caster(key, Math.round(x), y + 4));
       // only what rises above the footprint can cover the hero (he cannot stand inside it)
       if (img.height > fp.h * TILE + 24) this.tall.push({ img, hw: img.width / 2 - 6, h: img.height });

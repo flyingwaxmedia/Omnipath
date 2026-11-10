@@ -294,7 +294,9 @@ export function wireAnnouncements(ui: AnnounceHost, ctrl: GameController): () =>
     // Becoming it also equips its weapon (the game does it): the card says so in one short line when that swaps.
     let swap: ReturnType<typeof becomeSwapLine> = null;
     try {
-      swap = worn ? null : becomeSwapLine(cls, ctrl.session.player);
+      // Found and worn by itself (maybe mid-fight, maybe with another weapon in hand): the game equips the class
+      // weapon as soon as the fight is over, and the card says so — or says where to get one.
+      swap = becomeSwapLine(cls, ctrl.session.player);
     } catch {
       swap = null;
     }
@@ -307,7 +309,7 @@ export function wireAnnouncements(ui: AnnounceHost, ctrl: GameController): () =>
       accent: color,
       title: worn ? `You are now ${article(cls.name)}` : cls.name,
       body: worn
-        ? `${esc(oneLine(cls.desc))}<br><small>${classFill().filled > 0 ? 'Its skills are in your class slots.' : `${esc(classSlotsLine(reg, cls, 0))}.`}</small>`
+        ? `${esc(oneLine(cls.desc))}<br><small>${swap ? esc(swap.line.replace(/^Also /, 'It ')) : classFill().filled > 0 ? 'Its skills are in your class slots.' : `${esc(classSlotsLine(reg, cls, 0))}.`}</small>`
         : `${esc(oneLine(cls.desc))}${swap ? `<br><small>${esc(swap.line)}</small>` : ''}`,
       extra: `<div class="cnew-tags">${rarityHtml(rarityOf(reg, cls.id))}</div>${icons ? `<div class="cskills">${icons}</div>` : ''}`,
       ...(worn

@@ -93,7 +93,7 @@ export function familyOfColor(color: number): FamilyId {
 }
 
 /** The named world extras (Interactions, Combat.rest, SkillSystem's legacy fx adapters). */
-export type WorldExtra = 'chest' | 'waystone' | 'campfire' | 'meditate' | 'rest' | 'reveal' | 'blink';
+export type WorldExtra = 'chest' | 'waystone' | 'campfire' | 'meditate' | 'rest' | 'reveal' | 'blink' | 'pop' | 'warm';
 
 interface TellRec {
   group: VfxGroup;
@@ -682,6 +682,14 @@ export class WorldBridge {
         break;
       case 'campfire':
         pieces = [ring(40, 'fire', 'mid'), motes('ember', 'fire', 6)];
+        break;
+      case 'pop':
+        // a burn that pops (Banked Coals): a quick hot ring and a burst of embers
+        pieces = [ring(64, 'fire', 'hot', 220), piece('burst', { cls: 'star', size: 's' }, inkOf('fire'), { anchor: feet(-12) }), motes('ember', 'fire', 8, 'burst')];
+        break;
+      case 'warm':
+        // SP coming back by a fire (Warm Hands): a few embers rise off the player
+        pieces = [motes('ember', 'fire', 3)];
         break;
       case 'meditate':
         pieces = [ring(72, 'wind'), motes('leaf', 'wind', 8, 'burst')];

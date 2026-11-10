@@ -206,6 +206,16 @@ describe('fillClassSlots: kit slots (v4)', () => {
     expect(r.bar.slice(5)).toEqual(['old2', E, E]);
     expect(r.dropped).toEqual(['old1']);
   });
+  it('keep: when more skills are pushed out than you have empty slots, the most used ones stay on the bar', () => {
+    const uses: Record<string, number> = { old1: 2, old2: 90, old3: 0, old4: 41, old5: 41 };
+    const before = ['old1', 'old2', 'old3', 'old4', 'old5', 'mine', E, E];
+    const kit = ['k1', 'k2', 'k3', 'k4', 'k5'];
+    const r = fillClassSlots(before, kit, { classSlots: 5, rehome: true, fixed: kit, keep: (id) => uses[id] ?? 0 });
+    expect(r.bar).toEqual([...kit, 'mine', 'old2', 'old4']); // 90, then the first of the two 41s (slot order on ties)
+    expect(r.dropped).toEqual(['old5', 'old1', 'old3']);
+    // Without it the old slot order decides.
+    expect(fillClassSlots(before, kit, { classSlots: 5, rehome: true, fixed: kit }).bar.slice(5)).toEqual(['mine', 'old1', 'old2']);
+  });
   it('purgeOwn empties only your slots that hold something that may not sit there', () => {
     expect(purgeOwn(['c1', 'c2', E, 'c1x', 'own', 'c3'], 3, (id) => !id.startsWith('c'))).toEqual(['c1', 'c2', E, E, 'own', E]);
   });
@@ -523,6 +533,55 @@ describe('Session saves (v3 key; v2 and v1 are read and migrated)', () => {
       if (worn) expect(s.player.hotbar.slice(0, 5).filter(Boolean)).toEqual(s.book.classSkills(worn, 5).filter((id) => !s.player.hotbar.slice(5).includes(id)).slice(0, s.player.hotbar.slice(0, 5).filter(Boolean).length));
       expect(JSON.parse(store.get(SAVE_KEY)!).v).toBe(3);
     });
+  });
+
+  it('an old save with a full bar: the class brings its five skills, and your most used old ones keep a slot', async () => {
+    const { createRegistry } = await import('../src/data');
+    const real = createRegistry();
+    withStore((store) => {
+      const book = JSON.parse(JSON.stringify(SAVE_V2_LATE)) as { worn: string; skills: Record<string, { uses: number }> };
+      book.worn = 'pyroblade';
+      // The v2 bar: five class-slot skills of the old Pyroblade and one slot of the player's; two own slots free.
+      const old = ['flame_spin', 'whirlwind', 'heavy_cleave', 'sword_throw', 'crescent_sweep'];
+      const uses = [3, 120, 7, 64, 30];
+      old.forEach((id, i) => (book.skills[id].uses = uses[i]));
+      const bar = [...old, 'firebolt', null, null];
+      store.set(SAVE_KEY_V2, JSON.stringify({ v: 2, player: { name: 'Late', weapon: 'sword', hotbar: bar }, book, world: {} }));
+      const s = Session.load(real)!;
+      // Pyroblade is Class Level 7 in the fixture: kit skills 1 – 5 are all unlocked and hold the class slots.
+      expect(s.player.hotbar.slice(0, 5)).toEqual(real.classDef('pyroblade')!.kit);
+      expect(s.player.hotbar.slice(5)).toEqual(['firebolt', 'whirlwind', 'sword_throw']); // 120 and 64 uses
+      for (const id of ['flame_spin', 'heavy_cleave', 'crescent_sweep']) expect(s.book.has(id), id).toBe(true); // off the bar, still known
+    });
+  });
+
+  it('Mimic (any weapon) only fills its class slots with skills the held weapon can cast', async () => {
+    const { createRegistry } = await import('../src/data');
+    const real = createRegistry();
+    const book = new SkillBook(real);
+    for (const id of ['whirlwind', 'heavy_cleave', 'sword_throw', 'backstab', 'firebolt', 'focus']) book.learn(id, 'test');
+    book.state.classes.mimic = { rank: 1, xp: 0 };
+    book.wear('mimic');
+    const mimic = real.classDef('mimic')!;
+    expect(mimic.weapon).toBe('any');
+    const host = { reg: real, book, player: { hotbar: Array<string | null>(8).fill(null), weapon: 'staff' as 'staff' | 'sword' } };
+    becomeRefill(host);
+    const castable = (id: string, w: 'staff' | 'sword') => !real.skill(id)!.weapons || real.skill(id)!.weapons!.includes(w);
+    const slots = () => host.player.hotbar.slice(0, 5).filter((x): x is string => !!x);
+    expect(slots().length).toBeGreaterThanOrEqual(2);
+    for (const id of slots()) expect(castable(id, 'staff') || mimic.kit!.includes(id), `${id} with a rod`).toBe(true);
+    expect(slots()).not.toContain('whirlwind');
+    expect(slots()).toContain('firebolt');
+    // Taking up the sword: a refresh brings the sword skills in; nothing the sword cannot cast is added.
+    host.player.weapon = 'sword';
+    refillClassSlots(host, 'class', { stable: true });
+    for (const id of slots()) expect(castable(id, 'sword') || mimic.kit!.includes(id), `${id} with a sword`).toBe(true);
+    expect(slots().some((id) => ['whirlwind', 'heavy_cleave', 'sword_throw'].includes(id))).toBe(true);
+    expect(slots()).not.toContain('backstab');
+    // And back to the rod: the sword fills leave the class slots again.
+    host.player.weapon = 'staff';
+    refillClassSlots(host, 'class', { stable: true });
+    expect(slots().some((id) => ['whirlwind', 'heavy_cleave', 'sword_throw'].includes(id))).toBe(false);
   });
 
   it('skills the book no longer knows leave the bar on load; an old 6-slot bar is padded to 8', () => {
