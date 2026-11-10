@@ -1,5 +1,5 @@
 import type { WeaponType } from '../core/types';
-import { WEAPONS } from '../data/weapons';
+import { SOLD_WEAPONS, WEAPONS } from '../data/weapons';
 import { esc } from './util';
 import { oneLine } from './words';
 
@@ -45,7 +45,7 @@ export function showTitle(parent: HTMLElement, hasSave: boolean, savedName?: str
           <h3>Pick your first weapon</h3>
           <p class="fine">Every skill you learn works with any weapon.</p>
           <div class="weapon-pick">
-            ${(Object.keys(WEAPONS) as WeaponType[])
+            ${[...SOLD_WEAPONS]
               .map(
                 (w) => `<button class="wcard ${w === weapon ? 'on' : ''}" data-w="${w}">
                   <span class="ico">${WEAPONS[w].icon}</span><b>${w[0].toUpperCase() + w.slice(1)}</b>

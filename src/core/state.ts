@@ -1,6 +1,9 @@
-// Persisted SkillBook state (v2). Every core module reads/writes this shape;
-// only src/core/skillbook.ts orchestrates mutations and events.
-import type { ElementId } from './types';
+// Persisted SkillBook state (v3, SPEC-v4 §13). Every core module reads/writes this shape;
+// only src/core/skillbook.ts orchestrates mutations and events. save.migrateBookState turns any older book into it.
+import type { ElementId, MaterialId, WeaponType } from './types';
+
+/** Version of the persisted SkillBookState. */
+export const BOOK_VERSION = 3;
 
 export interface SkillProgress {
   id: string;
@@ -19,10 +22,10 @@ export interface SkillProgress {
 }
 
 export interface ClassProgress {
+  /** Class Level, 1..CLASS.maxLevel (10). The field keeps its v2 name. */
   rank: number;
+  /** XP into the current level (0 at the max level). */
   xp: number;
-  /** Tree node id -> ranks bought. */
-  spent: Record<string, number>;
 }
 
 export interface SparkState {
@@ -36,7 +39,7 @@ export interface SparkState {
 }
 
 export interface SkillBookState {
-  version: 2;
+  version: 3;
   skills: Record<string, SkillProgress>;
   elements: Partial<Record<ElementId, { source: string; learnedAt: number }>>;
   flags: Record<string, number>;
@@ -67,6 +70,34 @@ export interface SkillBookState {
   whispered: string[];
   /** Quest progress (docs/QUESTS.md §2). Optional for older saves; migrateBookState fills it. */
   quests?: QuestState;
+
+  // ---- v3 (SPEC-v4 §13). Phase 1 only keeps `shelved`, `weaponLevel` and `pouch.mote` (shelving pay) in use;
+  // the rest are the skeleton the Phase 2 systems fill.
+  /**
+   * Class-only skills (`SkillDef.classOf`) whose class is not discovered yet: out of `skills`, rank kept. They
+   * return to `skills` when that class is discovered.
+   */
+  shelved: Record<string, SkillProgress>;
+  /** Weapon upgrade level, 0..5 (Phase 2 sink). */
+  weaponLevel: Record<WeaponType, number>;
+  /** Material counters (the Pouch). */
+  pouch: Record<MaterialId, number>;
+  /** Material drop pity: misses in a row by material or `sigil:<species>`. */
+  matPity: Record<string, number>;
+  /** Skill id -> the Echo id sitting on it. */
+  echoOn: Record<string, string>;
+  /** Deed id -> tiers reached. */
+  deeds: Record<string, number>;
+  titles: string[];
+  title: string | null;
+}
+
+export function emptyPouch(): Record<MaterialId, number> {
+  return { fang: 0, mote: 0, core: 0, sap: 0, dust: 0, sigil: 0 };
+}
+
+export function emptyWeaponLevels(): Record<WeaponType, number> {
+  return { sword: 0, dagger: 0, staff: 0, fists: 0 };
 }
 
 export interface QuestState {
@@ -82,7 +113,7 @@ export function emptyQuestState(): QuestState {
 
 export function emptyState(seed = 1): SkillBookState {
   return {
-    version: 2,
+    version: 3,
     skills: {},
     elements: {},
     flags: {},
@@ -100,5 +131,13 @@ export function emptyState(seed = 1): SkillBookState {
     bestiary: {},
     whispered: [],
     quests: emptyQuestState(),
+    shelved: {},
+    weaponLevel: emptyWeaponLevels(),
+    pouch: emptyPouch(),
+    matPity: {},
+    echoOn: {},
+    deeds: {},
+    titles: [],
+    title: null,
   };
 }

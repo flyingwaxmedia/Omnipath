@@ -2,6 +2,7 @@
 // through a FusionContext and returns what the pair WOULD make; the SkillBook applies the outcome
 // (learning, consuming `consumes`, remembering the attempt) and picks whispers via hintCandidates().
 import {
+  SUPPORT_KINDS,
   canApplyEssence,
   elementSlotState,
   mergeBlocker,
@@ -55,9 +56,9 @@ type FusionFailure = Extract<FusionOutcome, { ok: false }>;
 const fail = (reason: FusionFailure['reason'], message: string): FusionFailure => ({ ok: false, reason, message });
 const nothing = (message: string): FusionFailure => fail('nothing', message);
 
-/** Essence slots of a skill: 0 for buffs, 1 otherwise, 2 once the skill has ≥ 3 overmastery bars. */
+/** Essence slots of a skill: 0 for support kinds (buff, blink, mend, shield) and class skills, 1 otherwise, 2 once the skill has ≥ 3 overmastery bars. */
 export function essenceSlots(skill: SkillDef, overBars: number): number {
-  if (skill.shape.kind === 'buff') return 0;
+  if (SUPPORT_KINDS.includes(skill.shape.kind) || skill.classOf !== undefined) return 0;
   return overBars >= SECOND_SLOT_OVERBARS ? 2 : 1;
 }
 
@@ -83,6 +84,8 @@ function ingredient(reg: Registry, ctx: FusionContext, ref: IngredientRef): Ingr
     case 'skill': {
       const def = reg.skill(p.id);
       if (!def || !ctx.has(p.id)) return fail('missing', `You do not know ${def?.name ?? 'that skill'}.`);
+      // A class skill (classOf) is never a fusion ingredient (SPEC-v4 §3.3).
+      if (def.classOf !== undefined) return fail('bound', `${def.name} is a class skill and cannot be fused.`);
       const need = fusionMinRank(def.maxRank);
       if (ctx.rank(p.id) < need) return fail('rank', `${def.name} must reach rank ${need} to be fused.`);
       return { kind: 'skill', ref, id: p.id, def };

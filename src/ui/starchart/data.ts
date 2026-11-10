@@ -120,7 +120,7 @@ export interface StarChartData {
   sky: SkyPlan;
 }
 
-const TREE: Record<WeaponType, ConstellationId> = { sword: 'edge', dagger: 'fang', staff: 'lantern' };
+const TREE: Record<WeaponType, ConstellationId> = { sword: 'edge', dagger: 'fang', staff: 'lantern', fists: 'craft' };
 
 /** Star id for an ingredient ref ('skill:x' → 'x', 'el:fire' → 'el:fire'); null for essences / passives. */
 function refStar(ref: string): string | null {
@@ -204,7 +204,7 @@ export function skyPlan(reg: Registry): SkyPlan {
   for (const m of MAPS) for (const sp of m.spawns ?? []) if (!regionOf.has(sp.monster)) regionOf.set(sp.monster, m.region);
   const regionName = new Map(REGIONS.map((r) => [r.id, r.name]));
   const signature = new Map<string, number>();
-  for (const cl of reg.classes) for (const g of cl.grants ?? []) if (!signature.has(g)) signature.set(g, cl.tier);
+  for (const cl of reg.classes) for (const g of cl.grants ?? []) if (!signature.has(g)) signature.set(g, cl.tier ?? 1);
 
   const rest = reg.authoredSkills().filter((s) => !byId.has(s.id) && !s.tags.includes('monster'));
   // Parents before children so a technique chain follows its first link.

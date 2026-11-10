@@ -175,7 +175,13 @@ export class SkillSystem {
       case 'chain':
         return s.range;
       case 'buff':
+      case 'mend':
+      case 'shield':
         return 0;
+      case 'zone':
+        return s.range;
+      case 'blink':
+        return s.distance;
     }
   }
 

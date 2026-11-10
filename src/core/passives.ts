@@ -1,8 +1,9 @@
-// Passives v2 (docs/SPEC-v2.md §4.5): which passives are active for a player and what they add up
-// to. Tag passives, class-tree passives, imprints and bestiary bonuses are derived from state on
-// demand (never saved); learned passives (trainer lessons, resonances) come from state.passives.
+// Passives (docs/SPEC-v2.md §4.5, SPEC-v4 §4): which passives are active for a player and what they add up
+// to. Tag passives, the worn class's own passive (its "Gift"), imprints and bestiary bonuses are derived from
+// state on demand (never saved); learned passives (trainer lessons, resonances) come from state.passives.
+// The class tree is gone (v4 Phase 1); imprints stay as they are until Phase 2 turns them into mastered Gifts.
 // aggregate() folds everything into PassiveTotals; the readers below apply the per-skill caps.
-import { imprintSlots, imprintUnlocked, wornClass } from './classes';
+import { classTier, imprintSlots, imprintUnlocked, wornBonus, wornClass } from './classes';
 import type { Registry } from './registry';
 import { taggedRanks } from './requirements';
 import type { SkillBookState, SkillProgress } from './state';
@@ -16,6 +17,9 @@ import type {
   PassiveStat,
   SkillDef,
   StatusKind,
+  TriggerDo,
+  TriggerWhen,
+  WeaponType,
 } from './types';
 
 /** The 12 tags that drive tag passives (PassiveDef ids `tag_<tag>`). */
@@ -114,6 +118,23 @@ export interface PassiveTotals {
   vsStatus: StatusPct[];
   /** Regeneration bonus while standing still. */
   regenStill: number;
+  /** Active `trigger` passives (rules, not numbers). The game layer fires them; they never change the sums above. */
+  triggers: ActiveTrigger[];
+}
+
+/** One active trigger passive, flattened for the game layer. */
+export interface ActiveTrigger {
+  /** PassiveDef id. */
+  id: string;
+  source: ActivePassiveSource;
+  when: TriggerWhen;
+  n?: number;
+  ms?: number;
+  hpBelow?: number;
+  /** Only while holding this weapon. */
+  weapon?: WeaponType;
+  do: TriggerDo;
+  icdMs?: number;
 }
 
 /** Passive sources that are derived from state and never saved in `state.passives`. */
@@ -158,7 +179,7 @@ export function tagPassiveTotalFor(rank: number): number {
  * Every passive in effect, in source order:
  * - tag: `tag_<tag>` defs present in the registry, ranked by tagPassiveRank(tagTotals);
  * - learned: `state.passives` (unknown ids and derived-source defs — tag/class/imprint — ignored);
- * - class: passive and capstone nodes bought in the worn class's tree (rank = ranks bought);
+ * - class: the worn class's own passive (`ClassDef.passive`), on from Class Level 1 at full strength;
  * - imprint: the first imprintSlots() entries of `state.imprints` that are discovered, unlocked and
  *   not the worn class (strength IMPRINT_STRENGTH by tier).
  * Ranks are clamped to the def's (and node's) maxRank; rank-0 entries are omitted.
@@ -180,15 +201,9 @@ export function activePassives(reg: Registry, state: Readonly<SkillBookState>): 
   }
 
   const worn = wornClass(reg, state);
-  if (worn) {
-    const progress = state.classes[worn.id];
-    for (const node of worn.tree ?? []) {
-      if (node.kind === 'skill') continue;
-      const bought = progress.spent[node.id] ?? 0;
-      const def = reg.passive(node.ref);
-      if (!def || bought <= 0) continue;
-      out.push({ def, rank: Math.min(bought, node.maxRank, def.maxRank), strength: 1, source: 'class' });
-    }
+  if (worn?.passive !== undefined) {
+    const def = reg.passive(worn.passive);
+    if (def) out.push({ def, rank: 1, strength: 1, source: 'class' });
   }
 
   const seen = new Set<string>();
@@ -199,7 +214,7 @@ export function activePassives(reg: Registry, state: Readonly<SkillBookState>): 
     const progress = state.classes[id];
     if (!cls?.imprint || !progress || !imprintUnlocked(cls, progress)) continue;
     const def = reg.passive(cls.imprint);
-    if (def) out.push({ def, rank: 1, strength: IMPRINT_STRENGTH[cls.tier], source: 'imprint' });
+    if (def) out.push({ def, rank: 1, strength: IMPRINT_STRENGTH[classTier(cls)], source: 'imprint' });
   }
 
   return out;
@@ -248,6 +263,8 @@ function addScoped(into: TagScopedPct, tag: string | undefined, pct: number): vo
 
 function addEffect(t: PassiveTotals, effect: PassiveEffect, pct: number, fromTag: boolean): void {
   switch (effect.kind) {
+    case 'trigger':
+      return;
     case 'power':
       addScoped(fromTag ? t.tagPower : t.power, effect.tag, pct);
       return;
@@ -281,7 +298,7 @@ function addEffect(t: PassiveTotals, effect: PassiveEffect, pct: number, fromTag
 
 /**
  * Folds every active passive (pct × rank × strength), the bestiary family and HP bonuses and the
- * worn class's tagPower bonus into PassiveTotals. Pure; the SkillBook caches the result. `active`
+ * worn class's tagPower bonus (at its Class Level) into PassiveTotals; trigger passives are listed in `triggers`. Pure; the SkillBook caches the result. `active`
  * defaults to activePassives(reg, state); pass a list already built for the same state to skip
  * rebuilding it.
  */
@@ -301,15 +318,22 @@ export function aggregate(
     vsFamily: {},
     vsStatus: [],
     regenStill: 0,
+    triggers: [],
   };
   for (const p of active) {
-    addEffect(t, p.def.effect, p.def.effect.pct * p.rank * p.strength, p.source === 'tag');
+    const effect = p.def.effect;
+    if (effect.kind === 'trigger') {
+      const { kind: _kind, ...rule } = effect;
+      t.triggers.push({ id: p.def.id, source: p.source, ...rule });
+      continue;
+    }
+    addEffect(t, effect, effect.pct * p.rank * p.strength, p.source === 'tag');
   }
   const family = bestiaryFamilyPct(reg, state);
   for (const f of Object.keys(family) as Family[]) addKeyed(t.vsFamily, f, family[f] ?? 0);
   const hp = bestiaryHpPct(reg, state);
   if (hp > 0) addKeyed(t.stat, 'hp', hp);
-  const tagPower = wornClass(reg, state)?.bonus.tagPower ?? {};
+  const tagPower = wornBonus(reg, state).tagPower ?? {};
   for (const [tag, pct] of Object.entries(tagPower)) addKeyed(t.classTagPower, tag, pct);
   return t;
 }

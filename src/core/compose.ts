@@ -3,18 +3,28 @@
 // turns an id into a composed skill (and caches it), fusion.ts decides what a player may create.
 import type { Registry } from './registry';
 import type {
+  Delivery,
   ElementDef,
   ElementId,
   EssenceDef,
   EssenceMod,
   ShapeKind,
   SkillDef,
+  SkillExtra,
   SkillRiders,
   SkillShape,
+  StatusKind,
 } from './types';
 
 /** Upper bound on potentialHits() for any composed skill. */
 export const MAX_HITS = 12;
+/** Hits a zone counts for the clamp: duration ÷ tick, at most this (SPEC-v4 §6.1). */
+export const ZONE_MAX_HITS = 8;
+/**
+ * Kinds that never take a Rune (essence), an element infusion or a shape merge: they have no hit of their own to
+ * shape (v4 §6.1 "Rune fits": blink, mend and shield take Echoes only; buffs as before).
+ */
+export const SUPPORT_KINDS: readonly ShapeKind[] = ['buff', 'blink', 'mend', 'shield'];
 /** Floor for the cooldown of any composed skill (ms). */
 export const MIN_COOLDOWN = 300;
 /**
@@ -43,6 +53,11 @@ export const SHAPE_PRIORITY: Readonly<Record<ShapeKind, number>> = {
   spin: 2,
   strike: 1,
   buff: 0,
+  // The v4 kinds never shape-merge in Phase 1 (mergeBlocker); they rank below everything.
+  zone: 0,
+  blink: 0,
+  mend: 0,
+  shield: 0,
 };
 
 /** Two skills can shape-merge only if they share at least one of these tags. */
@@ -87,6 +102,10 @@ const RIDER_NOUN: Readonly<Record<ShapeKind, string>> = {
   projectile: 'Volley',
   dash: 'Rush',
   buff: 'Aura',
+  zone: 'Field',
+  blink: 'Step',
+  mend: 'Balm',
+  shield: 'Ward',
 };
 
 const RESERVED = /[@~|:]/;
@@ -155,7 +174,11 @@ export function mergeId(a: string, b: string): string {
 
 // ------------------------------------------------------------------ hits
 
-/** Hits one cast deals before riders: count × pulses × hits × (1 + jumps). 0 for buffs. */
+/**
+ * Hits one cast deals before riders: count × pulses × hits × (1 + jumps). 0 for buffs and mends. v4 kinds: a zone
+ * ticks duration ÷ tick times (at most ZONE_MAX_HITS, at least 1); a blink hits once where it lands (`arrive`,
+ * else 0); a shield hits once when it bursts (`burst`, else 0).
+ */
 export function shapeHits(shape: SkillShape): number {
   switch (shape.kind) {
     case 'strike':
@@ -170,7 +193,14 @@ export function shapeHits(shape: SkillShape): number {
     case 'dash':
       return 1;
     case 'buff':
+    case 'mend':
       return 0;
+    case 'zone':
+      return Math.max(1, Math.min(ZONE_MAX_HITS, Math.floor(shape.durationMs / Math.max(1, shape.tickMs))));
+    case 'blink':
+      return shape.arrive ? 1 : 0;
+    case 'shield':
+      return shape.burst ? 1 : 0;
   }
 }
 
@@ -199,6 +229,7 @@ function clampHits(shape: SkillShape, riders: SkillRiders | undefined): { shape:
   if (s.kind === 'chain') while (over() && s.jumps > 0) s.jumps--;
   if (s.kind === 'spin') while (over() && (s.pulses ?? 1) > 1) s.pulses = (s.pulses ?? 1) - 1;
   if (s.kind === 'projectile') while (over() && (s.count ?? 1) > 1) s.count = (s.count ?? 1) - 1;
+  if (s.kind === 'zone') while (over() && s.durationMs >= 2 * s.tickMs) s.durationMs -= s.tickMs;
   if (r?.arc) {
     const arc = r.arc;
     while (over() && arc.targets > 0) arc.targets--;
@@ -286,7 +317,15 @@ function applyShapeMod(shape: SkillShape, mod: EssenceMod): SkillShape {
       return { ...shape, radius: scaleLen(shape.radius, mod.radiusMul), range: scaleLen(shape.range, mod.rangeMul) };
     case 'chain':
       return { ...shape, range: scaleLen(shape.range, mod.rangeMul), jumps: shape.jumps + (mod.jumps ?? 0) };
+    case 'zone': {
+      const z = { ...shape, radius: scaleLen(shape.radius, mod.radiusMul), range: scaleLen(shape.range, mod.rangeMul) };
+      if (shape.line && mod.rangeMul !== undefined) z.line = { length: scaleLen(shape.line.length, mod.rangeMul) };
+      return z;
+    }
     case 'buff':
+    case 'blink':
+    case 'mend':
+    case 'shield':
       return shape;
   }
 }
@@ -294,11 +333,13 @@ function applyShapeMod(shape: SkillShape, mod: EssenceMod): SkillShape {
 // ------------------------------------------------------------------ legality
 
 /**
- * Whether a skill has an element slot of its own: an unaligned, non-buff attack with power > 0
- * (monster-only techniques never do). Call it on an authored skill or a raw shape merge.
+ * Whether a skill has an element slot of its own: an unaligned attack with power > 0 that is not a support kind
+ * (buff, blink, mend, shield), not a class skill (`classOf`) and not a monster-only technique. Call it on an
+ * authored skill or a raw shape merge.
  */
 export function canTakeElement(root: SkillDef): boolean {
-  return !root.element && root.shape.kind !== 'buff' && root.power > 0 && !root.tags.includes(MONSTER_TAG);
+  if (root.classOf !== undefined) return false;
+  return !root.element && !SUPPORT_KINDS.includes(root.shape.kind) && root.power > 0 && !root.tags.includes(MONSTER_TAG);
 }
 
 /**
@@ -308,7 +349,8 @@ export function canTakeElement(root: SkillDef): boolean {
  */
 export function legalEssenceSet(root: SkillDef, mods: readonly EssenceDef[]): boolean {
   if (mods.length === 0) return true;
-  if (root.shape.kind === 'buff' || root.tags.includes(MONSTER_TAG) || mods.length > MAX_ESSENCES) return false;
+  if (SUPPORT_KINDS.includes(root.shape.kind) || root.classOf !== undefined) return false;
+  if (root.tags.includes(MONSTER_TAG) || mods.length > MAX_ESSENCES) return false;
   const categories = new Set(mods.map((m) => m.category));
   return categories.size === mods.length && mods.every((m) => m.appliesTo.includes(root.shape.kind));
 }
@@ -331,8 +373,11 @@ export function canApplyEssence(
   slotCount: number,
   applied: readonly EssenceDef[] = [],
 ): EssenceCheck {
-  if (skill.shape.kind === 'buff') {
+  if (SUPPORT_KINDS.includes(skill.shape.kind)) {
     return { ok: false, reason: 'buff', message: `${skill.name} has no edge for an essence to cling to.` };
+  }
+  if (skill.classOf !== undefined) {
+    return { ok: false, reason: 'buff', message: `${skill.name} is a class skill and takes no Rune.` };
   }
   if (!ess.appliesTo.includes(skill.shape.kind)) {
     return { ok: false, reason: 'shape', message: `${ess.name} only shapes ${listText(ess.appliesTo)} skills.` };
@@ -531,15 +576,20 @@ export function mergeBlocker(a: SkillDef, b: SkillDef): string | null {
     if (s.generated) return `${s.name} is already a composed technique and cannot be merged again.`;
     if (s.tags.includes(MONSTER_TAG)) return `${s.name} belongs to monsters alone.`;
     if (s.tier < 1) return `${s.name} is too simple a form to merge.`;
+    if (s.classOf !== undefined) return `${s.name} is a class skill and cannot be fused.`;
   }
   for (const s of [a, b]) {
     if (s.shape.kind === 'buff') return `${s.name} is a stance, not a strike; stances cannot be shape-merged.`;
+    if (!MERGEABLE_KINDS.includes(s.shape.kind)) return `${s.name} cannot be shape-merged.`;
   }
   if (!MERGE_TAGS.some((t) => a.tags.includes(t) && b.tags.includes(t))) {
     return `${a.name} and ${b.name} share no common thread to bind them.`;
   }
   return null;
 }
+
+/** Kinds that can be a shape-merge parent: the six v2 attack kinds. */
+const MERGEABLE_KINDS: readonly ShapeKind[] = ['strike', 'spin', 'projectile', 'dash', 'nova', 'chain'];
 
 /** Orders merge parents: higher SHAPE_PRIORITY first, then higher tier, then id. */
 function mergeOrder(a: SkillDef, b: SkillDef): [SkillDef, SkillDef] {
@@ -565,9 +615,7 @@ function bumpAxis(shape: SkillShape): MergeRider {
       return { shape: { ...shape, count: (shape.count ?? 1) + 1 }, text: 'looses one extra projectile' };
     case 'chain':
       return { shape: { ...shape, jumps: shape.jumps + 1 }, text: 'leaps to one more foe' };
-    case 'nova':
-    case 'dash':
-    case 'buff':
+    default:
       return { shape, riders: { arc: { ...FALLBACK_ARC } }, text: 'arcs each hit to one more foe' };
   }
 }
@@ -593,6 +641,8 @@ function mergeRider(primary: SkillShape, lower: ShapeKind): MergeRider {
     case 'chain':
     case 'projectile':
       return bumpAxis(primary);
+    default:
+      return { shape: primary, text: '' };
   }
 }
 
@@ -652,6 +702,68 @@ export function mergeSkills(a: SkillDef, b: SkillDef): SkillDef | null {
   if (primary.afterCastMs !== undefined) merged.afterCastMs = primary.afterCastMs;
   if (clamped.riders) merged.riders = clamped.riders;
   return merged;
+}
+
+// ------------------------------------------------------------------ signatures (SPEC-v4 §6.2 – §6.3)
+
+/** Delivery a skill has when its data names none yet, from its shape and grip. */
+export function defaultDelivery(skill: Pick<SkillDef, 'shape' | 'tags'>): Delivery {
+  const shape = skill.shape;
+  const has = (t: string): boolean => skill.tags.includes(t);
+  switch (shape.kind) {
+    case 'strike':
+      return has('fist') ? 'punch' : has('pierce') ? 'thrust' : has('blade') ? 'cut' : 'target';
+    case 'spin':
+      return 'ring';
+    case 'projectile':
+      return shape.radial ? 'ring' : has('blade') || has('pierce') ? 'throw' : 'bolt';
+    case 'dash':
+      return 'path';
+    case 'nova':
+      return shape.range > 0 ? 'point' : 'ring';
+    case 'chain':
+      return 'nearest';
+    case 'zone':
+      return shape.follow ? 'self' : shape.line ? 'line' : shape.range > 0 ? 'point' : 'ground';
+    case 'blink':
+      return shape.to === 'target' ? 'target' : shape.to === 'self' ? 'self' : shape.to === 'object' ? 'ground' : 'point';
+    case 'buff':
+    case 'mend':
+    case 'shield':
+      return 'self';
+  }
+}
+
+/** The four fields of the distinctness rule. */
+export interface SkillSignature {
+  kind: ShapeKind;
+  element: ElementId | 'none';
+  delivery: Delivery;
+  extra: SkillExtra;
+}
+
+/**
+ * A skill's signature: kind, element, delivery (`delivery`, else defaultDelivery) and extra (`extra`, else
+ * `status`, else 'none'). An extra equal to the element's own status counts as 'none' (fire already burns): pass
+ * `elementStatus` (ElementDef.status of the skill's element) to apply that rule.
+ */
+export function skillSignature(
+  skill: Pick<SkillDef, 'shape' | 'tags' | 'element' | 'delivery' | 'extra' | 'status'>,
+  elementStatus?: StatusKind,
+): SkillSignature {
+  let extra: SkillExtra = skill.extra ?? skill.status ?? 'none';
+  if (elementStatus !== undefined && extra === elementStatus) extra = 'none';
+  return {
+    kind: skill.shape.kind,
+    element: skill.element ?? 'none',
+    delivery: skill.delivery ?? defaultDelivery(skill),
+    extra,
+  };
+}
+
+/** `kind·element·delivery·extra`, the way SPEC-v4 writes signatures. */
+export function signatureKey(sig: SkillSignature): string {
+  return `${sig.kind}·${sig.element}·${sig.delivery}·${sig.extra}`;
 }
 
 // ------------------------------------------------------------------ helpers

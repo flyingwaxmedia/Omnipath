@@ -149,6 +149,8 @@ function reachableIn(req: Requirement, facts: RegionFacts): boolean {
     case 'level':
     case 'class':
     case 'tagCount':
+    case 'deed':
+    case 'quest':
       return true;
   }
 }
@@ -172,9 +174,12 @@ function requirementResolves(req: Requirement): boolean {
       return reg.skill(req.skill) !== undefined;
     case 'flag':
       return knownFlag(req.id);
+    case 'quest':
+      return reg.quest(req.id) !== undefined;
     case 'elementsKnown':
     case 'level':
     case 'tagCount':
+    case 'deed':
       return true;
   }
 }

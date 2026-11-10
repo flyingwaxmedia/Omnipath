@@ -216,7 +216,7 @@ describe('Session bar (class auto-equip)', () => {
     const s = fresh();
     for (const id of ['sword_throw', 'heavy_cleave', 'firebolt', 'quickstep', 'rising_kick']) s.book.learn(id, 'test');
     expect(s.book.state.worn).toBeNull();
-    s.book.state.classes.pyroblade = { rank: 1, xp: 0, spent: {} };
+    s.book.state.classes.pyroblade = { rank: 1, xp: 0 };
     s.player.hotbar.splice(0, 8, 'rising_kick', E, E, E, E, 'sword_throw', 'quickstep', 'firebolt');
     expect(s.book.wear('pyroblade').ok).toBe(true);
     bars.length = 0;
@@ -275,7 +275,7 @@ describe('Session bar: learning while in a class', () => {
   function pyroblade(ids: string[]): Session {
     const s = fresh('dagger'); // (a sword's basic Slash would count toward unlocking Blademaster)
     for (const id of ids) s.book.learn(id, 'test');
-    s.book.state.classes.pyroblade = { rank: 1, xp: 0, spent: {} };
+    s.book.state.classes.pyroblade = { rank: 1, xp: 0 };
     expect(s.book.wear('pyroblade').ok).toBe(true);
     s.player.hotbar.splice(0, 8, ...Array<null>(8).fill(null));
     refillClassSlots(s, 'class');
@@ -326,7 +326,7 @@ describe('Session bar: changing class and editing your slots (UX audit)', () => 
   function unlocked(ids: string[], classes: string[]): Session {
     const s = fresh('dagger');
     for (const id of ids) s.book.learn(id, 'test');
-    for (const c of classes) s.book.state.classes[c] ??= { rank: 1, xp: 0, spent: {} };
+    for (const c of classes) s.book.state.classes[c] ??= { rank: 1, xp: 0 };
     bars.length = 0;
     return s;
   }

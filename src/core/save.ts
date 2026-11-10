@@ -1,22 +1,34 @@
-// Save migration for the SkillBook (docs/SPEC-v2.md §6 "Save v2"). migrateBookState() turns any
-// stored book — a v1 save, a v2 save written by an older build, or garbage — into a complete, valid
-// v2 SkillBookState. It is total (never throws) and never shares objects with its input, so the
-// SkillBook also uses it as its defensive copy. Storage keys and I/O belong to the game layer.
-import { classMaxRank, classXpToNext, imprintSlots, imprintUnlocked } from './classes';
+// Save migration for the SkillBook (docs/SPEC-v4.md §13 "book state v2 → v3"; SPEC-v2 §6 for v1 → v2).
+// migrateBookState() turns any stored book — a v1 or v2 save, a v3 save written by an older build, or garbage —
+// into a complete, valid v3 SkillBookState. It is total (never throws), deterministic, idempotent and never shares
+// objects with its input, so the SkillBook also uses it as its defensive copy. Storage keys and I/O belong to the
+// game layer (session save key `omnipath.save.v3`; an older key is never deleted before a v3 write succeeded).
+//
+// Phase 1 implements §13 rules 1 – 4, 8, 9 (the book's half: clearLostSlots), 15 and 16:
+//   1  weaponLevel 0 for all four weapons (owning `fists` is the session's PlayerSave);
+//   2  class levels 10 / 8 / 5 → 10, XP scaled between the curves, tree points dropped;
+//   3  merged classes fold into their targets once the registry no longer has them;
+//   4  discovered classes stay discovered whatever their new requirements;
+//   8  class-only skills of undiscovered classes are shelved (rank kept) and pay 3 Motes each;
+//   15 tree / imprint / derived passive ids are dropped from the learned list;
+//   16 the new v3 fields are filled with empties.
+import { CLASS, classXpNeed, classXpToNext, imprintSlots, imprintUnlocked, kitSkillsAt } from './classes';
 import { MASTERY, overmasteryCost, xpToNext } from './mastery';
 import { QUEST_TRACK_LIMIT, counterNeed, creditLessonQuests } from './quests';
 import type { Registry } from './registry';
 import { hashSeed } from './rng';
 import { SPARK } from './spark';
 import {
+  emptyPouch,
   emptyState,
+  emptyWeaponLevels,
   type ClassProgress,
   type QuestState,
   type SkillBookState,
   type SkillProgress,
   type SparkState,
 } from './state';
-import type { ElementId } from './types';
+import { MATERIAL_IDS, WEAPON_TYPES, type ElementId } from './types';
 
 /**
  * Flag keys the SkillBook itself maintains in `state.flags` (content requirements read the first two;
@@ -31,7 +43,44 @@ export const BOOK_FLAGS = {
   essenceDropPrefix: 'essdrop:',
   /** Counter of the essence-drop roll stream (seeded from `state.spark.seed`). */
   essenceRolls: 'rng:essence',
+  /** `trial_ready:<classId>`: the "Trial ready" card for that class was announced. */
+  trialReadyPrefix: 'trial_ready:',
 } as const;
+
+/** Rule 2: the v2 max Class Rank of the classes that were Tier II (8) and Tier III (5). Every other class had 10. */
+export const LEGACY_CLASS_MAX: Readonly<Record<string, number>> = {
+  sword_saint: 8,
+  magma_knight: 8,
+  phantom: 8,
+  archmage: 8,
+  prism_sage: 8,
+  vortex_dancer: 8,
+  runeknight: 8,
+  stormreaver: 8,
+  echo_sovereign: 8,
+  ascendant: 5,
+  eclipse_walker: 5,
+};
+
+/** v2 Class Rank curve multiplier by that class's old max rank (Tier I ×1, II ×1.8, III ×3). */
+const LEGACY_XP_MULT: Readonly<Record<number, number>> = { 10: 1, 8: 1.8, 5: 3 };
+
+/** Rule 3: classes merged into another (source → target). */
+export const MERGED_CLASSES: Readonly<Record<string, string>> = {
+  phantom: 'shadowstalker',
+  vortex_dancer: 'tempest_dancer',
+  prism_sage: 'elementalist',
+  echo_sovereign: 'mimic',
+};
+
+/** Rule 8: Motes paid for each skill that is shelved. */
+export const SHELVE_PAY_MOTES = 3;
+
+/** Cap of each Pouch counter. */
+export const POUCH_CAP = 9999;
+
+/** Rule 15: learned-passive ids that are never saved any more (tree nodes, imprints, the echo tag passive). */
+const DROPPED_PASSIVE = /^(cls_|imprint_)|^tag_echo$/;
 
 type Raw = Record<string, unknown>;
 
@@ -109,16 +158,36 @@ function readElements(v: unknown): SkillBookState['elements'] {
   return out;
 }
 
-/** v1 stored discovered class ids (`string[]`, each becomes CR 1); v2 stores ClassProgress by id. */
-function readClasses(v: unknown): Record<string, ClassProgress> {
+/** XP progress (0..1, below 1) of each class inside its level, as read from a pre-v3 save (rule 2). */
+type ClassFractions = Map<string, number>;
+
+/**
+ * Discovered classes. v1 stored ids (`string[]`, each becomes Class Level 1); v2 and v3 store ClassProgress by id.
+ * A pre-v3 book (`legacy`) is rescaled by rule 2: `level = max(1, round(old × 10 / oldMax))` with oldMax from
+ * LEGACY_CLASS_MAX (10 / 8 / 5), and the share of the old level's bar that was filled is kept in `fractions` so the
+ * XP can be set on the new curve. `spent` (tree points) is dropped.
+ */
+function readClasses(v: unknown, legacy: boolean, fractions: ClassFractions): Record<string, ClassProgress> {
   const out: Record<string, ClassProgress> = {};
   if (Array.isArray(v)) {
-    for (const id of strings(v)) if (isSafeKey(id)) out[id] = { rank: 1, xp: 0, spent: {} };
+    for (const id of strings(v)) if (isSafeKey(id)) out[id] = { rank: 1, xp: 0 };
     return out;
   }
   for (const [id, c] of entries(v)) {
     if (!isRecord(c)) continue;
-    out[id] = { rank: whole(c.rank, 1) ?? 1, xp: Math.max(0, finite(c.xp) ?? 0), spent: counts(c.spent) };
+    const rank = whole(c.rank, 1) ?? 1;
+    const xp = Math.max(0, finite(c.xp) ?? 0);
+    if (!legacy) {
+      out[id] = { rank, xp };
+      continue;
+    }
+    const oldMax = Object.hasOwn(LEGACY_CLASS_MAX, id) ? LEGACY_CLASS_MAX[id] : CLASS.maxLevel;
+    const old = Math.min(rank, oldMax);
+    const level = Math.min(CLASS.maxLevel, Math.max(1, Math.round((old * CLASS.maxLevel) / oldMax)));
+    const oldNeed = Math.round(60 * Math.pow(1.22, old - 1) * (LEGACY_XP_MULT[oldMax] ?? 1));
+    const fraction = level >= CLASS.maxLevel ? 0 : Math.min(xp / oldNeed, 1 - 1e-9);
+    fractions.set(id, fraction);
+    out[id] = { rank: level, xp: Math.floor(fraction * classXpToNext(level)) };
   }
   return out;
 }
@@ -176,15 +245,42 @@ function readWorn(r: Raw, classes: Readonly<Record<string, ClassProgress>>): str
   return pick(r.activeClass);
 }
 
-/** Structural read of any object; no registry needed. */
-function readState(r: Raw): SkillBookState {
+/** Weapon upgrade levels: 0..5 for each of the four weapons (rule 1: a pre-v3 book has none, so all 0). */
+function readWeaponLevels(v: unknown): SkillBookState['weaponLevel'] {
+  const out = emptyWeaponLevels();
+  const r = isRecord(v) ? v : {};
+  for (const w of WEAPON_TYPES) out[w] = Math.min(5, whole(r[w]) ?? 0);
+  return out;
+}
+
+function readPouch(v: unknown): SkillBookState['pouch'] {
+  const out = emptyPouch();
+  const r = isRecord(v) ? v : {};
+  for (const m of MATERIAL_IDS) out[m] = Math.min(POUCH_CAP, whole(r[m]) ?? 0);
+  return out;
+}
+
+/** String values by safe key (echoOn). */
+function texts(v: unknown): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [k, x] of entries(v)) if (typeof x === 'string' && x.length > 0) out[k] = x;
+  return out;
+}
+
+/** Structural read of any object; no registry needed. Pre-v3 class levels are rescaled here (rule 2). */
+function readState(r: Raw, fractions: ClassFractions): SkillBookState {
   const skills = readSkills(r.skills);
-  const classes = readClasses(r.classes);
+  const classes = readClasses(r.classes, r.version !== 3, fractions);
+  const shelved = readSkills(r.shelved);
+  for (const id of Object.keys(shelved)) if (Object.hasOwn(skills, id)) delete shelved[id];
+  const titles = strings(r.titles);
   const worn = readWorn(r, classes);
   const flags = numbers(r.flags);
   if (worn !== null) flags[BOOK_FLAGS.classWorn] = Math.max(1, flags[BOOK_FLAGS.classWorn] ?? 0);
+  const passives = counts(r.passives);
+  for (const id of Object.keys(passives)) if (DROPPED_PASSIVE.test(id)) delete passives[id];
   return {
-    version: 2,
+    version: 3,
     skills,
     elements: readElements(r.elements),
     flags,
@@ -192,7 +288,7 @@ function readState(r: Raw): SkillBookState {
     discoveries: strings(r.discoveries),
     hints: strings(r.hints),
     essences: counts(r.essences),
-    passives: counts(r.passives),
+    passives,
     lessons: strings(r.lessons),
     classes,
     worn,
@@ -202,24 +298,121 @@ function readState(r: Raw): SkillBookState {
     bestiary: counts(r.bestiary),
     whispered: strings(r.whispered),
     quests: readQuests(r.quests),
+    shelved,
+    weaponLevel: readWeaponLevels(r.weaponLevel),
+    pouch: readPouch(r.pouch),
+    matPity: counts(r.matPity),
+    echoOn: texts(r.echoOn),
+    deeds: counts(r.deeds),
+    titles,
+    title: typeof r.title === 'string' && titles.includes(r.title) ? r.title : null,
   };
+}
+
+/**
+ * Rule 3: folds each merged class (MERGED_CLASSES) that the player discovered into its target. The target takes
+ * the higher level of the two, +1 (max 10) if both were discovered, and the higher one's XP (0 after a +1);
+ * `worn`, whispers and slotted imprints follow the target. With a registry, a class is merged only once the
+ * registry no longer has it (and has its target), so the rule waits for the content that removes the class and then
+ * applies to any save, v3 included; without a registry it applies to pre-v3 books by the table alone.
+ */
+function mergeClasses(state: SkillBookState, legacy: boolean, reg: Registry | undefined, fractions: ClassFractions): void {
+  for (const [from, to] of Object.entries(MERGED_CLASSES)) {
+    const gone = reg ? reg.classDef(from) === undefined && reg.classDef(to) !== undefined : legacy;
+    const follow = (ids: readonly string[]): string[] => [...new Set(ids.map((id) => (id === from ? to : id)))];
+    if (!gone) continue;
+    state.whispered = follow(state.whispered);
+    const source = Object.hasOwn(state.classes, from) ? state.classes[from] : undefined;
+    if (!source) continue;
+    const target = Object.hasOwn(state.classes, to) ? state.classes[to] : undefined;
+    delete state.classes[from];
+    const sourceFraction = fractions.get(from);
+    fractions.delete(from);
+    const carry = (fraction: number | undefined): void => {
+      if (fraction === undefined) fractions.delete(to);
+      else fractions.set(to, fraction);
+    };
+    if (!target) {
+      state.classes[to] = source;
+      carry(sourceFraction);
+    } else {
+      const sourceWins = source.rank > target.rank || (source.rank === target.rank && source.xp > target.xp);
+      const higher = sourceWins ? source : target;
+      const rank = Math.min(CLASS.maxLevel, higher.rank + 1);
+      // Both were discovered: one level up, starting that level from 0.
+      state.classes[to] = { rank, xp: rank > higher.rank ? 0 : higher.xp };
+      if (rank > higher.rank) carry(0);
+      else if (sourceWins) carry(sourceFraction);
+    }
+    if (state.worn === from) state.worn = to;
+    state.imprints = follow(state.imprints).filter((id) => id !== state.worn);
+  }
+}
+
+/**
+ * Rules 8 and 9, class skills (needs the registry; safe to run on every load):
+ * - a shelved skill comes back when its class is discovered, or when it is no longer a class skill;
+ * - a known skill with `classOf` whose class the registry knows and the player has not discovered moves to
+ *   `shelved` (rank kept) and pays SHELVE_PAY_MOTES Motes into the Pouch;
+ * - every discovered class with a kit knows the kit skills its Class Level has unlocked (rank 1, source
+ *   `class:<id>`), so its class slots can be rebuilt from the kit.
+ */
+function settleClassSkills(state: SkillBookState, reg: Registry): void {
+  const discovered = (classId: string): boolean => Object.hasOwn(state.classes, classId);
+  for (const [id, p] of Object.entries(state.shelved)) {
+    const def = reg.skill(id);
+    if (!def) continue;
+    if (def.classOf !== undefined && !discovered(def.classOf)) continue;
+    delete state.shelved[id];
+    if (!Object.hasOwn(state.skills, id)) state.skills[id] = p;
+  }
+  for (const [id, p] of Object.entries(state.skills)) {
+    const classOf = reg.skill(id)?.classOf;
+    if (classOf === undefined || discovered(classOf) || !reg.classDef(classOf)) continue;
+    delete state.skills[id];
+    state.shelved[id] = p;
+    state.pouch.mote = Math.min(POUCH_CAP, state.pouch.mote + SHELVE_PAY_MOTES);
+  }
+  for (const [classId, progress] of Object.entries(state.classes)) {
+    const cls = reg.classDef(classId);
+    if (!cls) continue;
+    for (const id of kitSkillsAt(cls, progress.rank)) {
+      if (Object.hasOwn(state.skills, id) || !reg.skill(id)) continue;
+      state.skills[id] = { id, rank: 1, xp: 0, charges: 0, uses: 0, source: `class:${classId}`, learnedAt: 0, overBars: 0, study: {} };
+    }
+  }
+}
+
+/**
+ * Rule 9, the book's half: a skill bar with every slot cleared whose skill the book no longer knows (removed or
+ * shelved by the migration). The game then rebuilds the class slots from the worn class's kit and refills "your"
+ * slots with its auto-equip rule. Weapon-bound skills for another weapon stay (the bar greys them).
+ */
+export function clearLostSlots(state: Pick<SkillBookState, 'skills'>, bar: readonly (string | null)[]): (string | null)[] {
+  return bar.map((id) => (id !== null && Object.hasOwn(state.skills, id) ? id : null));
 }
 
 /** XP kept strictly inside a bar of `size` (a migrated skill never ranks up from stale XP alone). */
 const insideBar = (xp: number, size: number): number => (xp < size ? xp : Math.max(0, size - 1));
 
 /**
- * Registry-aware clamps: skill ranks to their maxRank and XP to the v2 curve (into the current rank's
- * bar, or at most one full overmastery bar at max rank, which may hold full), class ranks to their
- * tier cap and XP to the Class Rank curve (0 at max), unknown elements dropped, imprints limited to
+ * Registry-aware clamps: class skills shelved, returned and granted (settleClassSkills), derived passives dropped
+ * from the learned list, skill ranks to their maxRank and XP to the v2 curve (into the current rank's
+ * bar, or at most one full overmastery bar at max rank, which may hold full), class levels to
+ * CLASS.maxLevel and XP to the class's curve (0 at max), unknown elements dropped, imprints limited to
  * discovered, unlocked classes within the unlocked slots, and `mastered_any` set when a skill is maxed.
  * Quests: counters fit the current objectives, a completed non-repeatable quest loses a stale active
  * entry, tracked ids must be known quests, and quests teaching lessons already in `state.lessons` count
  * as completed (quests.creditLessonQuests). Ids the registry does not know are kept untouched (content
  * may come back).
  */
-function settle(state: SkillBookState, reg: Registry): void {
-  for (const p of Object.values(state.skills)) {
+function settle(state: SkillBookState, reg: Registry, fractions: ClassFractions): void {
+  settleClassSkills(state, reg);
+  for (const id of Object.keys(state.passives)) {
+    const source = reg.passive(id)?.source;
+    if (source === 'tag' || source === 'class' || source === 'imprint' || source === 'keepsake') delete state.passives[id];
+  }
+  for (const p of [...Object.values(state.skills), ...Object.values(state.shelved)]) {
     const def = reg.skill(p.id);
     if (!def) continue;
     p.rank = Math.min(p.rank, def.maxRank);
@@ -236,9 +429,13 @@ function settle(state: SkillBookState, reg: Registry): void {
   for (const [id, c] of Object.entries(state.classes)) {
     const cls = reg.classDef(id);
     if (!cls) continue;
-    const max = classMaxRank(cls);
+    const max = CLASS.maxLevel;
     c.rank = Math.min(c.rank, max);
-    c.xp = c.rank >= max ? 0 : insideBar(c.xp, classXpToNext(c.rank, cls.tier));
+    const need = classXpNeed(cls, c.rank);
+    // A rescaled pre-v3 level keeps the share of its bar that was filled, on this class's own curve.
+    const fraction = fractions.get(id);
+    if (fraction !== undefined) c.xp = Math.floor(fraction * need);
+    c.xp = c.rank >= max ? 0 : insideBar(c.xp, need);
   }
   state.imprints = state.imprints
     .filter((id) => {
@@ -269,26 +466,29 @@ function settle(state: SkillBookState, reg: Registry): void {
 }
 
 /**
- * Normalizes any stored SkillBook state into a complete v2 SkillBookState (never throws):
- * - v1 (`version: 1`): `classes: string[]` → `{ rank: 1, xp: 0, spent: {} }` each, `activeClass` →
- *   `worn`, skills gain `overBars: 0` and `study: {}`, and every v2-only field is added.
- * - v2: any missing or malformed field is filled with its emptyState() default (a save from before
- *   quests gets emptyQuestState()); malformed entries (non-numeric ranks, negative counts, non-string
- *   ids) are repaired or dropped.
- * - Worn class (readWorn): the saved one when it is discovered; an explicit v2 `worn: null` stays
- *   "No class"; otherwise (v1 without an active class, a missing or unknown id) the first discovered
- *   class. `class_worn` is set while a class is worn, charges are capped at MASTERY.maxCharges, and
- *   the copy shares no objects with `raw`.
- * - With `reg`: ranks and XP are clamped to the v2 curves and quest counters to their objectives (see
- *   settle above). The SkillBook
- *   constructor always passes its registry, so callers may omit it.
- * Anything that is not an object (or throws while being read) yields emptyState().
+ * Normalizes any stored SkillBook state into a complete v3 SkillBookState (never throws):
+ * - v1 (`version: 1`): `classes: string[]` → Class Level 1 each, `activeClass` → `worn`, skills gain
+ *   `overBars: 0` and `study: {}`, and every later field is added.
+ * - v2 → v3 (SPEC-v4 §13, the rules listed at the top of this file): class levels rescaled to the one max of 10,
+ *   tree points dropped, merged classes folded, class-only skills shelved for 3 Motes each, stale passive ids
+ *   dropped, new fields filled with empties.
+ * - v3: any missing or malformed field is filled with its emptyState() default; malformed entries (non-numeric
+ *   ranks, negative counts, non-string ids) are repaired or dropped.
+ * - Worn class (readWorn): the saved one when it is discovered; an explicit `worn: null` stays "No class";
+ *   otherwise (v1 without an active class, a missing or unknown id) the first discovered class. `class_worn` is
+ *   set while a class is worn, charges are capped at MASTERY.maxCharges, and the copy shares no objects with `raw`.
+ * - With `reg`: the registry-aware rules run (see settle above; merges wait for the registry to drop the merged
+ *   class). The SkillBook constructor always passes its registry, so callers may omit it.
+ * Idempotent: migrating a migrated state changes nothing. Anything that is not an object (or throws while being
+ * read) yields emptyState().
  */
 export function migrateBookState(raw: unknown, reg?: Registry): SkillBookState {
   try {
     if (!isRecord(raw)) return emptyState();
-    const state = readState(raw);
-    if (reg) settle(state, reg);
+    const fractions: ClassFractions = new Map();
+    const state = readState(raw, fractions);
+    mergeClasses(state, raw.version !== 3, reg, fractions);
+    if (reg) settle(state, reg, fractions);
     return state;
   } catch {
     return emptyState();

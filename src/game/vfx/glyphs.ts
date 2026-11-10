@@ -32,6 +32,10 @@ export const STATUS_GLYPHS: Readonly<Record<StatusKind, Glyph>> = {
   freeze: ['#####', '#.#.#', '#####', '#.#.#', '#####'],
   poison: ['.###.', '#.#.#', '#####', '.#.#.', '.#.#.'],
   pull: ['#...#', '.#.#.', '..#..', '.#.#.', '#...#'],
+  root: ['..#..', '..#..', '.###.', '#.#.#', '#.#.#'],
+  launch: ['..#..', '.###.', '#.#.#', '..#..', '..#..'],
+  expose: ['#####', '#...#', '#.#.#', '#...#', '#####'],
+  lure: ['.###.', '#...#', '#.#.#', '#...#', '.###.'],
 };
 
 /** A 3-wide rune of `h` rows (3 or 5) from a seed: a fixed stem plus seeded strokes, never empty. */

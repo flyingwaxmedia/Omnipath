@@ -161,9 +161,9 @@ function nodeRef(ctrl: GameController, n: ClassNode): { name: string; line: stri
 /** The ONE next step for a perk that cannot be learned now. */
 function perkStep(ctrl: GameController, c: ClassDef, n: ClassNode): string {
   const prog = ctrl.book.state.classes[c.id]!;
-  const have = prog.spent[n.id] ?? 0;
+  const have = 0;
   if (have >= n.maxRank) return 'Fully learned.';
-  const req = (n.requires ?? []).find((q) => (prog.spent[q.node] ?? 0) < q.rank);
+  const req = (n.requires ?? []).find((q) => 0 < q.rank);
   if (req) {
     const other = c.tree!.find((x) => x.id === req.node);
     return `Learn ${other ? nodeRef(ctrl, other).name : 'the perk above'} first.`;
@@ -191,7 +191,7 @@ function perksHtml(host: PanelHost, c: ClassDef): string {
       return `${gate ? `<div class="pgate ${open ? 'open' : ''}">${open ? '◆' : '🔒'} ${open ? 'Open' : `Spend ${gate} points to open`}</div>` : ''}
         <div class="prow">${nodes
           .map((n) => {
-            const have = prog.spent[n.id] ?? 0;
+            const have = 0;
             const r = nodeRef(ctrl, n);
             const can = canBuyNode(c, prog, n.id).ok;
             return `<button class="perk ${have >= n.maxRank ? 'max' : have ? 'part' : can ? 'can' : 'off'} ${n.id === sel ? 'sel' : ''}" data-perk="${esc(n.id)}">
@@ -202,7 +202,7 @@ function perksHtml(host: PanelHost, c: ClassDef): string {
     .join('');
   const n = c.tree.find((x) => x.id === sel)!;
   const r = nodeRef(ctrl, n);
-  const have = prog.spent[n.id] ?? 0;
+  const have = 0;
   const can = canBuyNode(c, prog, n.id).ok;
   const safe = ctrl.isSafe();
   return `<div class="perks-top"><b class="pts">${points}</b> ${points === 1 ? FRIENDLY.classPoint : `${FRIENDLY.classPoint}s`} to spend <small>· one per Class Level</small></div>

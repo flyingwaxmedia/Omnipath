@@ -1,8 +1,10 @@
 // Combat v2 (docs/SPEC-v2.md §2): element relations by defender element level, size modifiers,
 // status combos and the damage stacking formula. Pure apart from the documented fallback roll counter.
+import { WEAPON_SIZE } from './balance';
 import { rankPower } from './mastery';
+import { bodyBonusPct } from './requirements';
 import { hashSeed, mulberry32 } from './rng';
-import type { ElementDef, ElementId, Family, Size, SkillDef, StatusKind, WeaponType } from './types';
+import type { ElementDef, ElementId, Family, MonsterRank, Size, SkillDef, StatusKind, WeaponType } from './types';
 
 // ------------------------------------------------------------------ skill classification
 
@@ -13,9 +15,10 @@ export function isMagic(skill: SkillDef): boolean {
 
 /**
  * Tags of any-weapon skills (trainer techniques, spirit arts, monster echoes) that scale off the
- * better of ATK/MATK, so a staff user is never crippled by a technique learned outside the tree.
+ * better of ATK/MATK, so a staff user is never crippled by a technique learned outside the tree. v4 adds `fist`
+ * (Bare Hands skills), so elemental fist classes need no second stat line; `echo` leaves in Phase 2.
  */
-export const HYBRID_TAGS: readonly string[] = ['spirit', 'technique', 'echo'];
+export const HYBRID_TAGS: readonly string[] = ['spirit', 'technique', 'echo', 'fist'];
 
 /**
  * Hybrid skills scale off whichever of ATK/MATK is higher: arcane + blade/pierce techniques, and
@@ -75,9 +78,7 @@ export function elementMultiplier(
 
 /** Size multipliers (S/M/L) per weapon, plus the `heavy` row that overrides the weapon. */
 export const SIZE_TABLE: Readonly<Record<WeaponType | 'heavy', Readonly<Record<Size, number>>>> = {
-  dagger: { S: 1.0, M: 0.85, L: 0.65 },
-  sword: { S: 0.85, M: 1.0, L: 0.9 },
-  staff: { S: 1.0, M: 1.0, L: 1.0 },
+  ...WEAPON_SIZE,
   heavy: { S: 0.7, M: 0.9, L: 1.15 },
 };
 
@@ -91,6 +92,71 @@ export function sizeMultiplier(skill: SkillDef, weapon?: WeaponType, size?: Size
   if (skill.tags.includes('heavy')) return SIZE_TABLE.heavy[size];
   if (isMagic(skill) || !weapon) return 1;
   return SIZE_TABLE[weapon][size];
+}
+
+// ------------------------------------------------------------------ statuses (SPEC-v4 §6.1)
+
+/** Tuning of the four v4 statuses. All [T]. */
+export const STATUS = {
+  /** Exposed: the target takes this much more damage (percent)… */
+  exposePct: 15,
+  /** …for this long (ms). */
+  exposeMs: 4000,
+  /** Airborne: helpless for this long (ms), then the landing hit. */
+  launchMs: 1200,
+  /** Landing hit of a launch, as a share of the hit that launched. */
+  launchLandingMult: 0.3,
+  /** Default length of a root and of a lure when the skill names none (ms). */
+  rootMs: 2000,
+  lureMs: 3000,
+  /** Wardens: root and launch become a slow of this strength (percent) instead. */
+  wardenSlowPct: 40,
+} as const;
+
+/** What a status does to how a monster may move and act. */
+export interface StatusControl {
+  /** Cannot move. */
+  rooted: boolean;
+  /** Cannot act (attack or cast). */
+  helpless: boolean;
+  /** Walks toward the source of the status instead of its own target. */
+  lured: boolean;
+}
+
+/** Movement and action control of one status: root holds, launch holds and silences, lure pulls. */
+export function statusControl(status: StatusKind): StatusControl {
+  return { rooted: status === 'root' || status === 'launch', helpless: status === 'launch' || status === 'stun', lured: status === 'lure' };
+}
+
+/**
+ * The status a target of `rank` actually takes when `status` is applied: wardens turn root and launch into a
+ * (STATUS.wardenSlowPct) slow and ignore lure (null). Everything else is taken as it is.
+ */
+export function statusFor(status: StatusKind, rank: MonsterRank | undefined): StatusKind | null {
+  if (rank !== 'warden') return status;
+  if (status === 'root' || status === 'launch') return 'slow';
+  return status === 'lure' ? null : status;
+}
+
+/** Default duration (ms) of a v4 status; undefined for the v2 statuses (the game keeps its own table for those). */
+export function statusMs(status: StatusKind): number | undefined {
+  switch (status) {
+    case 'root':
+      return STATUS.rootMs;
+    case 'launch':
+      return STATUS.launchMs;
+    case 'expose':
+      return STATUS.exposeMs;
+    case 'lure':
+      return STATUS.lureMs;
+    default:
+      return undefined;
+  }
+}
+
+/** Percent more damage a target takes for the statuses on it: STATUS.exposePct while exposed. */
+export function exposedPct(statuses: readonly StatusKind[] | undefined): number {
+  return statuses?.includes('expose') ? STATUS.exposePct : 0;
 }
 
 // ------------------------------------------------------------------ status combos
@@ -176,6 +242,8 @@ export interface DamageMods {
   statusPct?: number;
   /** Distance/target falloff multiplier (default 1). */
   falloff?: number;
+  /** The hit always crits (CastBoost.crit). The crit roll is still drawn, so roll streams stay aligned. */
+  forceCrit?: boolean;
   /** Roll source in [0, 1): first draw = crit, second = variance. See {@link computeDamage} for the fallback. */
   rng?: () => number;
 }
@@ -211,10 +279,12 @@ function fallbackRng(): () => number {
 
 /**
  * Damage of one hit:
- * `base * power * rankPower * (1+tagPct/100) * (1+familyPct/100) * (1+statusPct/100) * size * element *
- * combo * falloff * variance(0.9..1.1) * (crit ? 1.5 : 1) - def * (crit ? 0.5 : 1)`, rounded, min 1.
+ * `base * power * rankPower * (1+tagPct/100) * (1+familyPct/100) * (1+statusPct/100) * (1+bodyPct/100) *
+ * (1+exposePct/100) * size * element * combo * falloff * variance(0.9..1.1) * (crit ? 1.5 : 1) -
+ * def * (crit ? 0.5 : 1)`, rounded, min 1. `bodyPct` is WEAPON.bodyBonus for `body` moves bare-handed, `exposePct`
+ * STATUS.exposePct while the defender is exposed; both are read here, so callers never add them.
  * `base` is ATK, MATK for arcane skills, or max(ATK, MATK) for hybrids (isHybrid). Crit chance is
- * `attacker.crit + skill.critBonus` percent.
+ * `attacker.crit + skill.critBonus` percent, or certain with `mods.forceCrit` (a mechanic's finisher).
  *
  * When the element multiplier is 0 the hit is resisted: amount 0, no crit, no combo (statuses are kept)
  * and no rolls are drawn.
@@ -235,7 +305,8 @@ export function computeDamage(
   if (element === 0) return { amount: 0, crit: false, multiplier: 0, resisted: true, combo: null };
 
   const rng = mods.rng ?? fallbackRng();
-  const crit = rng() * 100 < attacker.crit + (skill.critBonus ?? 0);
+  const critRoll = rng() * 100 < attacker.crit + (skill.critBonus ?? 0);
+  const crit = critRoll || mods.forceCrit === true;
   const variance = VARIANCE_MIN + rng() * VARIANCE_SPAN;
   const combo = comboFor(skill.element, defender.statuses ?? []);
   const base = isHybrid(skill) ? Math.max(attacker.atk, attacker.matk) : isMagic(skill) ? attacker.matk : attacker.atk;
@@ -247,6 +318,8 @@ export function computeDamage(
     (1 + (mods.tagPct ?? 0) / 100) *
     (1 + (mods.familyPct ?? 0) / 100) *
     (1 + (mods.statusPct ?? 0) / 100) *
+    (1 + bodyBonusPct(skill, attacker.weapon) / 100) *
+    (1 + exposedPct(defender.statuses) / 100) *
     sizeMultiplier(skill, attacker.weapon, defender.size) *
     element *
     (combo?.mult ?? 1) *

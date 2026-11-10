@@ -25,7 +25,7 @@ const MORE = 'starchart.more';
 /** The star whose card has "Details" open (kept across re-renders: equips, the change feed, Back from a picker). */
 const DETAILS = 'starchart.details';
 type Tab = 'chart' | 'skills' | 'passives' | 'essences';
-const TREE: Record<WeaponType, ConstellationId> = { sword: 'edge', dagger: 'fang', staff: 'lantern' };
+const TREE: Record<WeaponType, ConstellationId> = { sword: 'edge', dagger: 'fang', staff: 'lantern', fists: 'craft' };
 
 /** Where the sky should look once it has a size (set by the panel arg on open). */
 let focus: { kind: 'star'; id: string } | { kind: 'const'; c: ConstellationId } | null = null;

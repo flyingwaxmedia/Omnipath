@@ -268,7 +268,7 @@ export function wireDiscoveryCards(ui: DiscoveryHost, ctrl: GameController): () 
       let card: DiscoveryCard | null = null;
       if (rank >= max) {
         card = { kind: 'class', icon: cls.icon, image, kicker: 'CLASS MASTERED', title: cls.name, body: `${esc(cls.name)} reached its top ${classLevel(rank)}.` };
-      } else if (keepsake && rank === CLASS.imprintAt[cls.tier]) {
+      } else if (keepsake && rank === CLASS.imprintAt) {
         card = {
           kind: 'class',
           icon: keepsake.icon,

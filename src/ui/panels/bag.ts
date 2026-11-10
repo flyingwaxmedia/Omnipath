@@ -3,8 +3,7 @@
 // 'sell' from a Waykeeper: materials get a quantity picker and ONE Sell button each (the controller re-checks that a
 // Waykeeper is near). Words: item names with pixel icons, one short line each, no internals.
 import type { ItemDef, WeaponType } from '../../core/types';
-import { WEAPON_TYPES } from '../../core/types';
-import { WEAPONS } from '../../data/weapons';
+import { SOLD_WEAPONS, WEAPONS } from '../../data/weapons';
 import { $$, esc } from '../util';
 import { oneLine } from '../words';
 import { type PanelHost, detailsHtml, iconHtml, refIconHtml, wireToggles } from './common';
@@ -58,7 +57,7 @@ export function renderBag(host: PanelHost, arg?: string): void {
     .map((x) => row(x))
     .join('');
   const ess = ctrl.unlocks().essences ? book.ingredients().essences : [];
-  const unowned = WEAPON_TYPES.filter((w) => !p.ownedWeapons.includes(w));
+  const unowned = SOLD_WEAPONS.filter((w) => !p.ownedWeapons.includes(w));
   const weapons = `<div class="weapons">${p.ownedWeapons
     .map((w) => {
       const d = WEAPONS[w];

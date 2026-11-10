@@ -16,8 +16,8 @@ describe('class outfits', () => {
   it('gives a cape from Tier II and an aura only at Tier III', () => {
     for (const c of CLASSES) {
       const o = CLASS_OUTFITS[c.id];
-      expect(!!o.cape, `${c.id} cape`).toBe(c.tier >= 2);
-      expect(!!o.aura, `${c.id} aura`).toBe(c.tier >= 3);
+      expect(!!o.cape, `${c.id} cape`).toBe((c.tier ?? 1) >= 2);
+      expect(!!o.aura, `${c.id} aura`).toBe((c.tier ?? 1) >= 3);
     }
   });
 
@@ -69,7 +69,8 @@ describe('class outfits', () => {
   });
 
   it('keeps the v2 player animations in CHAR_ANIMS (same shape as a class look)', () => {
-    for (const w of WEAPON_TYPES) for (const d of lookAnimDefs(`player_${w}`)) expect(CHAR_ANIMS).toContainEqual(d);
+    // Bare Hands borrows the dagger frames until the art lane draws its look (SPEC-v4 §11.8).
+    for (const w of WEAPON_TYPES.filter((x) => x !== 'fists')) for (const d of lookAnimDefs(`player_${w}`)) expect(CHAR_ANIMS).toContainEqual(d);
   });
 
   it('turns Tier III aura colours into numbers', () => {

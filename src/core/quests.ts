@@ -351,7 +351,9 @@ export function questMissing(reg: Registry, state: SkillBookState, ctx: QuestCon
   for (const prev of quest.after ?? []) {
     if ((own(done, prev) ?? 0) < 1) out.push(`Complete ${reg.quest(prev)?.name ?? prettify(prev)}`);
   }
-  for (const req of quest.requires ?? []) {
+  // A Trial is offered once its class's discovery requirements hold (SPEC-v4 §3.4).
+  const trialReqs = quest.trialOf !== undefined ? (reg.classDef(quest.trialOf)?.discover?.requires ?? []) : [];
+  for (const req of [...(quest.requires ?? []), ...trialReqs]) {
     if (!meetsRequirement(req, ctx)) out.push(describeRequirement(reg, req, ctx));
   }
   return out;

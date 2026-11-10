@@ -1,0 +1,1984 @@
+{
+ "version": 2,
+ "skills": {
+  "slash": {
+   "id": "slash",
+   "rank": 1,
+   "xp": 0,
+   "charges": 0,
+   "uses": 0,
+   "source": "morph:test",
+   "learnedAt": 9000,
+   "overBars": 0,
+   "study": {}
+  },
+  "whirlwind": {
+   "id": "whirlwind",
+   "rank": 8,
+   "xp": 15,
+   "charges": 0,
+   "uses": 0,
+   "source": "lesson:test",
+   "learnedAt": 10000,
+   "overBars": 0,
+   "study": {}
+  },
+  "sword_throw": {
+   "id": "sword_throw",
+   "rank": 5,
+   "xp": 39,
+   "charges": 0,
+   "uses": 0,
+   "source": "lesson:test",
+   "learnedAt": 11000,
+   "overBars": 0,
+   "study": {}
+  },
+  "heavy_cleave": {
+   "id": "heavy_cleave",
+   "rank": 2,
+   "xp": 20,
+   "charges": 0,
+   "uses": 0,
+   "source": "morph:test",
+   "learnedAt": 12000,
+   "overBars": 0,
+   "study": {}
+  },
+  "blade_aura": {
+   "id": "blade_aura",
+   "rank": 4,
+   "xp": 19,
+   "charges": 0,
+   "uses": 0,
+   "source": "class:blademaster",
+   "learnedAt": 13000,
+   "overBars": 0,
+   "study": {}
+  },
+  "spinning_assault": {
+   "id": "spinning_assault",
+   "rank": 5,
+   "xp": 4,
+   "charges": 0,
+   "uses": 0,
+   "source": "lesson:test",
+   "learnedAt": 14000,
+   "overBars": 0,
+   "study": {}
+  },
+  "crescent_sweep": {
+   "id": "crescent_sweep",
+   "rank": 4,
+   "xp": 19,
+   "charges": 0,
+   "uses": 0,
+   "source": "lesson:test",
+   "learnedAt": 15000,
+   "overBars": 0,
+   "study": {}
+  },
+  "eye_of_the_storm": {
+   "id": "eye_of_the_storm",
+   "rank": 1,
+   "xp": 0,
+   "charges": 0,
+   "uses": 0,
+   "source": "class:tempest_dancer",
+   "learnedAt": 16000,
+   "overBars": 0,
+   "study": {}
+  },
+  "boomerang_blade": {
+   "id": "boomerang_blade",
+   "rank": 3,
+   "xp": 22,
+   "charges": 0,
+   "uses": 0,
+   "source": "morph:test",
+   "learnedAt": 17000,
+   "overBars": 0,
+   "study": {}
+  },
+  "blade_volley": {
+   "id": "blade_volley",
+   "rank": 2,
+   "xp": 15,
+   "charges": 0,
+   "uses": 0,
+   "source": "lesson:test",
+   "learnedAt": 18000,
+   "overBars": 0,
+   "study": {}
+  },
+  "guillotine": {
+   "id": "guillotine",
+   "rank": 1,
+   "xp": 0,
+   "charges": 0,
+   "uses": 0,
+   "source": "lesson:test",
+   "learnedAt": 19000,
+   "overBars": 0,
+   "study": {}
+  },
+  "sundering_blow": {
+   "id": "sundering_blow",
+   "rank": 8,
+   "xp": 36,
+   "charges": 1,
+   "uses": 0,
+   "source": "morph:test",
+   "learnedAt": 20000,
+   "overBars": 0,
+   "study": {}
+  },
+  "tempest_waltz": {
+   "id": "tempest_waltz",
+   "rank": 1,
+   "xp": 0,
+   "charges": 0,
+   "uses": 0,
+   "source": "lesson:test",
+   "learnedAt": 21000,
+   "overBars": 0,
+   "study": {}
+  },
+  "hundredfold_edge": {
+   "id": "hundredfold_edge",
+   "rank": 3,
+   "xp": 9,
+   "charges": 0,
+   "uses": 0,
+   "source": "lesson:test",
+   "learnedAt": 22000,
+   "overBars": 0,
+   "study": {}
+  },
+  "worldbreaker": {
+   "id": "worldbreaker",
+   "rank": 5,
+   "xp": 9,
+   "charges": 1,
+   "uses": 0,
+   "source": "morph:test",
+   "learnedAt": 23000,
+   "overBars": 0,
+   "study": {}
+  },
+  "flame_spin": {
+   "id": "flame_spin",
+   "rank": 4,
+   "xp": 19,
+   "charges": 0,
+   "uses": 0,
+   "source": "lesson:test",
+   "learnedAt": 24000,
+   "overBars": 0,
+   "study": {}
+  },
+  "tornado": {
+   "id": "tornado",
+   "rank": 3,
+   "xp": 22,
+   "charges": 0,
+   "uses": 0,
+   "source": "lesson:test",
+   "learnedAt": 25000,
+   "overBars": 0,
+   "study": {}
+  },
+  "cyclone_blades": {
+   "id": "cyclone_blades",
+   "rank": 2,
+   "xp": 15,
+   "charges": 0,
+   "uses": 0,
+   "source": "morph:test",
+   "learnedAt": 26000,
+   "overBars": 0,
+   "study": {}
+  },
+  "earthsplitter": {
+   "id": "earthsplitter",
+   "rank": 1,
+   "xp": 0,
+   "charges": 0,
+   "uses": 0,
+   "source": "lesson:test",
+   "learnedAt": 27000,
+   "overBars": 0,
+   "study": {}
+  },
+  "prism_burst": {
+   "id": "prism_burst",
+   "rank": 4,
+   "xp": 37,
+   "charges": 0,
+   "uses": 0,
+   "source": "class:elementalist",
+   "learnedAt": 28000,
+   "overBars": 0,
+   "study": {}
+  },
+  "thunder_javelin": {
+   "id": "thunder_javelin",
+   "rank": 8,
+   "xp": 36,
+   "charges": 1,
+   "uses": 0,
+   "source": "lesson:test",
+   "learnedAt": 29000,
+   "overBars": 0,
+   "study": {}
+  },
+  "firestorm": {
+   "id": "firestorm",
+   "rank": 2,
+   "xp": 9,
+   "charges": 0,
+   "uses": 0,
+   "source": "morph:test",
+   "learnedAt": 30000,
+   "overBars": 0,
+   "study": {}
+  },
+  "searing_edge": {
+   "id": "searing_edge",
+   "rank": 3,
+   "xp": 22,
+   "charges": 0,
+   "uses": 0,
+   "source": "class:pyroblade",
+   "learnedAt": 31000,
+   "overBars": 0,
+   "study": {}
+  },
+  "windblade_sig": {
+   "id": "windblade_sig",
+   "rank": 3,
+   "xp": 22,
+   "charges": 0,
+   "uses": 0,
+   "source": "class:windblade",
+   "learnedAt": 32000,
+   "overBars": 0,
+   "study": {}
+  },
+  "molten_sunder": {
+   "id": "molten_sunder",
+   "rank": 4,
+   "xp": 37,
+   "charges": 0,
+   "uses": 0,
+   "source": "lesson:test",
+   "learnedAt": 33000,
+   "overBars": 0,
+   "study": {}
+  },
+  "tidal_crescent": {
+   "id": "tidal_crescent",
+   "rank": 1,
+   "xp": 0,
+   "charges": 0,
+   "uses": 0,
+   "source": "lesson:test",
+   "learnedAt": 34000,
+   "overBars": 0,
+   "study": {}
+  },
+  "rockslide_charge": {
+   "id": "rockslide_charge",
+   "rank": 4,
+   "xp": 19,
+   "charges": 0,
+   "uses": 0,
+   "source": "morph:test",
+   "learnedAt": 35000,
+   "overBars": 0,
+   "study": {}
+  },
+  "rotspore_whirl": {
+   "id": "rotspore_whirl",
+   "rank": 3,
+   "xp": 22,
+   "charges": 0,
+   "uses": 0,
+   "source": "lesson:test",
+   "learnedAt": 36000,
+   "overBars": 0,
+   "study": {}
+  },
+  "cleaver_toss": {
+   "id": "cleaver_toss",
+   "rank": 2,
+   "xp": 15,
+   "charges": 0,
+   "uses": 0,
+   "source": "lesson:test",
+   "learnedAt": 37000,
+   "overBars": 0,
+   "study": {}
+  },
+  "spirit_crescent": {
+   "id": "spirit_crescent",
+   "rank": 4,
+   "xp": 37,
+   "charges": 0,
+   "uses": 0,
+   "source": "morph:test",
+   "learnedAt": 38000,
+   "overBars": 0,
+   "study": {}
+  },
+  "stab": {
+   "id": "stab",
+   "rank": 6,
+   "xp": 33,
+   "charges": 0,
+   "uses": 0,
+   "source": "lesson:test",
+   "learnedAt": 39000,
+   "overBars": 0,
+   "study": {}
+  },
+  "backstab": {
+   "id": "backstab",
+   "rank": 4,
+   "xp": 2,
+   "charges": 0,
+   "uses": 0,
+   "source": "lesson:test",
+   "learnedAt": 40000,
+   "overBars": 0,
+   "study": {}
+  },
+  "fan_of_knives": {
+   "id": "fan_of_knives",
+   "rank": 10,
+   "xp": 12,
+   "charges": 1,
+   "uses": 0,
+   "source": "morph:test",
+   "learnedAt": 41000,
+   "overBars": 0,
+   "study": {}
+  },
+  "shadowstep": {
+   "id": "shadowstep",
+   "rank": 7,
+   "xp": 30,
+   "charges": 0,
+   "uses": 0,
+   "source": "lesson:test",
+   "learnedAt": 42000,
+   "overBars": 0,
+   "study": {}
+  },
+  "assassinate": {
+   "id": "assassinate",
+   "rank": 4,
+   "xp": 19,
+   "charges": 0,
+   "uses": 0,
+   "source": "lesson:test",
+   "learnedAt": 43000,
+   "overBars": 0,
+   "study": {}
+  },
+  "shade_cloak": {
+   "id": "shade_cloak",
+   "rank": 5,
+   "xp": 4,
+   "charges": 1,
+   "uses": 0,
+   "source": "class:shadowstalker",
+   "learnedAt": 44000,
+   "overBars": 0,
+   "study": {}
+  },
+  "venom_edge": {
+   "id": "venom_edge",
+   "rank": 3,
+   "xp": 22,
+   "charges": 0,
+   "uses": 0,
+   "source": "morph:test",
+   "learnedAt": 45000,
+   "overBars": 0,
+   "study": {}
+  },
+  "blade_storm": {
+   "id": "blade_storm",
+   "rank": 2,
+   "xp": 15,
+   "charges": 0,
+   "uses": 0,
+   "source": "lesson:test",
+   "learnedAt": 46000,
+   "overBars": 0,
+   "study": {}
+  },
+  "ricochet_knives": {
+   "id": "ricochet_knives",
+   "rank": 1,
+   "xp": 0,
+   "charges": 0,
+   "uses": 0,
+   "source": "lesson:test",
+   "learnedAt": 47000,
+   "overBars": 0,
+   "study": {}
+  },
+  "phantom_rush": {
+   "id": "phantom_rush",
+   "rank": 8,
+   "xp": 36,
+   "charges": 1,
+   "uses": 0,
+   "source": "morph:test",
+   "learnedAt": 48000,
+   "overBars": 0,
+   "study": {}
+  },
+  "smoke_veil": {
+   "id": "smoke_veil",
+   "rank": 7,
+   "xp": 38,
+   "charges": 0,
+   "uses": 0,
+   "source": "lesson:test",
+   "learnedAt": 49000,
+   "overBars": 0,
+   "study": {}
+  },
+  "coup_de_grace": {
+   "id": "coup_de_grace",
+   "rank": 1,
+   "xp": 0,
+   "charges": 0,
+   "uses": 0,
+   "source": "lesson:test",
+   "learnedAt": 50000,
+   "overBars": 0,
+   "study": {}
+  },
+  "thousand_cuts": {
+   "id": "thousand_cuts",
+   "rank": 3,
+   "xp": 9,
+   "charges": 0,
+   "uses": 0,
+   "source": "morph:test",
+   "learnedAt": 51000,
+   "overBars": 0,
+   "study": {}
+  },
+  "nightfall_waltz": {
+   "id": "nightfall_waltz",
+   "rank": 5,
+   "xp": 9,
+   "charges": 1,
+   "uses": 0,
+   "source": "lesson:test",
+   "learnedAt": 52000,
+   "overBars": 0,
+   "study": {}
+  },
+  "umbral_strike": {
+   "id": "umbral_strike",
+   "rank": 3,
+   "xp": 22,
+   "charges": 0,
+   "uses": 0,
+   "source": "lesson:test",
+   "learnedAt": 53000,
+   "overBars": 0,
+   "study": {}
+  },
+  "ember_fan": {
+   "id": "ember_fan",
+   "rank": 2,
+   "xp": 15,
+   "charges": 0,
+   "uses": 0,
+   "source": "morph:test",
+   "learnedAt": 54000,
+   "overBars": 0,
+   "study": {}
+  },
+  "static_needles": {
+   "id": "static_needles",
+   "rank": 1,
+   "xp": 0,
+   "charges": 0,
+   "uses": 0,
+   "source": "lesson:test",
+   "learnedAt": 55000,
+   "overBars": 0,
+   "study": {}
+  },
+  "ambush": {
+   "id": "ambush",
+   "rank": 8,
+   "xp": 36,
+   "charges": 1,
+   "uses": 0,
+   "source": "lesson:test",
+   "learnedAt": 56000,
+   "overBars": 0,
+   "study": {}
+  },
+  "gyre_knives": {
+   "id": "gyre_knives",
+   "rank": 5,
+   "xp": 9,
+   "charges": 1,
+   "uses": 0,
+   "source": "morph:test",
+   "learnedAt": 57000,
+   "overBars": 0,
+   "study": {}
+  },
+  "gloom_shroud": {
+   "id": "gloom_shroud",
+   "rank": 2,
+   "xp": 9,
+   "charges": 0,
+   "uses": 0,
+   "source": "lesson:test",
+   "learnedAt": 58000,
+   "overBars": 0,
+   "study": {}
+  },
+  "blight_whirl": {
+   "id": "blight_whirl",
+   "rank": 4,
+   "xp": 37,
+   "charges": 0,
+   "uses": 0,
+   "source": "lesson:test",
+   "learnedAt": 59000,
+   "overBars": 0,
+   "study": {}
+  },
+  "coffin_nail": {
+   "id": "coffin_nail",
+   "rank": 4,
+   "xp": 19,
+   "charges": 0,
+   "uses": 0,
+   "source": "morph:test",
+   "learnedAt": 60000,
+   "overBars": 0,
+   "study": {}
+  },
+  "moonveil": {
+   "id": "moonveil",
+   "rank": 3,
+   "xp": 9,
+   "charges": 0,
+   "uses": 0,
+   "source": "lesson:test",
+   "learnedAt": 61000,
+   "overBars": 0,
+   "study": {}
+  },
+  "pressure_point": {
+   "id": "pressure_point",
+   "rank": 2,
+   "xp": 15,
+   "charges": 0,
+   "uses": 0,
+   "source": "lesson:test",
+   "learnedAt": 62000,
+   "overBars": 0,
+   "study": {}
+  },
+  "bolt": {
+   "id": "bolt",
+   "rank": 7,
+   "xp": 21,
+   "charges": 0,
+   "uses": 0,
+   "source": "morph:test",
+   "learnedAt": 63000,
+   "overBars": 0,
+   "study": {}
+  },
+  "runic_blade": {
+   "id": "runic_blade",
+   "rank": 1,
+   "xp": 0,
+   "charges": 0,
+   "uses": 0,
+   "source": "class:spellblade",
+   "learnedAt": 64000,
+   "overBars": 0,
+   "study": {}
+  },
+  "arcane_orb": {
+   "id": "arcane_orb",
+   "rank": 4,
+   "xp": 2,
+   "charges": 0,
+   "uses": 0,
+   "source": "lesson:test",
+   "learnedAt": 65000,
+   "overBars": 0,
+   "study": {}
+  },
+  "mana_surge": {
+   "id": "mana_surge",
+   "rank": 2,
+   "xp": 15,
+   "charges": 0,
+   "uses": 0,
+   "source": "class:arcanist",
+   "learnedAt": 66000,
+   "overBars": 0,
+   "study": {}
+  },
+  "arcane_nova": {
+   "id": "arcane_nova",
+   "rank": 1,
+   "xp": 0,
+   "charges": 0,
+   "uses": 0,
+   "source": "lesson:test",
+   "learnedAt": 67000,
+   "overBars": 0,
+   "study": {}
+  },
+  "focus": {
+   "id": "focus",
+   "rank": 8,
+   "xp": 15,
+   "charges": 0,
+   "uses": 0,
+   "source": "morph:test",
+   "learnedAt": 68000,
+   "overBars": 0,
+   "study": {}
+  },
+  "singularity": {
+   "id": "singularity",
+   "rank": 5,
+   "xp": 4,
+   "charges": 0,
+   "uses": 0,
+   "source": "lesson:test",
+   "learnedAt": 69000,
+   "overBars": 0,
+   "study": {}
+  },
+  "prism_orb": {
+   "id": "prism_orb",
+   "rank": 4,
+   "xp": 19,
+   "charges": 0,
+   "uses": 0,
+   "source": "lesson:test",
+   "learnedAt": 70000,
+   "overBars": 0,
+   "study": {}
+  },
+  "arcane_barrage": {
+   "id": "arcane_barrage",
+   "rank": 3,
+   "xp": 22,
+   "charges": 0,
+   "uses": 0,
+   "source": "morph:test",
+   "learnedAt": 71000,
+   "overBars": 0,
+   "study": {}
+  },
+  "resonant_pulse": {
+   "id": "resonant_pulse",
+   "rank": 2,
+   "xp": 15,
+   "charges": 0,
+   "uses": 0,
+   "source": "lesson:test",
+   "learnedAt": 72000,
+   "overBars": 0,
+   "study": {}
+  },
+  "arcane_ward": {
+   "id": "arcane_ward",
+   "rank": 1,
+   "xp": 0,
+   "charges": 0,
+   "uses": 0,
+   "source": "lesson:test",
+   "learnedAt": 73000,
+   "overBars": 0,
+   "study": {}
+  },
+  "quicken": {
+   "id": "quicken",
+   "rank": 8,
+   "xp": 36,
+   "charges": 1,
+   "uses": 0,
+   "source": "morph:test",
+   "learnedAt": 74000,
+   "overBars": 0,
+   "study": {}
+  },
+  "starfall_lattice": {
+   "id": "starfall_lattice",
+   "rank": 2,
+   "xp": 9,
+   "charges": 0,
+   "uses": 0,
+   "source": "lesson:test",
+   "learnedAt": 75000,
+   "overBars": 0,
+   "study": {}
+  },
+  "arcane_deluge": {
+   "id": "arcane_deluge",
+   "rank": 4,
+   "xp": 37,
+   "charges": 0,
+   "uses": 0,
+   "source": "lesson:test",
+   "learnedAt": 76000,
+   "overBars": 0,
+   "study": {}
+  },
+  "astral_form": {
+   "id": "astral_form",
+   "rank": 1,
+   "xp": 0,
+   "charges": 0,
+   "uses": 0,
+   "source": "morph:test",
+   "learnedAt": 77000,
+   "overBars": 0,
+   "study": {}
+  },
+  "firebolt": {
+   "id": "firebolt",
+   "rank": 8,
+   "xp": 15,
+   "charges": 0,
+   "uses": 0,
+   "source": "lesson:test",
+   "learnedAt": 78000,
+   "overBars": 0,
+   "study": {}
+  },
+  "meteor": {
+   "id": "meteor",
+   "rank": 3,
+   "xp": 22,
+   "charges": 0,
+   "uses": 0,
+   "source": "lesson:test",
+   "learnedAt": 79000,
+   "overBars": 0,
+   "study": {}
+  },
+  "aqua_lance": {
+   "id": "aqua_lance",
+   "rank": 2,
+   "xp": 20,
+   "charges": 0,
+   "uses": 0,
+   "source": "morph:test",
+   "learnedAt": 80000,
+   "overBars": 0,
+   "study": {}
+  },
+  "lightning_bolt": {
+   "id": "lightning_bolt",
+   "rank": 9,
+   "xp": 12,
+   "charges": 0,
+   "uses": 0,
+   "source": "lesson:test",
+   "learnedAt": 81000,
+   "overBars": 0,
+   "study": {}
+  },
+  "wind_cutter": {
+   "id": "wind_cutter",
+   "rank": 6,
+   "xp": 23,
+   "charges": 0,
+   "uses": 0,
+   "source": "lesson:test",
+   "learnedAt": 82000,
+   "overBars": 0,
+   "study": {}
+  },
+  "holy_light": {
+   "id": "holy_light",
+   "rank": 4,
+   "xp": 2,
+   "charges": 0,
+   "uses": 0,
+   "source": "morph:test",
+   "learnedAt": 83000,
+   "overBars": 0,
+   "study": {}
+  },
+  "quake": {
+   "id": "quake",
+   "rank": 6,
+   "xp": 12,
+   "charges": 0,
+   "uses": 0,
+   "source": "lesson:test",
+   "learnedAt": 84000,
+   "overBars": 0,
+   "study": {}
+  },
+  "inferno_ring": {
+   "id": "inferno_ring",
+   "rank": 5,
+   "xp": 4,
+   "charges": 0,
+   "uses": 0,
+   "source": "lesson:test",
+   "learnedAt": 85000,
+   "overBars": 0,
+   "study": {}
+  },
+  "glacial_orb": {
+   "id": "glacial_orb",
+   "rank": 4,
+   "xp": 19,
+   "charges": 0,
+   "uses": 0,
+   "source": "morph:test",
+   "learnedAt": 86000,
+   "overBars": 0,
+   "study": {}
+  },
+  "thunderstorm": {
+   "id": "thunderstorm",
+   "rank": 1,
+   "xp": 0,
+   "charges": 0,
+   "uses": 0,
+   "source": "lesson:test",
+   "learnedAt": 87000,
+   "overBars": 0,
+   "study": {}
+  },
+  "plasma_lance": {
+   "id": "plasma_lance",
+   "rank": 3,
+   "xp": 9,
+   "charges": 0,
+   "uses": 0,
+   "source": "lesson:test",
+   "learnedAt": 88000,
+   "overBars": 0,
+   "study": {}
+  },
+  "tidal_ripple": {
+   "id": "tidal_ripple",
+   "rank": 5,
+   "xp": 9,
+   "charges": 1,
+   "uses": 0,
+   "source": "morph:test",
+   "learnedAt": 89000,
+   "overBars": 0,
+   "study": {}
+  },
+  "dawn_prism": {
+   "id": "dawn_prism",
+   "rank": 2,
+   "xp": 9,
+   "charges": 0,
+   "uses": 0,
+   "source": "lesson:test",
+   "learnedAt": 90000,
+   "overBars": 0,
+   "study": {}
+  },
+  "featherstorm": {
+   "id": "featherstorm",
+   "rank": 4,
+   "xp": 37,
+   "charges": 0,
+   "uses": 0,
+   "source": "lesson:test",
+   "learnedAt": 91000,
+   "overBars": 0,
+   "study": {}
+  },
+  "geode_maw": {
+   "id": "geode_maw",
+   "rank": 1,
+   "xp": 0,
+   "charges": 0,
+   "uses": 0,
+   "source": "morph:test",
+   "learnedAt": 92000,
+   "overBars": 0,
+   "study": {}
+  },
+  "thunder_peal": {
+   "id": "thunder_peal",
+   "rank": 3,
+   "xp": 9,
+   "charges": 0,
+   "uses": 0,
+   "source": "lesson:test",
+   "learnedAt": 93000,
+   "overBars": 0,
+   "study": {}
+  },
+  "tangle_orb": {
+   "id": "tangle_orb",
+   "rank": 4,
+   "xp": 19,
+   "charges": 0,
+   "uses": 0,
+   "source": "lesson:test",
+   "learnedAt": 94000,
+   "overBars": 0,
+   "study": {}
+  },
+  "cinder_blink": {
+   "id": "cinder_blink",
+   "rank": 2,
+   "xp": 9,
+   "charges": 0,
+   "uses": 0,
+   "source": "morph:test",
+   "learnedAt": 95000,
+   "overBars": 0,
+   "study": {}
+  },
+  "halo_ward": {
+   "id": "halo_ward",
+   "rank": 4,
+   "xp": 37,
+   "charges": 0,
+   "uses": 0,
+   "source": "lesson:test",
+   "learnedAt": 96000,
+   "overBars": 0,
+   "study": {}
+  },
+  "arcane_cyclone": {
+   "id": "arcane_cyclone",
+   "rank": 1,
+   "xp": 0,
+   "charges": 0,
+   "uses": 0,
+   "source": "lesson:test",
+   "learnedAt": 97000,
+   "overBars": 0,
+   "study": {}
+  },
+  "spell_sabre": {
+   "id": "spell_sabre",
+   "rank": 8,
+   "xp": 36,
+   "charges": 1,
+   "uses": 0,
+   "source": "morph:test",
+   "learnedAt": 98000,
+   "overBars": 0,
+   "study": {}
+  },
+  "sword_saint_sig": {
+   "id": "sword_saint_sig",
+   "rank": 4,
+   "xp": 19,
+   "charges": 0,
+   "uses": 0,
+   "source": "class:sword_saint",
+   "learnedAt": 99000,
+   "overBars": 0,
+   "study": {}
+  },
+  "hex_blade": {
+   "id": "hex_blade",
+   "rank": 7,
+   "xp": 38,
+   "charges": 0,
+   "uses": 0,
+   "source": "lesson:test",
+   "learnedAt": 100000,
+   "overBars": 0,
+   "study": {}
+  },
+  "twin_fang": {
+   "id": "twin_fang",
+   "rank": 6,
+   "xp": 12,
+   "charges": 0,
+   "uses": 0,
+   "source": "lesson:test",
+   "learnedAt": 101000,
+   "overBars": 0,
+   "study": {}
+  },
+  "millstone_whirl": {
+   "id": "millstone_whirl",
+   "rank": 5,
+   "xp": 4,
+   "charges": 0,
+   "uses": 0,
+   "source": "morph:test",
+   "learnedAt": 102000,
+   "overBars": 0,
+   "study": {}
+  },
+  "fletched_fan": {
+   "id": "fletched_fan",
+   "rank": 4,
+   "xp": 19,
+   "charges": 0,
+   "uses": 0,
+   "source": "lesson:test",
+   "learnedAt": 103000,
+   "overBars": 0,
+   "study": {}
+  },
+  "ashen_pounce": {
+   "id": "ashen_pounce",
+   "rank": 3,
+   "xp": 22,
+   "charges": 0,
+   "uses": 0,
+   "source": "lesson:test",
+   "learnedAt": 104000,
+   "overBars": 0,
+   "study": {}
+  },
+  "undertow_orb": {
+   "id": "undertow_orb",
+   "rank": 2,
+   "xp": 15,
+   "charges": 0,
+   "uses": 0,
+   "source": "morph:test",
+   "learnedAt": 105000,
+   "overBars": 0,
+   "study": {}
+  },
+  "thunder_tether": {
+   "id": "thunder_tether",
+   "rank": 1,
+   "xp": 0,
+   "charges": 0,
+   "uses": 0,
+   "source": "lesson:test",
+   "learnedAt": 106000,
+   "overBars": 0,
+   "study": {}
+  },
+  "grave_hook": {
+   "id": "grave_hook",
+   "rank": 8,
+   "xp": 36,
+   "charges": 1,
+   "uses": 0,
+   "source": "lesson:test",
+   "learnedAt": 107000,
+   "overBars": 0,
+   "study": {}
+  },
+  "static_palm": {
+   "id": "static_palm",
+   "rank": 7,
+   "xp": 38,
+   "charges": 0,
+   "uses": 0,
+   "source": "morph:test",
+   "learnedAt": 108000,
+   "overBars": 0,
+   "study": {}
+  },
+  "crystal_mallet": {
+   "id": "crystal_mallet",
+   "rank": 6,
+   "xp": 12,
+   "charges": 0,
+   "uses": 0,
+   "source": "lesson:test",
+   "learnedAt": 109000,
+   "overBars": 0,
+   "study": {}
+  },
+  "quakestride": {
+   "id": "quakestride",
+   "rank": 5,
+   "xp": 9,
+   "charges": 1,
+   "uses": 0,
+   "source": "lesson:test",
+   "learnedAt": 110000,
+   "overBars": 0,
+   "study": {}
+  },
+  "felling_cut": {
+   "id": "felling_cut",
+   "rank": 4,
+   "xp": 19,
+   "charges": 0,
+   "uses": 0,
+   "source": "morph:test",
+   "learnedAt": 111000,
+   "overBars": 0,
+   "study": {}
+  },
+  "soaring_heel": {
+   "id": "soaring_heel",
+   "rank": 3,
+   "xp": 22,
+   "charges": 0,
+   "uses": 0,
+   "source": "lesson:test",
+   "learnedAt": 112000,
+   "overBars": 0,
+   "study": {}
+  },
+  "rippling_palm": {
+   "id": "rippling_palm",
+   "rank": 2,
+   "xp": 15,
+   "charges": 0,
+   "uses": 0,
+   "source": "lesson:test",
+   "learnedAt": 113000,
+   "overBars": 0,
+   "study": {}
+  },
+  "crown_slam": {
+   "id": "crown_slam",
+   "rank": 1,
+   "xp": 0,
+   "charges": 0,
+   "uses": 0,
+   "source": "morph:test",
+   "learnedAt": 114000,
+   "overBars": 0,
+   "study": {}
+  },
+  "meditation": {
+   "id": "meditation",
+   "rank": 5,
+   "xp": 39,
+   "charges": 1,
+   "uses": 0,
+   "source": "lesson:test",
+   "learnedAt": 115000,
+   "overBars": 0,
+   "study": {}
+  },
+  "quickstep": {
+   "id": "quickstep",
+   "rank": 2,
+   "xp": 20,
+   "charges": 0,
+   "uses": 0,
+   "source": "lesson:test",
+   "learnedAt": 116000,
+   "overBars": 0,
+   "study": {}
+  },
+  "static_field": {
+   "id": "static_field",
+   "rank": 6,
+   "xp": 12,
+   "charges": 0,
+   "uses": 0,
+   "source": "morph:test",
+   "learnedAt": 117000,
+   "overBars": 0,
+   "study": {}
+  },
+  "sanctuary": {
+   "id": "sanctuary",
+   "rank": 1,
+   "xp": 0,
+   "charges": 0,
+   "uses": 0,
+   "source": "lesson:test",
+   "learnedAt": 118000,
+   "overBars": 0,
+   "study": {}
+  },
+  "rising_kick": {
+   "id": "rising_kick",
+   "rank": 4,
+   "xp": 2,
+   "charges": 0,
+   "uses": 0,
+   "source": "lesson:test",
+   "learnedAt": 119000,
+   "overBars": 0,
+   "study": {}
+  },
+  "shoulder_charge": {
+   "id": "shoulder_charge",
+   "rank": 5,
+   "xp": 39,
+   "charges": 1,
+   "uses": 0,
+   "source": "morph:test",
+   "learnedAt": 120000,
+   "overBars": 0,
+   "study": {}
+  },
+  "crack_armor": {
+   "id": "crack_armor",
+   "rank": 2,
+   "xp": 20,
+   "charges": 0,
+   "uses": 0,
+   "source": "lesson:test",
+   "learnedAt": 121000,
+   "overBars": 0,
+   "study": {}
+  },
+  "hammer_toss": {
+   "id": "hammer_toss",
+   "rank": 4,
+   "xp": 2,
+   "charges": 0,
+   "uses": 0,
+   "source": "lesson:test",
+   "learnedAt": 122000,
+   "overBars": 0,
+   "study": {}
+  },
+  "mending_light": {
+   "id": "mending_light",
+   "rank": 1,
+   "xp": 0,
+   "charges": 0,
+   "uses": 0,
+   "source": "morph:test",
+   "learnedAt": 123000,
+   "overBars": 0,
+   "study": {}
+  },
+  "radiant_burst": {
+   "id": "radiant_burst",
+   "rank": 4,
+   "xp": 2,
+   "charges": 0,
+   "uses": 0,
+   "source": "lesson:test",
+   "learnedAt": 124000,
+   "overBars": 0,
+   "study": {}
+  },
+  "hook_pull": {
+   "id": "hook_pull",
+   "rank": 5,
+   "xp": 39,
+   "charges": 1,
+   "uses": 0,
+   "source": "lesson:test",
+   "learnedAt": 125000,
+   "overBars": 0,
+   "study": {}
+  },
+  "net_throw": {
+   "id": "net_throw",
+   "rank": 2,
+   "xp": 20,
+   "charges": 0,
+   "uses": 0,
+   "source": "morph:test",
+   "learnedAt": 126000,
+   "overBars": 0,
+   "study": {}
+  },
+  "palm_strike": {
+   "id": "palm_strike",
+   "rank": 4,
+   "xp": 2,
+   "charges": 0,
+   "uses": 0,
+   "source": "lesson:test",
+   "learnedAt": 127000,
+   "overBars": 0,
+   "study": {}
+  },
+  "flare_dash": {
+   "id": "flare_dash",
+   "rank": 1,
+   "xp": 0,
+   "charges": 0,
+   "uses": 0,
+   "source": "lesson:test",
+   "learnedAt": 128000,
+   "overBars": 0,
+   "study": {}
+  },
+  "rally_cry": {
+   "id": "rally_cry",
+   "rank": 4,
+   "xp": 2,
+   "charges": 0,
+   "uses": 0,
+   "source": "morph:test",
+   "learnedAt": 129000,
+   "overBars": 0,
+   "study": {}
+  },
+  "jelly_slam": {
+   "id": "jelly_slam",
+   "rank": 5,
+   "xp": 39,
+   "charges": 1,
+   "uses": 0,
+   "source": "echo:test",
+   "learnedAt": 130000,
+   "overBars": 0,
+   "study": {}
+  },
+  "bubble_lance": {
+   "id": "bubble_lance",
+   "rank": 2,
+   "xp": 20,
+   "charges": 0,
+   "uses": 0,
+   "source": "echo:test",
+   "learnedAt": 131000,
+   "overBars": 0,
+   "study": {}
+  },
+  "gale_feather": {
+   "id": "gale_feather",
+   "rank": 4,
+   "xp": 2,
+   "charges": 0,
+   "uses": 0,
+   "source": "echo:test",
+   "learnedAt": 132000,
+   "overBars": 0,
+   "study": {}
+  },
+  "mimic_sig": {
+   "id": "mimic_sig",
+   "rank": 5,
+   "xp": 4,
+   "charges": 1,
+   "uses": 0,
+   "source": "class:mimic",
+   "learnedAt": 133000,
+   "overBars": 0,
+   "study": {}
+  },
+  "boulder_roll": {
+   "id": "boulder_roll",
+   "rank": 1,
+   "xp": 0,
+   "charges": 0,
+   "uses": 0,
+   "source": "echo:test",
+   "learnedAt": 134000,
+   "overBars": 0,
+   "study": {}
+  },
+  "geode_spikes": {
+   "id": "geode_spikes",
+   "rank": 4,
+   "xp": 2,
+   "charges": 0,
+   "uses": 0,
+   "source": "echo:test",
+   "learnedAt": 135000,
+   "overBars": 0,
+   "study": {}
+  },
+  "spore_burst": {
+   "id": "spore_burst",
+   "rank": 5,
+   "xp": 39,
+   "charges": 1,
+   "uses": 0,
+   "source": "echo:test",
+   "learnedAt": 136000,
+   "overBars": 0,
+   "study": {}
+  },
+  "grave_chill": {
+   "id": "grave_chill",
+   "rank": 2,
+   "xp": 20,
+   "charges": 0,
+   "uses": 0,
+   "source": "echo:test",
+   "learnedAt": 137000,
+   "overBars": 0,
+   "study": {}
+  },
+  "ember_pounce": {
+   "id": "ember_pounce",
+   "rank": 4,
+   "xp": 2,
+   "charges": 0,
+   "uses": 0,
+   "source": "echo:test",
+   "learnedAt": 138000,
+   "overBars": 0,
+   "study": {}
+  },
+  "static_charge": {
+   "id": "static_charge",
+   "rank": 1,
+   "xp": 0,
+   "charges": 0,
+   "uses": 0,
+   "source": "echo:test",
+   "learnedAt": 139000,
+   "overBars": 0,
+   "study": {}
+  },
+  "lunar_dust": {
+   "id": "lunar_dust",
+   "rank": 3,
+   "xp": 22,
+   "charges": 0,
+   "uses": 0,
+   "source": "echo:test",
+   "learnedAt": 140000,
+   "overBars": 0,
+   "study": {}
+  },
+  "tremor_stomp": {
+   "id": "tremor_stomp",
+   "rank": 5,
+   "xp": 4,
+   "charges": 1,
+   "uses": 0,
+   "source": "echo:test",
+   "learnedAt": 141000,
+   "overBars": 0,
+   "study": {}
+  },
+  "umbral_rend": {
+   "id": "umbral_rend",
+   "rank": 2,
+   "xp": 15,
+   "charges": 0,
+   "uses": 0,
+   "source": "echo:test",
+   "learnedAt": 142000,
+   "overBars": 0,
+   "study": {}
+  },
+  "thunder_stomp": {
+   "id": "thunder_stomp",
+   "rank": 4,
+   "xp": 19,
+   "charges": 0,
+   "uses": 0,
+   "source": "echo:test",
+   "learnedAt": 143000,
+   "overBars": 0,
+   "study": {}
+  },
+  "rime_breath": {
+   "id": "rime_breath",
+   "rank": 1,
+   "xp": 0,
+   "charges": 0,
+   "uses": 0,
+   "source": "echo:test",
+   "learnedAt": 144000,
+   "overBars": 0,
+   "study": {}
+  },
+  "magma_spit": {
+   "id": "magma_spit",
+   "rank": 4,
+   "xp": 2,
+   "charges": 0,
+   "uses": 0,
+   "source": "echo:test",
+   "learnedAt": 145000,
+   "overBars": 0,
+   "study": {}
+  },
+  "storm_dive": {
+   "id": "storm_dive",
+   "rank": 5,
+   "xp": 39,
+   "charges": 1,
+   "uses": 0,
+   "source": "echo:test",
+   "learnedAt": 146000,
+   "overBars": 0,
+   "study": {}
+  },
+  "dusk_lash": {
+   "id": "dusk_lash",
+   "rank": 2,
+   "xp": 20,
+   "charges": 0,
+   "uses": 0,
+   "source": "echo:test",
+   "learnedAt": 147000,
+   "overBars": 0,
+   "study": {}
+  },
+  "moonwarden_sig": {
+   "id": "moonwarden_sig",
+   "rank": 2,
+   "xp": 15,
+   "charges": 0,
+   "uses": 0,
+   "source": "morph:test",
+   "learnedAt": 148000,
+   "overBars": 0,
+   "study": {}
+  },
+  "magma_knight_sig": {
+   "id": "magma_knight_sig",
+   "rank": 1,
+   "xp": 0,
+   "charges": 0,
+   "uses": 0,
+   "source": "lesson:test",
+   "learnedAt": 149000,
+   "overBars": 0,
+   "study": {}
+  },
+  "phantom_sig": {
+   "id": "phantom_sig",
+   "rank": 3,
+   "xp": 22,
+   "charges": 0,
+   "uses": 0,
+   "source": "morph:test",
+   "learnedAt": 150000,
+   "overBars": 0,
+   "study": {}
+  },
+  "archmage_sig": {
+   "id": "archmage_sig",
+   "rank": 5,
+   "xp": 4,
+   "charges": 1,
+   "uses": 0,
+   "source": "lesson:test",
+   "learnedAt": 151000,
+   "overBars": 0,
+   "study": {}
+  },
+  "prism_sage_sig": {
+   "id": "prism_sage_sig",
+   "rank": 2,
+   "xp": 15,
+   "charges": 0,
+   "uses": 0,
+   "source": "lesson:test",
+   "learnedAt": 152000,
+   "overBars": 0,
+   "study": {}
+  },
+  "vortex_dancer_sig": {
+   "id": "vortex_dancer_sig",
+   "rank": 4,
+   "xp": 19,
+   "charges": 0,
+   "uses": 0,
+   "source": "morph:test",
+   "learnedAt": 153000,
+   "overBars": 0,
+   "study": {}
+  },
+  "runeknight_sig": {
+   "id": "runeknight_sig",
+   "rank": 1,
+   "xp": 0,
+   "charges": 0,
+   "uses": 0,
+   "source": "lesson:test",
+   "learnedAt": 154000,
+   "overBars": 0,
+   "study": {}
+  },
+  "stormreaver_sig": {
+   "id": "stormreaver_sig",
+   "rank": 3,
+   "xp": 22,
+   "charges": 0,
+   "uses": 0,
+   "source": "lesson:test",
+   "learnedAt": 155000,
+   "overBars": 0,
+   "study": {}
+  },
+  "echo_sovereign_sig": {
+   "id": "echo_sovereign_sig",
+   "rank": 5,
+   "xp": 4,
+   "charges": 1,
+   "uses": 0,
+   "source": "echo:test",
+   "learnedAt": 156000,
+   "overBars": 0,
+   "study": {}
+  },
+  "ascendant_sig": {
+   "id": "ascendant_sig",
+   "rank": 2,
+   "xp": 9,
+   "charges": 0,
+   "uses": 0,
+   "source": "lesson:test",
+   "learnedAt": 157000,
+   "overBars": 0,
+   "study": {}
+  },
+  "eclipse_walker_sig": {
+   "id": "eclipse_walker_sig",
+   "rank": 4,
+   "xp": 37,
+   "charges": 0,
+   "uses": 0,
+   "source": "lesson:test",
+   "learnedAt": 158000,
+   "overBars": 0,
+   "study": {}
+  },
+  "slash@fire": {
+   "id": "slash@fire",
+   "rank": 1,
+   "xp": 0,
+   "charges": 0,
+   "uses": 0,
+   "source": "fusion:test",
+   "learnedAt": 159000,
+   "overBars": 0,
+   "study": {}
+  },
+  "sword_throw~split": {
+   "id": "sword_throw~split",
+   "rank": 1,
+   "xp": 0,
+   "charges": 0,
+   "uses": 0,
+   "source": "fusion:test",
+   "learnedAt": 160000,
+   "overBars": 0,
+   "study": {}
+  },
+  "firebolt~pierce": {
+   "id": "firebolt~pierce",
+   "rank": 1,
+   "xp": 0,
+   "charges": 0,
+   "uses": 0,
+   "source": "fusion:test",
+   "learnedAt": 161000,
+   "overBars": 0,
+   "study": {}
+  }
+ },
+ "elements": {
+  "fire": {
+   "source": "shard",
+   "learnedAt": 2000
+  },
+  "wind": {
+   "source": "shard",
+   "learnedAt": 3000
+  },
+  "water": {
+   "source": "shard",
+   "learnedAt": 4000
+  },
+  "earth": {
+   "source": "shard",
+   "learnedAt": 5000
+  },
+  "lightning": {
+   "source": "shard",
+   "learnedAt": 6000
+  },
+  "shadow": {
+   "source": "shard",
+   "learnedAt": 7000
+  },
+  "holy": {
+   "source": "shard",
+   "learnedAt": 8000
+  }
+ },
+ "flags": {
+  "class_worn": 1,
+  "mastered_any": 1,
+  "rng:essence": 360,
+  "essdrop:jellop": 2,
+  "essdrop:pipsprout": 1,
+  "essdrop:puddlewisp": 1,
+  "essdrop:gustling": 1,
+  "essdrop:sparkbug": 1,
+  "essdrop:mossling": 1,
+  "essdrop:cragling": 2,
+  "essdrop:glowmite": 1,
+  "essdrop:gloomcap": 1,
+  "essdrop:hollowshade": 2,
+  "essdrop:cairn_wraith": 1,
+  "essdrop:emberkit": 4,
+  "ore_mined": 12,
+  "forge_success": 12,
+  "relic_storm": 12,
+  "relic_dusk": 12,
+  "visited:vale.hearthvale": 1,
+  "visited:vale.greenmeadow": 1,
+  "visited:vale.moonlit_glade": 1
+ },
+ "attempts": [],
+ "discoveries": [],
+ "hints": [
+  "Etch spells onto steel and drive the steel into stone: a tried Spellblade who is also a tried Earthshaper.",
+  "Catch the thunder and spin it: a tried Stormcaller who also dances the tempest.",
+  "When the Phantom's shadow crosses the Prism's light and the Regent's seal is held, the eclipse can be walked."
+ ],
+ "essences": {
+  "split": 4,
+  "haste": 3,
+  "reprise": 3,
+  "leech": 2,
+  "return": 1,
+  "arc": 1,
+  "expanse": 1,
+  "heavy": 2,
+  "pierce": 1,
+  "flurry": 4
+ },
+ "passives": {
+  "cls_blademaster_1": 2,
+  "imprint_pyroblade": 1
+ },
+ "lessons": [],
+ "classes": {
+  "blademaster": {
+   "rank": 10,
+   "xp": 0,
+   "spent": {
+    "n1": 2,
+    "n2": 1,
+    "n3": 1,
+    "n4": 1
+   }
+  },
+  "tempest_dancer": {
+   "rank": 6,
+   "xp": 11,
+   "spent": {}
+  },
+  "wayfarer": {
+   "rank": 10,
+   "xp": 0,
+   "spent": {}
+  },
+  "elementalist": {
+   "rank": 9,
+   "xp": 21,
+   "spent": {}
+  },
+  "pyroblade": {
+   "rank": 7,
+   "xp": 12,
+   "spent": {
+    "n1": 2,
+    "n2": 1,
+    "n3": 1,
+    "n4": 1
+   }
+  },
+  "windblade": {
+   "rank": 10,
+   "xp": 0,
+   "spent": {}
+  },
+  "earthshaper": {
+   "rank": 3,
+   "xp": 20,
+   "spent": {}
+  },
+  "assassin": {
+   "rank": 6,
+   "xp": 15,
+   "spent": {
+    "n1": 2,
+    "n2": 1,
+    "n3": 1,
+    "n4": 1
+   }
+  },
+  "shadowstalker": {
+   "rank": 10,
+   "xp": 0,
+   "spent": {}
+  },
+  "knife_juggler": {
+   "rank": 10,
+   "xp": 0,
+   "spent": {}
+  },
+  "stormcaller": {
+   "rank": 8,
+   "xp": 19,
+   "spent": {}
+  },
+  "paladin": {
+   "rank": 4,
+   "xp": 24,
+   "spent": {}
+  },
+  "spellblade": {
+   "rank": 10,
+   "xp": 0,
+   "spent": {}
+  },
+  "arcanist": {
+   "rank": 9,
+   "xp": 16,
+   "spent": {}
+  },
+  "pyromancer": {
+   "rank": 2,
+   "xp": 17,
+   "spent": {}
+  },
+  "tidecaller": {
+   "rank": 10,
+   "xp": 0,
+   "spent": {}
+  },
+  "sword_saint": {
+   "rank": 2,
+   "xp": 29,
+   "spent": {
+    "n1": 2,
+    "n2": 1,
+    "n3": 1
+   }
+  },
+  "mimic": {
+   "rank": 3,
+   "xp": 27,
+   "spent": {}
+  },
+  "twilight_sage": {
+   "rank": 6,
+   "xp": 25,
+   "spent": {}
+  },
+  "moonwarden": {
+   "rank": 5,
+   "xp": 28,
+   "spent": {}
+  },
+  "magma_knight": {
+   "rank": 8,
+   "xp": 0,
+   "spent": {}
+  },
+  "phantom": {
+   "rank": 8,
+   "xp": 0,
+   "spent": {}
+  },
+  "archmage": {
+   "rank": 3,
+   "xp": 32,
+   "spent": {}
+  },
+  "prism_sage": {
+   "rank": 6,
+   "xp": 33,
+   "spent": {}
+  },
+  "vortex_dancer": {
+   "rank": 8,
+   "xp": 0,
+   "spent": {}
+  },
+  "runeknight": {
+   "rank": 4,
+   "xp": 35,
+   "spent": {}
+  },
+  "stormreaver": {
+   "rank": 7,
+   "xp": 36,
+   "spent": {}
+  },
+  "echo_sovereign": {
+   "rank": 2,
+   "xp": 37,
+   "spent": {}
+  },
+  "ascendant": {
+   "rank": 5,
+   "xp": 0,
+   "spent": {
+    "n1": 2,
+    "n2": 1,
+    "n3": 1,
+    "n4": 1,
+    "n5": 1,
+    "cap": 1
+   }
+  },
+  "eclipse_walker": {
+   "rank": 3,
+   "xp": 39,
+   "spent": {}
+  }
+ },
+ "worn": "phantom",
+ "imprints": [
+  "blademaster",
+  "prism_sage",
+  "tempest_dancer"
+ ],
+ "witness": {},
+ "spark": {
+  "pity": {},
+  "lastAt": -1000000000000,
+  "seed": 4242,
+  "counter": 0
+ },
+ "bestiary": {
+  "jellop": 30,
+  "pipsprout": 30,
+  "puddlewisp": 30,
+  "gustling": 30,
+  "sparkbug": 30,
+  "mossling": 30,
+  "cragling": 30,
+  "glowmite": 30,
+  "gloomcap": 30,
+  "hollowshade": 30,
+  "cairn_wraith": 30,
+  "emberkit": 30
+ },
+ "whispered": [
+  "runeknight",
+  "stormreaver",
+  "eclipse_walker"
+ ],
+ "quests": {
+  "active": {},
+  "done": {
+   "hale_first_drill": 1
+  },
+  "cooldown": {},
+  "tracked": []
+ }
+}

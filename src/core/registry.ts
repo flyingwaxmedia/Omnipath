@@ -2,10 +2,15 @@
 // shape merges, composed on demand and cached) and data validation. Every core module codes
 // against this class; it never mutates the data it was built from.
 import { canTakeElement, compose, hasReservedChar, legalEssenceSet, mergeSkills, parseVariantId } from './compose';
+import { mechanicProblems } from './mechanics';
 import { QUEST_NODE_KINDS, killCounts } from './quests';
+import { gripProblems } from './requirements';
 import { pairKey, parseRef, type ParsedRef } from './refs';
 import {
+  DELIVERIES,
+  RARITIES,
   SHAPE_KINDS,
+  WEAPON_TYPES,
   type ClassDef,
   type ElementDef,
   type ElementId,
@@ -72,8 +77,20 @@ function tryParseRef(ref: IngredientRef): ParsedRef | null {
 /** Map ids are `<region>.<name>` with an optional `.<n>` floor (vale.quarry_depths.1). */
 const MAP_ID = /^[a-z][a-z0-9_]*\.[a-z0-9_]+(\.[0-9]+)?$/;
 
-/** SkillBook flag ids: lower-case words, optionally `<prefix>:<id>` (visited:vale.hearthvale). */
-const FLAG_ID = /^[a-z0-9_]+(:[a-z0-9_.]+)?$/;
+/**
+ * SkillBook flag ids: lower-case words, optionally with `:<part>` segments (visited:vale.hearthvale, hits:sword,
+ * kills:sword:fire).
+ */
+const FLAG_ID = /^[a-z0-9_]+(:[a-z0-9_.]+)*$/;
+
+/** What Registry.validate checks beyond the always-on rules. */
+export interface ValidateOptions {
+  /**
+   * Also apply the SPEC-v4 §2.2 grip rules to every authored skill (requirements.gripProblems). Off by default
+   * until the content lane's retag pass has landed; content tests turn it on.
+   */
+  grip?: boolean;
+}
 
 const isCount = (n: unknown): boolean => typeof n === 'number' && Number.isInteger(n) && n >= 1;
 
@@ -357,9 +374,11 @@ export class Registry {
    * morph edges (self-morphs; sparks on capstones or from buff parents), recipe shapes, class
    * parents/trees, lessons, monsters, items and quests (objective targets, rewards, `after` chains,
    * flag and map id formats — NPC ids and map existence live in the world data and are not checked here —
-   * and that a lesson is the reward of at most one non-repeatable quest).
+   * and that a lesson is the reward of at most one non-repeatable quest). v4: shape numbers of the new kinds,
+   * `delivery`, `classOf`, `hpCost`; kit classes (5 distinct known kit skills, mechanic data, passive, discovery
+   * requirements, Trial quest); with `opts.grip`, the grip rules too.
    */
-  validate(): string[] {
+  validate(opts: ValidateOptions = {}): string[] {
     const errs: string[] = [];
     const d = this.data;
     const skillOk = (id: string): boolean => !!this.skill(id);
@@ -385,6 +404,10 @@ export class Registry {
           case 'item':
             if (!this.items.has(r.id)) errs.push(`${where}: unknown item ${r.id}`);
             break;
+          case 'quest':
+            if (!this.quests.has(r.id)) errs.push(`${where}: unknown quest ${r.id}`);
+            break;
+          case 'deed':
           case 'tagCount':
           case 'elementsKnown':
           case 'flag':
@@ -412,6 +435,30 @@ export class Registry {
       if (hasReservedChar(s.id)) errs.push(`skill ${s.id}: id uses a reserved character (@ ~ | :)`);
       if (s.element && !this.elements.has(s.element)) errs.push(`skill ${s.id}: unknown element ${s.element}`);
       if (s.maxRank < 1) errs.push(`skill ${s.id}: maxRank < 1`);
+      if (s.delivery !== undefined && !DELIVERIES.includes(s.delivery)) errs.push(`skill ${s.id}: unknown delivery ${s.delivery}`);
+      if (s.classOf !== undefined && !this.classIndex.has(s.classOf)) errs.push(`skill ${s.id}: unknown classOf ${s.classOf}`);
+      if (s.hpCost !== undefined && !(s.hpCost > 0 && s.hpCost < 100)) errs.push(`skill ${s.id}: hpCost must be between 0 and 100`);
+      for (const w of s.weapons ?? []) if (!WEAPON_TYPES.includes(w)) errs.push(`skill ${s.id}: unknown weapon ${w}`);
+      const shape = s.shape;
+      const positive = (name: string, n: number): void => {
+        if (!(Number.isFinite(n) && n > 0)) errs.push(`skill ${s.id}: ${shape.kind} ${name} must be > 0`);
+      };
+      if (shape.kind === 'zone') {
+        positive('durationMs', shape.durationMs);
+        positive('tickMs', shape.tickMs);
+        positive('radius', shape.radius);
+      } else if (shape.kind === 'blink') {
+        positive('distance', shape.distance);
+        if (shape.arrive) positive('arrive.radius', shape.arrive.radius);
+        else if (s.power > 0) errs.push(`skill ${s.id}: a blink with power needs arrive`);
+      } else if (shape.kind === 'mend') {
+        positive('pct', shape.pct);
+      } else if (shape.kind === 'shield') {
+        positive('pct', shape.pct);
+        positive('durationMs', shape.durationMs);
+        if (!shape.burst && s.power > 0) errs.push(`skill ${s.id}: a shield with power needs burst`);
+      }
+      if (opts.grip) errs.push(...gripProblems(s));
     }
 
     for (const e of d.essences) {
@@ -459,28 +506,51 @@ export class Registry {
 
     for (const c of d.classes) {
       const where = `class ${c.id}`;
-      if (c.clauses.length === 0 && !c.distinctElements && !c.parents?.length && !c.requires?.length) {
-        errs.push(`${where}: no requirements`);
-      }
+      const v2 = (c.clauses?.length ?? 0) > 0 || !!c.distinctElements || !!c.parents?.length || !!c.requires?.length;
+      if (!c.discover && !v2) errs.push(`${where}: no requirements`);
+      if (c.discover && c.discover.requires.length === 0 && c.discover.trial === undefined) errs.push(`${where}: no requirements`);
       for (const g of c.grants ?? []) if (!skillOk(g)) errs.push(`${where}: unknown granted skill ${g}`);
       if (c.imprint && !this.passives.has(c.imprint)) errs.push(`${where}: unknown imprint passive ${c.imprint}`);
-      if (c.tier >= 2 && !c.parents?.length) errs.push(`${where}: Tier ${c.tier} class without parents`);
-      for (const parent of c.parents ?? []) {
-        const pc = this.classIndex.get(parent.id);
-        if (!pc) errs.push(`${where}: unknown parent class ${parent.id}`);
-        else if (pc.tier >= c.tier) errs.push(`${where}: parent ${parent.id} (tier ${pc.tier}) is not below tier ${c.tier}`);
-      }
-      const nodeIds = (c.tree ?? []).map((n) => n.id);
-      for (const id of duplicates(nodeIds)) errs.push(`${where}: duplicate tree node ${id}`);
-      for (const n of c.tree ?? []) {
-        if (n.kind === 'skill' ? !skillOk(n.ref) : !this.passives.has(n.ref)) {
-          errs.push(`${where}: tree node ${n.id} has unknown ${n.kind === 'skill' ? 'skill' : 'passive'} ${n.ref}`);
+      if (c.passive !== undefined && !this.passives.has(c.passive)) errs.push(`${where}: unknown passive ${c.passive}`);
+      if (c.rarity !== undefined && !RARITIES.includes(c.rarity)) errs.push(`${where}: unknown rarity ${c.rarity}`);
+      if (c.weapon !== undefined && c.weapon !== 'any' && !WEAPON_TYPES.includes(c.weapon)) errs.push(`${where}: unknown weapon ${c.weapon}`);
+      if (c.kit) {
+        if (c.kit.length !== 5) errs.push(`${where}: a kit has exactly 5 skills`);
+        for (const id of duplicates(c.kit)) errs.push(`${where}: kit lists ${id} twice`);
+        for (const id of c.kit) {
+          const skill = this.skills.get(id);
+          if (!skill) errs.push(`${where}: unknown kit skill ${id}`);
+          else if (skill.classOf !== undefined && skill.classOf !== c.id) errs.push(`${where}: kit skill ${id} belongs to ${skill.classOf}`);
+          else if (skill.tier === 0 && skill.tags.includes('basic')) errs.push(`${where}: kit skill ${id} is a basic attack`);
         }
-        for (const req of n.requires ?? []) {
-          if (!nodeIds.includes(req.node)) errs.push(`${where}: tree node ${n.id} requires unknown node ${req.node}`);
+        for (const key of ['rarity', 'weapon', 'source', 'mechanic', 'discover'] as const) {
+          if (c[key] === undefined) errs.push(`${where}: a class with a kit needs ${key}`);
         }
       }
-      checkReqs(where, c.requires);
+      for (const m of [c.mechanic, c.mechanicUpgrade?.mechanic]) {
+        if (!m) continue;
+        for (const problem of mechanicProblems(m, c.kit ?? [])) errs.push(`${where}: mechanic: ${problem}`);
+        if (m.kind === 'stance') for (const to of Object.values(m.remap)) if (!skillOk(to)) errs.push(`${where}: mechanic: unknown remap skill ${to}`);
+      }
+      if (c.mechanicUpgrade && c.mechanic && c.mechanicUpgrade.mechanic.kind !== c.mechanic.kind) {
+        errs.push(`${where}: the mechanic upgrade changes the mechanic kind`);
+      }
+      if (c.discover?.trial !== undefined) {
+        const trial = this.quests.get(c.discover.trial);
+        if (!trial) errs.push(`${where}: unknown Trial quest ${c.discover.trial}`);
+        else if (trial.trialOf !== c.id) errs.push(`${where}: Trial quest ${trial.id} is not marked trialOf ${c.id}`);
+      }
+      checkReqs(where, c.discover?.requires);
+      if (!c.discover) {
+        const tier = c.tier ?? 1;
+        if (tier >= 2 && !c.parents?.length) errs.push(`${where}: Tier ${tier} class without parents`);
+        for (const parent of c.parents ?? []) {
+          const pc = this.classIndex.get(parent.id);
+          if (!pc) errs.push(`${where}: unknown parent class ${parent.id}`);
+          else if ((pc.tier ?? 1) >= tier) errs.push(`${where}: parent ${parent.id} (tier ${pc.tier ?? 1}) is not below tier ${tier}`);
+        }
+        checkReqs(where, c.requires);
+      }
     }
 
     for (const t of d.trainers) {
@@ -612,6 +682,12 @@ export class Registry {
       }
       if (r.whisper !== undefined && !this.classIndex.has(r.whisper)) errs.push(`${where}: unknown whisper class ${r.whisper}`);
       if (r.flag !== undefined && !FLAG_ID.test(r.flag)) errs.push(`${where}: malformed reward flag ${r.flag}`);
+      if (q.trialOf !== undefined) {
+        const cls = this.classIndex.get(q.trialOf);
+        if (!cls) errs.push(`${where}: trialOf unknown class ${q.trialOf}`);
+        else if (cls.discover?.trial !== q.id) errs.push(`${where}: class ${q.trialOf} does not name this quest as its Trial`);
+        if (q.repeatable) errs.push(`${where}: a Trial cannot be repeatable`);
+      }
       for (const key of ['coins', 'exp'] as const) {
         const n = r[key];
         if (n !== undefined && !(Number.isFinite(n) && n >= 0)) errs.push(`${where}: reward ${key} must be >= 0`);

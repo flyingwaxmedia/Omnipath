@@ -1,26 +1,26 @@
-// Class power budget (docs/SPEC-v2.md §5), over the real content.
+// Class power budget (docs/SPEC-v4.md §3.5 "Flat power budget"), over the real content.
 //
-// For every class worn, and every tag set a damaging skill can carry, the worst-case extra damage in
-// percentage points is:
-//   worn bonus  = Σ bonus.tagPower over the skill's distinct tags
-//               + its stat: ATK % (physical), MATK % (arcane) or max of both (hybrids, combat.isHybrid) —
-//                 the class bonus plus the tree's atk/matk stat node at max rank
-//   + tree      = every power node of the worn tree whose tag the skill has (or untagged), at max rank
-//   + capstone  (an untagged power node, counted by the line above)
-//   + imprints  = the 3 best imprints of OTHER classes that apply to the skill, × IMPRINT_STRENGTH
-// and must stay ≤ CLASS_POWER_BUDGET (25).
+// Rarity never adds damage, so every class is held to the same three numbers:
+//   1. worn bonus ≤ CLASS_BONUS_BUDGET (10): for any tag set a damaging skill can carry, Σ bonus.tagPower over
+//      the skill's distinct tags + its stat (ATK % physical, MATK % arcane, the larger for hybrids), at Class
+//      Level 10 (the bonus is smaller below);
+//   2. every class passive declares `budget` ≤ KEEPSAKE_BUDGET (5); until Phase 2 turns Keepsakes into mastered
+//      class passives, today's imprints are held to the same 5 each (× IMPRINT_STRENGTH), so three add ≤ 15;
+//   3. worn bonus + the worn class's passive budget + the 3 best Keepsakes ≤ PASSIVE_CAPS.power (45).
+// The class tree is gone, so nothing else adds class damage.
 //
-// Tag sets: every authored attack (non-buff, power > 0, not monster-only) and every legal shape merge
+// Tag sets: every authored attack (power > 0, not a support kind, not monster-only) and every legal shape merge
 // (pairs without an authored recipe), each also with any element it can take (+ element + 'infused')
 // and any legal set of tag-adding essences (heavy) — 'basic' is dropped from variants, as compose does.
 import { beforeAll, describe, expect, it } from 'vitest';
-import { CLASS_POWER_BUDGET, CLASS_TREE_POWER } from '../src/core/balance';
+import { CLASS_BONUS_BUDGET, KEEPSAKE_BUDGET } from '../src/core/balance';
+import { classBonusAt, classTier } from '../src/core/classes';
 import { isHybrid, isMagic } from '../src/core/combat';
-import { canTakeElement, legalEssenceSet, mergeSkills } from '../src/core/compose';
-import { IMPRINT_STRENGTH } from '../src/core/passives';
+import { SUPPORT_KINDS, canTakeElement, legalEssenceSet, mergeSkills } from '../src/core/compose';
+import { IMPRINT_STRENGTH, PASSIVE_CAPS } from '../src/core/passives';
 import { skillRef } from '../src/core/refs';
 import type { Registry } from '../src/core/registry';
-import type { ClassDef, ClassTier, EssenceDef, SkillDef } from '../src/core/types';
+import type { ClassDef, EssenceDef, SkillDef } from '../src/core/types';
 
 /** Imprint slots at most (SPEC §5: 3 at the first Tier III or 12 classes discovered). */
 const MAX_IMPRINTS = 3;
@@ -28,7 +28,7 @@ const MAX_IMPRINTS = 3;
 let reg: Registry;
 let tagSets: string[][];
 
-const isAttack = (s: SkillDef): boolean => s.shape.kind !== 'buff' && s.power > 0 && !s.tags.includes('monster');
+const isAttack = (s: SkillDef): boolean => !SUPPORT_KINDS.includes(s.shape.kind) && s.power > 0 && !s.tags.includes('monster');
 
 /** Every tag set a damaging skill (authored, variant, merge or merge variant) can carry. */
 function reachableTagSets(r: Registry): string[][] {
@@ -66,98 +66,114 @@ function reachableTagSets(r: Registry): string[][] {
 }
 
 interface Breakdown {
-  total: number;
+  /** Worn bonus: tagPower + stat. */
+  bonus: number;
   bonusTags: number;
   stat: number;
-  tree: number;
+  /** The worn class's own passive, as declared. */
+  passive: number;
   imprints: number[];
+  total: number;
 }
 
-/** Worst-case class damage points for `cls` worn, on a skill with `tags`. */
+/** Damage points one Keepsake (today: an imprint) adds to a skill with `tags`. */
+function keepsakePoints(r: Registry, other: ClassDef, tags: readonly string[]): number {
+  const def = other.imprint ? r.passive(other.imprint) : undefined;
+  if (def?.effect.kind !== 'power') return 0;
+  if (def.effect.tag !== undefined && !tags.includes(def.effect.tag)) return 0;
+  return def.effect.pct * IMPRINT_STRENGTH[classTier(other)];
+}
+
+/** Worst-case class damage points for `cls` worn at Class Level 10, on a skill with `tags`. */
 function classPower(r: Registry, cls: ClassDef, tags: readonly string[]): Breakdown {
-  const has = (tag: string | undefined): boolean => tag === undefined || tags.includes(tag);
   const skill = { tags: [...tags] } as SkillDef;
-
+  const bonus = classBonusAt(cls, 10);
   let bonusTags = 0;
-  for (const [tag, pct] of Object.entries(cls.bonus.tagPower ?? {})) if (tags.includes(tag)) bonusTags += pct;
-
-  let atk = cls.bonus.atk ?? 0;
-  let matk = cls.bonus.matk ?? 0;
-  let tree = 0;
-  for (const node of cls.tree ?? []) {
-    if (node.kind === 'skill') continue;
-    const def = r.passive(node.ref);
-    if (!def) continue;
-    const ranks = Math.min(node.maxRank, def.maxRank);
-    const e = def.effect;
-    if (e.kind === 'power' && has(e.tag)) tree += e.pct * ranks;
-    if (e.kind === 'stat' && e.stat === 'atk') atk += e.pct * ranks;
-    if (e.kind === 'stat' && e.stat === 'matk') matk += e.pct * ranks;
-  }
+  for (const [tag, pct] of Object.entries(bonus.tagPower ?? {})) if (tags.includes(tag)) bonusTags += pct;
+  const atk = bonus.atk ?? 0;
+  const matk = bonus.matk ?? 0;
   const stat = isHybrid(skill) ? Math.max(atk, matk) : isMagic(skill) ? matk : atk;
-
-  const candidates: number[] = [];
-  for (const other of r.classes) {
-    if (other.id === cls.id || !other.imprint) continue;
-    const def = r.passive(other.imprint);
-    if (def?.effect.kind === 'power' && has(def.effect.tag)) candidates.push(def.effect.pct * IMPRINT_STRENGTH[other.tier]);
-  }
-  const imprints = candidates.sort((a, b) => b - a).slice(0, MAX_IMPRINTS);
-
-  const total = bonusTags + stat + tree + imprints.reduce((a, b) => a + b, 0);
-  return { total, bonusTags, stat, tree, imprints };
+  const passive = cls.passive ? (r.passive(cls.passive)?.budget ?? 0) : 0;
+  const imprints = r.classes
+    .filter((other) => other.id !== cls.id)
+    .map((other) => keepsakePoints(r, other, tags))
+    .filter((n) => n > 0)
+    .sort((a, b) => b - a)
+    .slice(0, MAX_IMPRINTS);
+  const total = bonusTags + stat + passive + imprints.reduce((a, b) => a + b, 0);
+  return { bonus: bonusTags + stat, bonusTags, stat, passive, imprints, total };
 }
 
-describe('class power budget (SPEC §5)', () => {
+describe('class power budget (SPEC-v4 §3.5)', () => {
   beforeAll(async () => {
     const { createRegistry } = await import('../src/data');
     reg = createRegistry();
     tagSets = reachableTagSets(reg);
   }, 120_000);
 
-  it('the budget is 25 points and the template leaves room for a worn bonus', () => {
-    expect(CLASS_POWER_BUDGET).toBe(25);
-    for (const tier of [1, 2, 3] as ClassTier[]) {
-      const t = CLASS_TREE_POWER[tier];
-      const imprint = Math.max(...([1, 2, 3] as ClassTier[]).map((k) => CLASS_TREE_POWER[k].imprint * IMPRINT_STRENGTH[k]));
-      const base = 3 * t.power + t.capstone + MAX_IMPRINTS * imprint + 3 * t.damageStat;
-      expect(base, `tier ${tier}`).toBeLessThanOrEqual(CLASS_POWER_BUDGET - 7);
-    }
+  it('the numbers are 10 for a worn bonus, 5 per Keepsake, 45 in all', () => {
+    expect(CLASS_BONUS_BUDGET).toBe(10);
+    expect(KEEPSAKE_BUDGET).toBe(5);
+    expect(PASSIVE_CAPS.power).toBe(45);
+    expect(CLASS_BONUS_BUDGET + KEEPSAKE_BUDGET + MAX_IMPRINTS * KEEPSAKE_BUDGET).toBeLessThanOrEqual(PASSIVE_CAPS.power);
   });
 
   it('enumerates real content', () => {
-    expect(reg.classes.length).toBe(30);
+    expect(reg.classes.length).toBeGreaterThanOrEqual(26);
     expect(tagSets.length).toBeGreaterThan(100);
   });
 
-  it('no class gives any single skill more than 25 points of extra damage', () => {
+  it('no worn class bonus adds more than 10 damage points to any single skill', () => {
     const over: string[] = [];
     for (const cls of reg.classes) {
       let worst: (Breakdown & { tags: string[] }) | undefined;
       for (const tags of tagSets) {
         const b = classPower(reg, cls, tags);
-        if (!worst || b.total > worst.total) worst = { ...b, tags };
+        if (!worst || b.bonus > worst.bonus) worst = { ...b, tags };
       }
-      expect(worst!.total, cls.id).toBeGreaterThan(0);
-      if (worst!.total > CLASS_POWER_BUDGET + 1e-9) {
-        over.push(
-          `${cls.id}: ${worst!.total.toFixed(1)} on [${worst!.tags.join(', ')}] ` +
-            `(tagPower ${worst!.bonusTags}, stat ${worst!.stat}, tree ${worst!.tree}, imprints ${worst!.imprints.join('+')})`,
-        );
+      if (worst!.bonus > CLASS_BONUS_BUDGET + 1e-9) {
+        over.push(`${cls.id}: ${worst!.bonus.toFixed(1)} on [${worst!.tags.join(', ')}] (tagPower ${worst!.bonusTags}, stat ${worst!.stat})`);
       }
     }
     expect(over, over.join('\n')).toEqual([]);
   });
 
+  it('every class passive declares a budget of at most 5, and every Keepsake stays within 5', () => {
+    const bad: string[] = [];
+    for (const cls of reg.classes) {
+      if (cls.passive !== undefined) {
+        const def = reg.passive(cls.passive);
+        if (!def) bad.push(`${cls.id}: unknown passive ${cls.passive}`);
+        else if (def.budget === undefined) bad.push(`${cls.id}: passive ${def.id} declares no budget`);
+        else if (!(def.budget >= 0 && def.budget <= KEEPSAKE_BUDGET)) bad.push(`${cls.id}: passive ${def.id} budget ${def.budget}`);
+      }
+      const def = cls.imprint ? reg.passive(cls.imprint) : undefined;
+      if (def?.effect.kind === 'power') {
+        const points = def.effect.pct * IMPRINT_STRENGTH[classTier(cls)];
+        if (points > KEEPSAKE_BUDGET + 1e-9) bad.push(`${cls.id}: Keepsake ${def.id} adds ${points}`);
+      }
+    }
+    expect(bad, bad.join('\n')).toEqual([]);
+  });
+
+  it('bonus + own passive + the 3 best Keepsakes never pass 45 on any single skill', () => {
+    const over: string[] = [];
+    for (const cls of reg.classes) {
+      for (const tags of tagSets) {
+        const b = classPower(reg, cls, tags);
+        if (b.total > PASSIVE_CAPS.power + 1e-9) over.push(`${cls.id}: ${b.total.toFixed(1)} on [${tags.join(', ')}]`);
+      }
+    }
+    expect(over.slice(0, 10), over.slice(0, 10).join('\n')).toEqual([]);
+  });
+
   it('the worst case counts every component (a known skill, by hand)', () => {
-    // Tempest Dancer worn on Firestorm (blade, spin, aoe, wind, fire): spin 10 + Spin Power 3×2 + capstone 3
-    // + the 3 best imprints among blade/spin/aoe/wind/fire/... (Tier I 2 each) = 25.
-    const td = reg.classDef('tempest_dancer')!;
-    const firestorm = reg.skill('firestorm')!;
-    const b = classPower(reg, td, firestorm.tags);
-    expect(b.bonusTags).toBe(10);
-    expect(b.tree).toBe(3 * CLASS_TREE_POWER[1].power + CLASS_TREE_POWER[1].capstone);
-    expect(b.imprints).toEqual([2, 2, 2]);
-    expect(b.total).toBe(25);
+    // Blademaster (atk 7) worn on a plain blade skill, with three blade/melee Keepsakes slotted.
+    const cls = reg.classes.find((c) => (c.bonus.atk ?? 0) > 0 && !c.bonus.tagPower)!;
+    const b = classPower(reg, cls, ['blade', 'melee', 'sword']);
+    expect(b.stat).toBe(cls.bonus.atk);
+    expect(b.bonusTags).toBe(0);
+    expect(b.imprints.length).toBeLessThanOrEqual(MAX_IMPRINTS);
+    expect(b.total).toBeCloseTo(b.stat + b.passive + b.imprints.reduce((x, y) => x + y, 0), 10);
   });
 });

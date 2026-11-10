@@ -4,8 +4,8 @@
 import type Phaser from 'phaser';
 import type { NodeDef, NodeKind, ObjectDef, PortalDef } from '../../core/world/types';
 import type { NpcDef } from '../../data/npcs';
-import { WEAPONS } from '../../data/weapons';
-import type { WeaponType } from '../../core/types';
+import { SOLD_WEAPONS, WEAPONS } from '../../data/weapons';
+import { classTier } from '../../core/classes';
 import type { DialogOption } from '../../ui/dialogs';
 import { esc } from '../../ui/util';
 import { gameBus } from '../events';
@@ -212,7 +212,7 @@ export class Interactions {
         const fireLine = book.hasElement('fire')
           ? 'The forge-fire lives in you now. Take it to the altar and see what it does to your techniques.'
           : `Work the forge with me. Do it right ${FORGES_FOR_FIRE} times and the heat will get into your bones. <small>(${Math.min(forged, FORGES_FOR_FIRE)}/${FORGES_FOR_FIRE})</small>`;
-        const forSale = (Object.keys(WEAPONS) as WeaponType[]).filter((w) => !pl.ownedWeapons.includes(w));
+        const forSale = SOLD_WEAPONS.filter((w) => !pl.ownedWeapons.includes(w));
         const ore = s.session.count('ore');
         this.say(npc, `${fireLine}<br><br>Each forging takes <b>2 ore</b>. You have <b>${ore}</b>.`, [
           { label: '🔥 Forge', action: () => this.forge(), disabled: ore < 2 },
@@ -295,7 +295,7 @@ export class Interactions {
     if (!this.whisperedThisVisit.has(npc.id)) {
       const tiers = npc.id === 'tamsin' ? [1] : [2, 3];
       const cls = reg.classes.find(
-        (c) => !c.hidden && tiers.includes(c.tier) && !book.state.classes[c.id] && !book.state.whispered.includes(c.id),
+        (c) => !c.hidden && tiers.includes(classTier(c)) && !book.state.classes[c.id] && !book.state.whispered.includes(c.id),
       );
       if (cls && book.whisperClass(cls.id, 'trainer')) {
         this.whisperedThisVisit.add(npc.id);

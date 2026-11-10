@@ -1,7 +1,7 @@
 // GameController v3 views (game lane; docs/INTEGRATION-v3.md §5). MapScene delegates every v3 controller method
 // here in one line, so the scene stays a thin host. Everything returned is plain data in plain words
 // (docs/UX-SIMPLE.md): ids only as keys. The one-step wording lives in ./steps.ts, the bar rules in ./loadout.ts.
-import { CLASS_SLOTS, barEligible, canBuyNode, classMaxRank, classXpToNext } from '../core/classes';
+import { CLASS_SLOTS, barEligible, canBuyNode, classMaxRank, classXpNeed } from '../core/classes';
 import type { QuestView } from '../core/skillbook';
 import type { ElementId, QuestDef, QuestReward, Requirement } from '../core/types';
 import { NPCS } from '../data/npcs';
@@ -243,7 +243,7 @@ function classCard(s: MapScene, id: string): ClassCardView | null {
     state: worn ? 'current' : prog ? 'unlocked' : 'locked',
     level: prog?.rank ?? 0,
     maxLevel: max,
-    levelProgress: prog ? (prog.rank >= max ? 1 : Math.min(1, prog.xp / classXpToNext(prog.rank, cls.tier))) : 0,
+    levelProgress: prog ? (prog.rank >= max ? 1 : Math.min(1, prog.xp / classXpNeed(cls, prog.rank))) : 0,
     color: classColor(id),
     skills: book.classSkills(id, CLASS_SLOTS),
   };
@@ -355,7 +355,7 @@ export function wornClass(s: MapScene): WornClassView | null {
     name: cls.name,
     level: prog.rank,
     maxLevel: max,
-    progress: prog.rank >= max ? 1 : Math.min(1, prog.xp / classXpToNext(prog.rank, cls.tier)),
+    progress: prog.rank >= max ? 1 : Math.min(1, prog.xp / classXpNeed(cls, prog.rank)),
     color: classColor(cls.id),
   };
 }

@@ -2,30 +2,47 @@ import { describe, expect, it } from 'vitest';
 import { classTreeTemplate } from '../src/core/balance';
 import {
   CLASS,
+  CLASS_SLOTS,
   HARDENED_RANK,
   IMPRINT_THIRD_SLOT_CLASSES,
-  buyNode,
+  bonusShare,
   canBuyNode,
+  classBonusAt,
+  classFeeds,
   classMatchesSkill,
   classMaxRank,
+  classMechanic,
   classPoints,
   classProgress,
+  classRarity,
+  classSkillFit,
+  classSkills,
+  classSlotEligible,
   classStatBonus,
   classTagPct,
+  classTier,
+  classXpNeed,
   classXpToNext,
   clauseCount,
   discoverableNow,
   grantClassXp,
   imprintSlots,
   imprintUnlocked,
-  respec,
+  kitLevelOf,
+  kitSkillsAt,
+  kitUnlocked,
+  mastered,
+  ownSlotEligible,
   spentPoints,
+  trialReady,
   wornClass,
+  wornMechanic,
 } from '../src/core/classes';
+import { SkillBook } from '../src/core/skillbook';
 import { Registry } from '../src/core/registry';
 import { VISITED_FLAG_PREFIX, countTagged, type RequirementContext } from '../src/core/requirements';
 import { emptyState, type ClassProgress, type SkillBookState, type SkillProgress } from '../src/core/state';
-import type { ClassDef, ClassTier, ElementDef, ElementId, GameData, PassiveDef, SkillDef } from '../src/core/types';
+import type { ClassDef, ClassDefV4, ClassMechanic, ClassTier, ElementDef, ElementId, GameData, PassiveDef, QuestDef, SkillDef } from '../src/core/types';
 import { createRegistry } from '../src/data';
 
 // ------------------------------------------------------------------ inline fixture
@@ -164,7 +181,7 @@ function stateWith(ranks: Record<string, number>, patch: Partial<SkillBookState>
   return { ...s, ...patch };
 }
 
-const cp = (rank: number, spent: Record<string, number> = {}, xp = 0): ClassProgress => ({ rank, xp, spent });
+const cp = (rank: number, xp = 0): ClassProgress => ({ rank, xp });
 
 /** A RequirementContext reading straight from a state (what the SkillBook implements). */
 function ctxOf(state: SkillBookState, r: Registry = reg): RequirementContext {
@@ -193,19 +210,27 @@ describe('fixture', () => {
   });
 });
 
-describe('Class Rank curve', () => {
-  it('follows round(60 × 1.22^(rank-1) × tier mult)', () => {
-    expect(classXpToNext(1, 1)).toBe(60);
-    expect(classXpToNext(2, 1)).toBe(73);
-    expect(classXpToNext(5, 1)).toBe(Math.round(60 * 1.22 ** 4));
-    expect(classXpToNext(1, 2)).toBe(108);
-    expect(classXpToNext(1, 3)).toBe(180);
+describe('Class Level curve (SPEC-v4 §3.4)', () => {
+  it('follows round(60 × 1.22^(level-1) × the rarity multiplier)', () => {
+    expect(CLASS.xpMul).toEqual({ common: 1, uncommon: 1, rare: 1.2, epic: 1.4, legendary: 1.6, mythic: 1.6 });
+    expect(classXpToNext(1)).toBe(60);
+    expect(classXpToNext(2, 'common')).toBe(73);
+    expect(classXpToNext(5, 'uncommon')).toBe(Math.round(60 * 1.22 ** 4));
+    expect(classXpToNext(1, 'rare')).toBe(72);
+    expect(classXpToNext(1, 'epic')).toBe(84);
+    expect(classXpToNext(1, 'legendary')).toBe(96);
+    expect(classXpToNext(1, 'mythic')).toBe(96);
   });
 
-  it('caps ranks by tier', () => {
-    expect(classMaxRank(BLADEMASTER)).toBe(10);
-    expect(classMaxRank(SAINT)).toBe(8);
-    expect(classMaxRank(ASCENDANT)).toBe(5);
+  it('has one max level for every class: 10', () => {
+    expect(CLASS.maxLevel).toBe(10);
+    for (const c of [BLADEMASTER, SAINT, ASCENDANT]) expect(classMaxRank(c)).toBe(10);
+  });
+
+  it('maps v2 tiers to rarities and back (classes without a rarity)', () => {
+    expect([BLADEMASTER, SAINT, ASCENDANT].map(classRarity)).toEqual(['uncommon', 'rare', 'epic']);
+    expect((['common', 'uncommon', 'rare', 'epic', 'legendary', 'mythic'] as const).map((rarity) => classTier({ rarity }))).toEqual([1, 1, 2, 3, 3, 3]);
+    expect(classXpNeed(SAINT, 1)).toBe(72);
   });
 });
 
@@ -284,7 +309,7 @@ describe('discovery', () => {
 
 describe('discoverableNow agrees with classProgress', () => {
   const hasComponents = (c: ClassDef): boolean =>
-    c.clauses.length > 0 || !!c.distinctElements || !!c.parents?.length || !!c.requires?.length;
+    (c.clauses?.length ?? 0) > 0 || !!c.distinctElements || !!c.parents?.length || !!c.requires?.length;
 
   function expectAgreement(r: Registry, states: SkillBookState[]): number {
     let discoverable = 0;
@@ -323,7 +348,7 @@ describe('discoverableNow agrees with classProgress', () => {
       stateWith(all),
       stateWith(all, { classes: Object.fromEntries(Object.entries(classes).filter(([id]) => real.classDef(id)!.tier === 1)) }),
       stateWith(all, {
-        classes: Object.fromEntries(Object.entries(classes).filter(([id]) => real.classDef(id)!.tier < 3)),
+        classes: Object.fromEntries(Object.entries(classes).filter(([id]) => (real.classDef(id)!.tier ?? 1) < 3)),
         flags: { relic_storm: 1, relic_dusk: 1, [VISITED_FLAG_PREFIX + 'vale.moonlit_glade']: 1 },
       }),
     ];
@@ -420,123 +445,75 @@ describe('classProgress and codex', () => {
   });
 });
 
-describe('grantClassXp', () => {
+describe('grantClassXp: only the worn class', () => {
   const slash = reg.skill('slash')!;
   const orb = reg.skill('orb')!;
 
-  it('gives the worn class 50% and other matching classes 15%', () => {
+  it('gives the worn class 50% and every other class nothing', () => {
     const state = stateWith(
       {},
       { classes: { blademaster: cp(1), sword_saint: cp(1), stalker: cp(1), prism: cp(1) }, worn: 'blademaster' },
     );
+    expect(CLASS.wornShare).toBe(0.5);
     expect(grantClassXp(reg, state, slash, 20)).toEqual([]);
     expect(state.classes.blademaster.xp).toBeCloseTo(10, 10);
-    expect(state.classes.sword_saint.xp).toBeCloseTo(3, 10);
-    expect(state.classes.stalker.xp).toBe(0); // slash has no stealth / fire
-    expect(state.classes.prism.xp).toBe(0); // slash is unaligned
+    for (const id of ['sword_saint', 'stalker', 'prism']) expect(state.classes[id].xp).toBe(0);
   });
 
-  it('gives the worn class nothing for a non-matching skill', () => {
+  it('gives a worn v2 class nothing for a non-matching skill', () => {
     const state = stateWith({}, { classes: { blademaster: cp(1) }, worn: 'blademaster' });
     grantClassXp(reg, state, orb, 100);
     expect(state.classes.blademaster.xp).toBe(0);
   });
 
-  it('ignores undiscovered worn ids and bad XP', () => {
+  it('ignores undiscovered worn ids, "No class" and bad XP', () => {
     const state = stateWith({}, { classes: { sword_saint: cp(1) }, worn: 'blademaster' });
-    grantClassXp(reg, state, slash, 100);
-    expect(state.classes.sword_saint.xp).toBeCloseTo(15, 10);
+    expect(grantClassXp(reg, state, slash, 100)).toEqual([]);
+    state.worn = null;
+    expect(grantClassXp(reg, state, slash, 100)).toEqual([]);
+    state.worn = 'sword_saint';
     expect(grantClassXp(reg, state, slash, -5)).toEqual([]);
     expect(grantClassXp(reg, state, slash, Number.NaN)).toEqual([]);
-    expect(state.classes.sword_saint.xp).toBeCloseTo(15, 10);
+    expect(state.classes.sword_saint.xp).toBe(0);
   });
 
-  it('reports every rank gained, worn class first, and stops at max rank', () => {
+  it('reports every level gained and stops at level 10', () => {
     const state = stateWith({}, { classes: { sword_saint: cp(1), blademaster: cp(1) }, worn: 'blademaster' });
-    // 60 + 73 = 133 for CR 3 at 50% → 266 XP; the rest carries over.
+    // 60 + 73 = 133 for level 3 at 50% → 266 XP; the rest carries over.
     const ups = grantClassXp(reg, state, slash, 270);
     expect(ups.map((u) => [u.cls.id, u.rank])).toEqual([['blademaster', 2], ['blademaster', 3]]);
     expect(state.classes.blademaster.xp).toBeCloseTo(135 - 133, 10);
-    expect(state.classes.sword_saint.rank).toBe(1);
 
     const capped = grantClassXp(reg, state, slash, 1e9);
-    const worn = capped.filter((u) => u.cls.id === 'blademaster');
-    expect(worn.map((u) => u.rank)).toEqual([4, 5, 6, 7, 8, 9, 10]);
-    expect(capped.indexOf(worn[6])).toBe(6);
-    expect(capped.filter((u) => u.cls.id === 'sword_saint').at(-1)?.rank).toBe(CLASS.maxRank[2]);
-    expect(state.classes.blademaster).toMatchObject({ rank: 10, xp: 0 });
-    expect(grantClassXp(reg, state, slash, 1e9).filter((u) => u.cls.id === 'blademaster')).toEqual([]);
+    expect(capped.map((u) => u.rank)).toEqual([4, 5, 6, 7, 8, 9, 10]);
+    expect(state.classes.blademaster).toEqual({ rank: 10, xp: 0 });
+    expect(mastered(BLADEMASTER, state.classes.blademaster)).toBe(true);
+    expect(grantClassXp(reg, state, slash, 1e9)).toEqual([]);
     expect(state.classes.blademaster.xp).toBe(0);
+    expect(state.classes.sword_saint).toEqual({ rank: 1, xp: 0 });
   });
 });
 
-describe('class tree', () => {
-  it('derives points from rank × tier minus spent costs', () => {
-    expect(classPoints(BLADEMASTER, cp(4))).toBe(4);
-    expect(classPoints(SAINT, cp(4))).toBe(8);
-    expect(spentPoints(BLADEMASTER, cp(9, { n1: 3, cap: 1, ghost: 5 }))).toBe(6);
-    expect(classPoints(BLADEMASTER, cp(9, { n1: 3, cap: 1 }))).toBe(3);
-  });
-
-  it('enforces existence, max rank, prerequisites, minSpent and points', () => {
-    const p = cp(2);
-    expect(canBuyNode(BLADEMASTER, p, 'nope')).toMatchObject({ ok: false });
-    expect(canBuyNode(BLADEMASTER, p, 'n3')).toEqual({ ok: false, reason: 'Requires node n1 at rank 1.' });
-    expect(canBuyNode(BLADEMASTER, p, 'cap')).toEqual({
-      ok: false,
-      reason: 'Spend 6 points in the blademaster tree first.',
-    });
-    expect(buyNode(BLADEMASTER, p, 'n1')).toEqual({ ok: true });
-    expect(buyNode(BLADEMASTER, p, 'n3')).toEqual({ ok: true });
-    expect(p.spent).toEqual({ n1: 1, n3: 1 });
-    expect(classPoints(BLADEMASTER, p)).toBe(0);
-    expect(buyNode(BLADEMASTER, p, 'n1')).toEqual({ ok: false, reason: 'Needs 1 point (0 available).' });
-    expect(p.spent).toEqual({ n1: 1, n3: 1 });
-
-    const rich = cp(10, { n1: 3 });
-    expect(canBuyNode(BLADEMASTER, rich, 'n1')).toEqual({ ok: false, reason: 'Already at max rank.' });
-    rich.spent.n2 = 3;
-    expect(canBuyNode(BLADEMASTER, rich, 'cap')).toEqual({ ok: true });
-    rich.rank = 8; // 8 points, 6 spent, cap costs 3
-    expect(canBuyNode(BLADEMASTER, rich, 'cap')).toEqual({ ok: false, reason: 'Needs 3 points (2 available).' });
-  });
-
-  it('respec refunds everything', () => {
-    const p = cp(10, { n1: 3, n2: 3, cap: 1 });
-    respec(p);
-    expect(p.spent).toEqual({});
-    expect(classPoints(BLADEMASTER, p)).toBe(10);
-    // Without the class, even a skill node id is refunded (the v1 behaviour).
-    const q = cp(5, { n1: 1, n2: 2, n5: 1 });
-    respec(q);
-    expect(q.spent).toEqual({});
-  });
-
-  it('respec with the class keeps skill nodes bought (their skill is kept)', () => {
-    const real = createRegistry();
-    const assassin = real.classDef('assassin')!;
-    expect(assassin.tree?.find((n) => n.id === 'n5')).toMatchObject({ kind: 'skill', ref: 'shade_cloak', cost: 2 });
-    const p = cp(5, { n1: 1, n2: 2, n5: 1, cap: 0 });
-    respec(p, assassin);
-    expect(p.spent).toEqual({ n5: 1 });
-    expect(classPoints(assassin, p)).toBe(5 * assassin.tier - 2);
-    // A class without a skill node refunds everything.
-    const q = cp(10, { n1: 3, n2: 3, cap: 1 });
-    respec(q, BLADEMASTER);
-    expect(q.spent).toEqual({});
+describe('the class tree is gone', () => {
+  it('has no points and sells nothing, whatever the old data says', () => {
+    expect(BLADEMASTER.tree?.length).toBeGreaterThan(0);
+    expect(classPoints(BLADEMASTER, cp(9))).toBe(0);
+    expect(spentPoints(BLADEMASTER, cp(9))).toBe(0);
+    expect(canBuyNode(BLADEMASTER, cp(10), 'n1').ok).toBe(false);
   });
 });
 
-describe('imprints', () => {
-  it('unlock at CR 5 / 4 / 3 by tier', () => {
-    expect(imprintUnlocked(BLADEMASTER, cp(4))).toBe(false);
-    expect(imprintUnlocked(BLADEMASTER, cp(5))).toBe(true);
-    expect(imprintUnlocked(SAINT, cp(4))).toBe(true);
-    expect(imprintUnlocked(ASCENDANT, cp(3))).toBe(true);
+describe('imprints (unchanged until Phase 2)', () => {
+  it('unlock at Class Level 5 for every class', () => {
+    expect(CLASS.imprintAt).toBe(5);
+    for (const c of [BLADEMASTER, SAINT, ASCENDANT]) {
+      expect(imprintUnlocked(c, cp(4))).toBe(false);
+      expect(imprintUnlocked(c, cp(5))).toBe(true);
+    }
     expect(imprintUnlocked({ ...BLADEMASTER, imprint: undefined }, cp(10))).toBe(false);
   });
 
-  it('open slots at imprint CR, first Tier II, first Tier III or 12 classes', () => {
+  it('open slots at the imprint level, first Tier II, first Tier III or 12 classes', () => {
     const tier = (t: ClassTier) => CLASSES.find((c) => c.tier === t)!.id;
     expect(imprintSlots(reg, stateWith({}))).toBe(0);
     expect(imprintSlots(reg, stateWith({}, { classes: { blademaster: cp(4) } }))).toBe(0);
@@ -550,18 +527,33 @@ describe('imprints', () => {
   });
 });
 
-describe('worn class bonus', () => {
+describe('worn class bonus (40% at Class Level 1 → 100% at 10)', () => {
+  it('grows linearly with the Class Level', () => {
+    expect(bonusShare(1)).toBeCloseTo(0.4, 10);
+    expect(bonusShare(10)).toBe(1);
+    expect(bonusShare(4)).toBeCloseTo(0.4 + 0.6 * (3 / 9), 10);
+    for (let l = 2; l <= 10; l++) expect(bonusShare(l) - bonusShare(l - 1)).toBeCloseTo(0.6 / 9, 10);
+    expect(bonusShare(0)).toBeCloseTo(0.4, 10);
+    expect(bonusShare(99)).toBe(1);
+    expect(classBonusAt(BLADEMASTER, 10)).toEqual(BLADEMASTER.bonus);
+    expect(classBonusAt(BLADEMASTER, 1)).toEqual({ atk: 4, crit: 0.8, tagPower: { blade: 4, spin: 2 } });
+  });
+
   it('sums tagPower over distinct skill tags', () => {
-    const state = stateWith({}, { classes: { blademaster: cp(1) }, worn: 'blademaster' });
+    const state = stateWith({}, { classes: { blademaster: cp(10) }, worn: 'blademaster' });
     expect(wornClass(reg, state)?.id).toBe('blademaster');
     expect(classTagPct(reg, state, reg.skill('whirlwind')!)).toBe(15);
     expect(classTagPct(reg, state, { tags: ['blade', 'blade'] })).toBe(10);
     expect(classTagPct(reg, state, reg.skill('orb')!)).toBe(0);
+    state.classes.blademaster.rank = 1;
+    expect(classTagPct(reg, state, reg.skill('whirlwind')!)).toBe(6);
   });
 
   it('returns stats without tagPower', () => {
-    const state = stateWith({}, { classes: { blademaster: cp(1) }, worn: 'blademaster' });
+    const state = stateWith({}, { classes: { blademaster: cp(10) }, worn: 'blademaster' });
     expect(classStatBonus(reg, state)).toEqual({ atk: 10, crit: 2 });
+    state.classes.blademaster.rank = 1;
+    expect(classStatBonus(reg, state)).toEqual({ atk: 4, crit: 0.8 });
   });
 
   it('is empty when nothing (discovered) is worn', () => {
@@ -569,5 +561,341 @@ describe('worn class bonus', () => {
     const ghost = stateWith({}, { worn: 'blademaster' });
     expect(wornClass(reg, ghost)).toBeUndefined();
     expect(classTagPct(reg, ghost, reg.skill('slash')!)).toBe(0);
+  });
+});
+
+// ------------------------------------------------------------------ v4 classes: kits, the level table, discovery, Trials
+
+const HEAT: ClassMechanic = {
+  kind: 'gauge',
+  name: 'Heat',
+  max: 10,
+  fill: [{ on: 'hit', weapon: 'sword', amount: 1 }],
+  decay: { afterMs: 3000, perSec: 2 },
+  effects: [{ do: 'nextSkill', at: 'max', filter: { of: 'kit' }, boost: { sizePct: 100, hpCostPct: 5 } }],
+  autoRule: { spend: 'atMax' },
+};
+
+const KIT = ['k_edge', 'k_cut', 'k_line', 'k_arc', 'k_heat'] as [string, string, string, string, string];
+
+const EMBERBLADE: ClassDefV4 = {
+  id: 'emberblade',
+  name: 'Emberblade',
+  icon: 'i',
+  desc: 'Sword forms that breathe like a bellows.',
+  hint: 'Carry the forge on an edge.',
+  rarity: 'uncommon',
+  weapon: 'sword',
+  source: 'fire',
+  mechanic: HEAT,
+  mechanicUpgrade: { line: 'Heat holds 12.', mechanic: { ...HEAT, max: 12 } },
+  kit: KIT,
+  passive: 'banked_coals',
+  discover: { requires: [{ type: 'element', id: 'fire' }, { type: 'flag', id: 'kills:sword:fire', min: 20 }] },
+  bonus: { atk: 5, tagPower: { fire: 5 } },
+  look: 'emberblade',
+};
+
+const WARDEN_KIT = ['w_slam', 'w_plant', 'w_cut', 'w_bulwark', 'w_shatter'] as [string, string, string, string, string];
+const STONEWARDEN: ClassDefV4 = {
+  id: 'stonewarden',
+  name: 'Stonewarden',
+  icon: 'i',
+  desc: 'Carves runes into steel.',
+  hint: 'Stone remembers.',
+  rarity: 'rare',
+  weapon: 'sword',
+  source: 'earth',
+  mechanic: { kind: 'combo', name: 'Cadence', length: 3, distinct: true, finisher: { name: 'Finisher', boost: { crit: true } }, autoRule: { spend: 'atMax' } },
+  kit: WARDEN_KIT,
+  discover: { requires: [{ type: 'flag', id: 'hits:sword', min: 60 }], trial: 'tamsin_trial_stonewarden' },
+  bonus: {},
+};
+
+const kitSkill = (id: string, classOf: string, extra: Partial<SkillDef> = {}): SkillDef =>
+  sk({ id, tags: ['blade'], weapons: ['sword'], classOf, ...extra });
+
+const TRIAL: QuestDef = {
+  id: 'tamsin_trial_stonewarden',
+  name: 'Trial of Stone',
+  giver: 'tamsin',
+  summary: 'Prove it.',
+  dialog: { offer: 'Ready?', progress: 'Go on.', complete: 'Done.' },
+  objectives: [{ kind: 'use', tag: 'blade', count: 1 }],
+  rewards: {},
+  trialOf: 'stonewarden',
+};
+
+const V4: GameData = {
+  ...DATA,
+  elements: [...DATA.elements, el('earth', 'Earth')],
+  skills: [
+    ...DATA.skills,
+    ...KIT.map((id) => kitSkill(id, 'emberblade', { element: 'fire' })),
+    ...WARDEN_KIT.map((id) => kitSkill(id, 'stonewarden')),
+    sk({ id: 'ember_dart', tags: ['arcane', 'spell'], weapons: undefined, element: 'fire', tier: 2 }),
+    sk({ id: 'knife_fan', tags: ['pierce'], weapons: ['dagger'], tier: 3 }),
+    sk({ id: 'flame_cut', tags: ['blade'], weapons: ['sword'], element: 'fire' }),
+  ],
+  classes: [...CLASSES, EMBERBLADE, STONEWARDEN],
+  passives: [
+    ...treePassives,
+    { id: 'banked_coals', name: 'Banked Coals', icon: 'i', desc: 'Burns pop when they end.', source: 'class', maxRank: 1, budget: 3, effect: { kind: 'trigger', when: 'statusEnds', do: { burst: 0.3 } } },
+  ],
+  quests: [TRIAL],
+};
+const reg4 = new Registry(V4);
+
+describe('v4 fixture', () => {
+  it('is a consistent bundle', () => {
+    expect(reg4.validate()).toEqual([]);
+  });
+});
+
+describe('the level table (SPEC-v4 §3.4)', () => {
+  it('unlocks kit skills at levels 1 / 1 / 2 / 4 / 6', () => {
+    expect(CLASS.kitAt).toEqual([1, 1, 2, 4, 6]);
+    expect([1, 2, 3, 4, 5, 6, 10].map(kitUnlocked)).toEqual([2, 3, 3, 4, 4, 5, 5]);
+    expect(kitSkillsAt(EMBERBLADE, 1)).toEqual(['k_edge', 'k_cut']);
+    expect(kitSkillsAt(EMBERBLADE, 4)).toEqual(['k_edge', 'k_cut', 'k_line', 'k_arc']);
+    expect(kitSkillsAt(EMBERBLADE, 6)).toEqual(KIT);
+    expect(kitSkillsAt(BLADEMASTER, 10)).toEqual([]);
+    expect(KIT.map((id) => kitLevelOf(EMBERBLADE, id))).toEqual([1, 1, 2, 4, 6]);
+    expect(kitLevelOf(EMBERBLADE, 'slash')).toBeUndefined();
+  });
+
+  it('upgrades the mechanic at level 8', () => {
+    expect(CLASS.mechanicUpgradeAt).toBe(8);
+    expect(classMechanic(EMBERBLADE, 7)).toBe(HEAT);
+    expect(classMechanic(EMBERBLADE, 8)).toMatchObject({ kind: 'gauge', max: 12 });
+    expect(classMechanic(STONEWARDEN, 10)).toBe(STONEWARDEN.mechanic);
+    expect(classMechanic(BLADEMASTER, 10)).toBeUndefined();
+    const state = stateWith({}, { classes: { emberblade: cp(8) }, worn: 'emberblade' });
+    expect(wornMechanic(reg4, state)).toMatchObject({ max: 12 });
+  });
+
+  it('masters at level 10, and only there', () => {
+    expect(mastered(EMBERBLADE, cp(9))).toBe(false);
+    expect(mastered(EMBERBLADE, cp(10))).toBe(true);
+    expect(mastered(EMBERBLADE, undefined)).toBe(false);
+  });
+
+  it('a worn kit class gains XP from kit skills and from anything usable with its weapon, never otherwise', () => {
+    const feeds = (id: string) => classFeeds(reg4, EMBERBLADE, reg4.skill(id)!);
+    expect(feeds('k_edge')).toBe(true);
+    expect(feeds('slash')).toBe(true); // sword-bound
+    expect(feeds('ember_dart')).toBe(true); // free: works with a sword in hand
+    expect(feeds('knife_fan')).toBe(false); // needs a dagger
+    const state = stateWith({}, { classes: { emberblade: cp(1), blademaster: cp(1) }, worn: 'emberblade' });
+    grantClassXp(reg4, state, reg4.skill('knife_fan')!, 100);
+    expect(state.classes.emberblade.xp).toBe(0);
+    grantClassXp(reg4, state, reg4.skill('ember_dart')!, 100);
+    expect(state.classes.emberblade.xp).toBe(50);
+    expect(state.classes.blademaster.xp).toBe(0); // not worn: nothing, though slash-like skills match it
+  });
+});
+
+describe('kit-based class slots', () => {
+  const known = (ids: string[], patch: Partial<SkillBookState> = {}) =>
+    stateWith(Object.fromEntries(ids.map((id) => [id, 1])), { classes: { emberblade: cp(1) }, worn: 'emberblade', ...patch });
+
+  it('holds the kit in kit order once every kit skill is known, whatever else is known', () => {
+    const state = known([...KIT].reverse().concat(['whirlwind', 'flame_cut', 'ember_dart']));
+    state.skills.whirlwind.rank = 10;
+    expect(classSkills(reg4, state, EMBERBLADE)).toEqual(KIT);
+  });
+
+  it('fills the slots of kit skills not known yet with related skills, keeping kit positions', () => {
+    const state = known(['k_edge', 'k_cut', 'whirlwind', 'flame_cut', 'ember_dart', 'knife_fan', 'slash']);
+    // Slots 3 – 5: bound to the sword and of the class element first, then sword-bound, then the free fire spell.
+    const picks = classSkills(reg4, state, EMBERBLADE);
+    expect(picks.slice(0, 2)).toEqual(['k_edge', 'k_cut']);
+    expect(picks[2]).toBe('flame_cut');
+    expect(picks).toHaveLength(CLASS_SLOTS);
+    expect(picks).not.toContain('knife_fan'); // needs a dagger
+    expect(picks).not.toContain('slash'); // a basic attack never sits on the bar
+  });
+
+  it('a late kit skill takes its own slot back from the fill', () => {
+    const state = known(['k_edge', 'k_cut', 'k_heat', 'whirlwind', 'flame_cut', 'ember_dart']);
+    const picks = classSkills(reg4, state, EMBERBLADE);
+    expect(picks[4]).toBe('k_heat');
+    expect(picks.slice(2, 4)).toEqual(['flame_cut', 'whirlwind']); // sword + fire, then sword; the free fire spell waits
+    state.skills.k_line = prog('k_line', 1);
+    expect(classSkills(reg4, state, EMBERBLADE)[2]).toBe('k_line');
+  });
+
+  it("never fills with another class's own skill, and returns fewer than 5 when nothing usable is known", () => {
+    const state = known(['k_edge', 'w_slam', 'knife_fan']);
+    expect(classSkills(reg4, state, EMBERBLADE)).toEqual(['k_edge']);
+  });
+
+  it('appends spare fills when asked for more than the class slots', () => {
+    const state = known([...KIT, 'whirlwind', 'flame_cut', 'ember_dart', 'knife_fan']);
+    const all = classSkills(reg4, state, EMBERBLADE, Infinity);
+    expect(all.slice(0, 5)).toEqual(KIT);
+    expect(new Set(all.slice(5))).toEqual(new Set(['whirlwind', 'flame_cut', 'ember_dart']));
+  });
+
+  it('classSkillFit: kit skills match, usable skills are fills, the rest is nothing', () => {
+    const fit = (id: string) => classSkillFit(reg4, EMBERBLADE, reg4.skill(id)!);
+    expect(fit('k_heat')).toBe('match');
+    expect(fit('whirlwind')).toBe('related');
+    expect(fit('ember_dart')).toBe('related');
+    expect(fit('knife_fan')).toBeNull();
+    expect(fit('w_slam')).toBeNull();
+  });
+
+  it('class skills sit only in their own class slots', () => {
+    expect(ownSlotEligible(reg4.skill('k_edge')!)).toBe(false);
+    expect(ownSlotEligible(reg4.skill('whirlwind')!)).toBe(true);
+    expect(ownSlotEligible(reg4.skill('slash')!)).toBe(false);
+    expect(classSlotEligible(EMBERBLADE, reg4.skill('k_edge')!)).toBe(true);
+    expect(classSlotEligible(STONEWARDEN, reg4.skill('k_edge')!)).toBe(false);
+    // A v2 class never takes a class skill either.
+    expect(classSkillFit(reg4, BLADEMASTER, reg4.skill('k_edge')!)).toBeNull();
+  });
+
+  it('a class without a kit keeps the relevance pick', () => {
+    const state = stateWith({ whirlwind: 3, throw: 2, cleave: 1, searing: 1, orb: 5 }, { classes: { blademaster: cp(1) }, worn: 'blademaster' });
+    const picks = classSkills(reg4, state, BLADEMASTER);
+    expect(new Set(picks)).toEqual(new Set(['whirlwind', 'throw', 'cleave', 'searing']));
+  });
+});
+
+describe('discovery by ClassDiscovery', () => {
+  const ctx4 = (state: SkillBookState): RequirementContext => ({
+    ...ctxOf(state, reg4),
+    questDone: (id) => state.quests?.done[id] ?? 0,
+    deed: (id) => state.deeds[id] ?? 0,
+  });
+
+  it('needs every requirement, shows them as progress, and ignores v2 patterns', () => {
+    const state = stateWith({}, { flags: { 'kills:sword:fire': 20 } });
+    expect(discoverableNow(reg4, state, EMBERBLADE, ctx4(state))).toBe(false);
+    const half = classProgress(reg4, state, EMBERBLADE, ctx4(state));
+    expect(half).toMatchObject({ discovered: false, progress: 0.5, clauses: [], codex: 'near' });
+    expect(half.requires?.map((r) => r.ok)).toEqual([false, true]);
+    state.elements.fire = { source: 'test', learnedAt: 0 };
+    expect(discoverableNow(reg4, state, EMBERBLADE, ctx4(state))).toBe(true);
+    state.classes.emberblade = cp(1);
+    expect(discoverableNow(reg4, state, EMBERBLADE, ctx4(state))).toBe(false);
+    expect(classProgress(reg4, state, EMBERBLADE, ctx4(state))).toMatchObject({ discovered: true, progress: 1, codex: 'known' });
+  });
+
+  it('a Trial class waits for its quest: "Trial ready", then unlocked when the Trial is finished', () => {
+    const state = stateWith({});
+    expect(trialReady(state, STONEWARDEN, ctx4(state))).toBe(false);
+    state.flags['hits:sword'] = 60;
+    expect(trialReady(state, STONEWARDEN, ctx4(state))).toBe(true);
+    expect(discoverableNow(reg4, state, STONEWARDEN, ctx4(state))).toBe(false);
+    expect(classProgress(reg4, state, STONEWARDEN, ctx4(state)).trial).toEqual({ quest: TRIAL.id, ready: true, done: false });
+    state.quests!.done[TRIAL.id] = 1;
+    expect(trialReady(state, STONEWARDEN, ctx4(state))).toBe(false);
+    expect(discoverableNow(reg4, state, STONEWARDEN, ctx4(state))).toBe(true);
+    expect(trialReady(state, EMBERBLADE, ctx4(state))).toBe(false); // no Trial at all
+  });
+
+  it('reads deeds and finished quests as requirements', () => {
+    const state = stateWith({});
+    const ctx = ctx4(state);
+    const book = new SkillBook(reg4);
+    expect(book.meets({ type: 'deed', id: 'fallen', tier: 2 })).toBe(false);
+    state.deeds.fallen = 2;
+    expect(ctx.deed?.('fallen')).toBe(2);
+    book.state.deeds.fallen = 2;
+    expect(book.meets({ type: 'deed', id: 'fallen', tier: 2 })).toBe(true);
+    expect(book.meets({ type: 'deed', id: 'fallen', tier: 3 })).toBe(false);
+    expect(book.meets({ type: 'quest', id: TRIAL.id })).toBe(false);
+    expect(book.describe({ type: 'quest', id: TRIAL.id })).toBe('Finish Trial of Stone');
+    expect(book.describe({ type: 'class', id: 'emberblade', rank: 10 })).toBe('Master Emberblade');
+  });
+});
+
+describe('SkillBook: v4 classes end to end', () => {
+  function emberBook(): SkillBook {
+    const book = new SkillBook(reg4);
+    book.learn('slash', 'start');
+    book.learnElement('fire', 'test');
+    return book;
+  }
+
+  it('discovers by requirements, wears the class and learns kit skills 1 and 2', () => {
+    const book = emberBook();
+    const learned: string[] = [];
+    book.events.on('learned', (e) => learned.push(`${e.skill.id}<${e.source}`));
+    expect(book.state.classes.emberblade).toBeUndefined();
+    book.incFlag('kills:sword:fire', 20);
+    expect(book.state.classes.emberblade).toEqual({ rank: 1, xp: 0 });
+    expect(book.state.worn).toBe('emberblade');
+    expect(learned).toEqual(['k_edge<class:emberblade', 'k_cut<class:emberblade']);
+    expect(book.kitSkills('emberblade')).toEqual(['k_edge', 'k_cut']);
+    expect(book.classSkills('emberblade')).toEqual(['k_edge', 'k_cut']);
+    expect(book.mechanic()).toBe(HEAT);
+    expect(book.passives().map((p) => [p.def.id, p.source])).toContainEqual(['banked_coals', 'class']);
+    expect(book.totals().triggers).toEqual([{ id: 'banked_coals', source: 'class', when: 'statusEnds', do: { burst: 0.3 } }]);
+  });
+
+  it('levels only while worn, learns the kit as it goes, upgrades at 8 and masters at 10', () => {
+    const book = emberBook();
+    book.incFlag('kills:sword:fire', 20);
+    const levels: number[] = [];
+    const masteredIds: string[] = [];
+    book.events.on('classRank', (e) => levels.push(e.rank));
+    book.events.on('classMastered', (e) => masteredIds.push(e.cls.id));
+    const bonusAt1 = book.activeBonus().atk;
+    expect(bonusAt1).toBe(2); // 40% of 5
+    while (book.state.classes.emberblade.rank < 2) book.addMastery('slash', 10);
+    expect(book.has('k_line')).toBe(true);
+    expect(book.has('k_arc')).toBe(false);
+    while (book.state.classes.emberblade.rank < 6) book.addMastery('slash', 50);
+    expect(KIT.every((id) => book.has(id))).toBe(true);
+    expect(book.classSkills('emberblade')).toEqual(KIT);
+    while (book.state.classes.emberblade.rank < 8) book.addMastery('slash', 50);
+    expect(book.mechanic()).toMatchObject({ max: 12 });
+    expect(masteredIds).toEqual([]);
+    while (book.state.classes.emberblade.rank < 10) book.addMastery('slash', 50);
+    expect(levels).toEqual([2, 3, 4, 5, 6, 7, 8, 9, 10]);
+    expect(masteredIds).toEqual(['emberblade']);
+    expect(book.isMastered('emberblade')).toBe(true);
+    expect(book.activeBonus().atk).toBe(5);
+    expect(book.tagPowerFor(reg4.skill('k_edge')!)).toBe(5);
+
+    // Unworn: no XP at all.
+    book.unwear();
+    const before = JSON.stringify(book.state.classes);
+    book.addMastery('slash', 500);
+    expect(JSON.stringify(book.state.classes)).toBe(before);
+  });
+
+  it('announces a ready Trial once, offers the quest only then, and unlocks the class when it is finished', () => {
+    const book = new SkillBook(reg4);
+    book.learn('slash', 'start');
+    const ready: string[] = [];
+    book.events.on('trialReady', (e) => ready.push(`${e.cls.id}:${e.quest}`));
+    expect(book.questStatus(TRIAL.id)).toBe('locked');
+    book.incFlag('hits:sword', 60);
+    expect(ready).toEqual(['stonewarden:tamsin_trial_stonewarden']);
+    expect(book.trialReady('stonewarden')).toBe(true);
+    book.incFlag('hits:sword', 1);
+    expect(ready).toHaveLength(1);
+    expect(book.questStatus(TRIAL.id)).toBe('available');
+    expect(book.acceptQuest(TRIAL.id).ok).toBe(true);
+    book.notifyQuest({ type: 'use', skill: reg4.skill('slash')! });
+    expect(book.turnInQuest(TRIAL.id).ok).toBe(true);
+    expect(book.state.classes.stonewarden).toEqual({ rank: 1, xp: 0 });
+    expect(book.has('w_slam') && book.has('w_plant')).toBe(true);
+    expect(book.trialReady('stonewarden')).toBe(false);
+  });
+
+  it('keeps the old SkillBook class API working', () => {
+    const book = emberBook();
+    book.incFlag('kills:sword:fire', 20);
+    expect(book.buyNode('emberblade', 'n1').ok).toBe(false);
+    expect(book.respec('emberblade').ok).toBe(false);
+    expect(book.wear('emberblade')).toMatchObject({ ok: true });
+    expect(book.imprintSlots()).toBe(0);
+    expect(book.setImprints([]).ok).toBe(true);
+    expect(book.classProgress(EMBERBLADE).discovered).toBe(true);
   });
 });

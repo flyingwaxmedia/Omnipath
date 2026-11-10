@@ -191,6 +191,7 @@ describe('SIZE_TABLE / sizeMultiplier', () => {
     dagger: [1.0, 0.85, 0.65],
     sword: [0.85, 1.0, 0.9],
     staff: [1.0, 1.0, 1.0],
+    fists: [1.0, 0.95, 0.8],
     heavy: [0.7, 0.9, 1.15],
   };
 
@@ -199,6 +200,7 @@ describe('SIZE_TABLE / sizeMultiplier', () => {
       dagger: { S: 1.0, M: 0.85, L: 0.65 },
       sword: { S: 0.85, M: 1.0, L: 0.9 },
       staff: { S: 1.0, M: 1.0, L: 1.0 },
+      fists: { S: 1.0, M: 0.95, L: 0.8 },
       heavy: { S: 0.7, M: 0.9, L: 1.15 },
     });
   });
@@ -318,7 +320,8 @@ describe('isMagic / isHybrid', () => {
   });
 
   it('any-weapon skills tagged spirit, technique or echo are hybrids', () => {
-    expect(HYBRID_TAGS).toEqual(['spirit', 'technique', 'echo']);
+    expect(HYBRID_TAGS).toEqual(['spirit', 'technique', 'echo', 'fist']);
+    expect(isHybrid(skill({ tags: ['fist', 'melee'] }))).toBe(true);
     expect(isHybrid(skill({ tags: ['spirit', 'melee'] }))).toBe(true);
     expect(isHybrid(skill({ tags: ['melee', 'technique'] }))).toBe(true);
     expect(isHybrid(skill({ tags: ['echo', 'aoe'] }))).toBe(true);

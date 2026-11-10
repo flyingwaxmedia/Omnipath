@@ -71,14 +71,14 @@ export const GROUND_TRUTH = {
   novaDelayMs: 200,
   monsterNovaMinMs: 500,
   /** Monster telegraph length per shape (novas: max(500, delay)); a technique's castMs adds to it. */
-  tellMs: { strike: 300, spin: 400, projectile: 300, dash: 400, chain: 300, buff: 400 },
+  tellMs: { strike: 300, spin: 400, projectile: 300, dash: 400, chain: 300, buff: 400, zone: 400, blink: 400, mend: 400, shield: 400 },
   /** Player dash time; the hit resolves at 60 %. Monster dashes take max(140, len / 1.1) ms. */
   dashMs: 170,
   chainHopPx: 150,
   chainStepMs: { bolt: 60, knife: 90 },
   arcRiderPx: 120,
   /** Status durations (ms); knockback and pull are one-shots. */
-  statusMs: { burn: 1600, poison: 4000, bleed: 2000, slow: 2200, soak: 2200, freeze: 2200, stun: 650, shock: 1200, smite: 1000, knockback: 300, pull: 400 },
+  statusMs: { burn: 1600, poison: 4000, bleed: 2000, slow: 2200, soak: 2200, freeze: 2200, stun: 650, shock: 1200, smite: 1000, knockback: 300, pull: 400, root: 2000, launch: 1200, expose: 4000, lure: 3000 },
   /** Monster dashes are at least this wide (MonsterSkills). */
   monsterLaneMinPx: 24,
   /** One player body radius for every hit test (SkillSystem.PLAYER_R). */
@@ -140,7 +140,14 @@ export function hitGeometry(skill: SkillDef, owner: VfxOwner): HitGeometry {
       // MonsterSkills zaps the player once (no hops); SkillSystem hops up to `jumps` times within 150 px.
       return monster ? { kind: 'chain', range: sh.range, hop: 0, jumps: 0 } : { kind: 'chain', range: sh.range, hop: GROUND_TRUTH.chainHopPx, jumps: sh.jumps };
     case 'buff':
+    case 'mend':
+    case 'shield':
       return { kind: 'self' };
+    // v4 kinds until their recipes land (VFX lane): a zone reads as a ground disc, a blink as its arrival disc.
+    case 'zone':
+      return { kind: 'disc', r: sh.radius, aspect: monster ? ZONE_ASPECT : 1, at: sh.range > 0 ? 'aim' : 'caster', addCasterRadius: false };
+    case 'blink':
+      return sh.arrive ? { kind: 'disc', r: sh.arrive.radius, aspect: 1, at: 'aim', addCasterRadius: false } : { kind: 'self' };
   }
 }
 
@@ -364,6 +371,15 @@ function carrierOf(c: Ctx): Carrier {
       return { kind: 'chain', mode: chainMode(c) };
     case 'buff':
       return { kind: 'buff', motif: BUFF_MOTIF[sh.stat] };
+    // v4 kinds borrow the nearest v2 carrier until their recipes land (VFX lane).
+    case 'zone':
+      return { kind: 'nova', core: lookOf(c.rootFamily).core, unit: novaUnit(c.rootId, c.family) };
+    case 'blink':
+      return { kind: 'dash', mode: dashMode(c) };
+    case 'mend':
+      return { kind: 'buff', motif: BUFF_MOTIF.regen };
+    case 'shield':
+      return { kind: 'buff', motif: BUFF_MOTIF.def };
   }
 }
 
@@ -838,6 +854,15 @@ export function statusPieces(kind: StatusKind, source: FamilyId, body: BodySize,
         // Static arcs are loops: they carry the one-shot's life, or they would outlive the pull.
         piece('ring', { r: 20, aspect: 1, thick: 1, style: 'solid', ink: 'mid', anim: 'static', arc: [0, 120], ms: 300 }, ink, { anchor: feet, layer: 'ground', place: { pattern: 'single', count: 3 }, lifeMs: life }),
       ];
+    // v4 statuses borrow existing units until their own land (VFX lane): held = chevrons at the feet, airborne and
+    // lured = speed lines, exposed = stars overhead.
+    case 'root':
+      return [u('chevron', feet, { place: { pattern: 'single', count: 2 } })];
+    case 'launch':
+    case 'lure':
+      return [u('speedline', mid, { place: { pattern: 'single', count: 3 } })];
+    case 'expose':
+      return [u('star', at('body', -BODYTOP[body] - 4), { place: { pattern: 'orbit', count: 2, radius: 7 } })];
   }
 }
 

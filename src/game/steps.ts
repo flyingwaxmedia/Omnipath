@@ -89,6 +89,10 @@ export function reqStep(reg: Registry, book: SkillBook, req: Requirement, selfId
       const name = reg.skill(req.skill)?.name ?? 'it';
       return `Watch a monster use ${name} (${seen(book.state.witness[req.skill] ?? 0, req.count)})`;
     }
+    case 'deed':
+      return 'Keep exploring';
+    case 'quest':
+      return `Finish the quest ${reg.quest(req.id)?.name ?? 'you were given'}`;
   }
 }
 

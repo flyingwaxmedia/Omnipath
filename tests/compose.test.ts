@@ -20,7 +20,7 @@ import {
   variantId,
 } from '../src/core/compose';
 import { Registry } from '../src/core/registry';
-import type { ElementDef, EssenceDef, GameData, SkillDef } from '../src/core/types';
+import { LEGACY_SHAPE_KINDS, NEW_SHAPE_KINDS, type ElementDef, type EssenceDef, type GameData, type ShapeKind, type SkillDef } from '../src/core/types';
 import { createRegistry } from '../src/data';
 
 // ------------------------------------------------------------------ inline fixture
@@ -531,9 +531,12 @@ describe('essence legality', () => {
 describe('shape merges', () => {
   it('SHAPE_PRIORITY orders dash > nova > projectile > chain > spin > strike > buff', () => {
     const order = Object.entries(SHAPE_PRIORITY)
+      .filter(([k]) => LEGACY_SHAPE_KINDS.includes(k as ShapeKind))
       .sort((a, b) => b[1] - a[1])
       .map(([k]) => k);
     expect(order).toEqual(['dash', 'nova', 'projectile', 'chain', 'spin', 'strike', 'buff']);
+    // The v4 kinds never merge, so they rank with buffs.
+    for (const k of NEW_SHAPE_KINDS) expect(SHAPE_PRIORITY[k]).toBe(0);
   });
 
   it('trims a long primary name from the front without opening on a lowercase word (real data)', () => {

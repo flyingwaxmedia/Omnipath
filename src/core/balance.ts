@@ -1,5 +1,5 @@
 // Shared balance helpers for content authors. Pure functions.
-import type { ClassNode, ClassTier, MonsterRank, PassiveDef, PassiveStat } from './types';
+import type { ClassNode, ClassTier, MonsterRank, PassiveDef, PassiveStat, WeaponType } from './types';
 
 const RANK_MULT: Record<MonsterRank, { hp: number; atk: number; def: number; exp: number; coins: number }> = {
   common: { hp: 1, atk: 1, def: 1, exp: 1, coins: 1 },
@@ -26,7 +26,7 @@ export function monsterStats(level: number, rank: MonsterRank = 'common') {
 export interface ClassTreeSpec {
   classId: string;
   className: string;
-  tier: ClassTier;
+  tier?: ClassTier;
   /** Primary tag (power + SP nodes) and secondary tag (cooldown node; defaults to primary). */
   tag: string;
   tag2?: string;
@@ -66,6 +66,53 @@ export const CLASS_TREE_POWER: Readonly<
 export const CLASS_POWER_BUDGET = 25;
 
 /**
+ * SPEC-v4 §3.5 flat power budget: a worn class `bonus` adds at most this many damage points to any one skill
+ * (ATK or MATK %, plus the `tagPower` entries the skill can carry together), at Class Level 10.
+ */
+export const CLASS_BONUS_BUDGET = 10;
+
+/** Each class passive declares `budget` (its worst-case damage points on one skill) ≤ this. Three Keepsakes ⇒ ≤ 15. */
+export const KEEPSAKE_BUDGET = 5;
+
+/** The class rotation simulation's bands (SPEC-v4 §3.5; sim.ts, tests/class-sim.test.ts). All [T]. */
+export const CLASS_SIM = {
+  /** Fight length (s). */
+  seconds: 60,
+  /** Character and pack level. */
+  level: 10,
+  /** AUTO sustained damage must land within this share of the median of the Commons. */
+  autoBand: 0.1,
+  /** A manual script may beat that median by at most this share. */
+  manualCap: 0.25,
+} as const;
+
+/**
+ * Player stats before bonuses and buffs, by level and weapon (the same numbers as the game's computeStats; a test
+ * keeps the two in step). Used by the class simulation.
+ */
+export function baseStats(level: number, weapon: { atk: number; matk: number; crit: number }) {
+  return {
+    maxHp: 110 + 20 * (level - 1),
+    maxSp: 40 + 7 * (level - 1),
+    atk: 10 + 3 * (level - 1) + weapon.atk,
+    matk: 8 + 3 * (level - 1) + weapon.matk,
+    def: 2 + level * 0.8,
+    crit: weapon.crit,
+  };
+}
+
+/** Size multipliers (S / M / L) of each weapon; combat.SIZE_TABLE adds the `heavy` row. Bare Hands is [T]. */
+export const WEAPON_SIZE: Readonly<Record<WeaponType, Readonly<Record<'S' | 'M' | 'L', number>>>> = {
+  dagger: { S: 1.0, M: 0.85, L: 0.65 },
+  sword: { S: 0.85, M: 1.0, L: 0.9 },
+  staff: { S: 1.0, M: 1.0, L: 1.0 },
+  fists: { S: 1.0, M: 0.95, L: 0.8 },
+};
+
+/**
+ * @deprecated v2 content helper. The rules ignore tree nodes since v4 Phase 1; only the `imprint` it builds is still
+ * in use (until Phase 2). Kept so today's src/data/classes.ts compiles; `spec.tier` defaults to 1.
+ *
  * Templated class tree: 4 passive nodes (3 ranks each) + optional skill node + capstone, and the
  * class imprint. Player-facing names are plain (docs/UX-SIMPLE.md): "<Tag> Power" (damage), "<Tag>
  * Thrift" (SP cost), "<Tag2> Haste" (cooldown), "<Class> Training" (stat), "True <Class>" (capstone)
@@ -76,8 +123,8 @@ export const CLASS_POWER_BUDGET = 25;
  * against them); only the numbers are tuned.
  */
 export function classTreeTemplate(spec: ClassTreeSpec): { nodes: ClassNode[]; passives: PassiveDef[]; imprint: PassiveDef } {
-  const scale = [0, 1, 1.25, 1.5][spec.tier];
-  const dmg = CLASS_TREE_POWER[spec.tier];
+  const scale = [0, 1, 1.25, 1.5][spec.tier ?? 1];
+  const dmg = CLASS_TREE_POWER[spec.tier ?? 1];
   const p = (n: number, name: string, desc: string, effect: PassiveDef['effect'], maxRank = 3): PassiveDef => ({
     id: `cls_${spec.classId}_${n}`,
     name,

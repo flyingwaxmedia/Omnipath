@@ -46,6 +46,14 @@ export function shapeText(s: SkillShape): string {
       return `+${s.amount}${s.stat === 'regen' ? '% HP/s' : s.stat === 'crit' ? ' crit' : '%'} ${
         s.stat === 'regen' ? '' : s.stat.toUpperCase()
       } for ${s.duration / 1000}s`;
+    case 'zone':
+      return `A field that stays for ${s.durationMs / 1000}s`;
+    case 'blink':
+      return 'Vanish and appear';
+    case 'mend':
+      return `Heals ${s.pct}% HP${s.overMs ? ` over ${s.overMs / 1000}s` : ''}`;
+    case 'shield':
+      return `A shell that soaks hits for ${s.durationMs / 1000}s`;
   }
 }
 

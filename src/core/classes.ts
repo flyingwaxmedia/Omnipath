@@ -1,41 +1,62 @@
-// Classes v2 (docs/SPEC-v2.md §5): discovery (permissive Tier I, hardened Tier II/III), Class Rank
-// XP fed by skill mastery, the class tree (points, node purchase, respec), imprint unlocks and
-// slots, and the worn class's bonus. Pure functions over the Registry and SkillBookState; the
-// SkillBook orchestrates (events, signature grants, wearing, whispers) and owns every mutation
-// made through grantClassXp / buyNode / respec.
+// Classes v4 (docs/SPEC-v4.md §3.3 – §3.4; Phase 1): rarity, one max level (10) for every class, Class XP only
+// while the class is worn, the level table (kit skills at 1 / 1 / 2 / 4 / 6, the mechanic upgrade at 8, mastery at
+// 10, the bonus growing from 40% to 100%), discovery by ClassDiscovery (requirements + an optional Trial quest) and
+// kit-based class slots. Pure functions over the Registry and SkillBookState; the SkillBook orchestrates (events,
+// kit grants, wearing, whispers).
+//
+// A class without `discover` / `kit` is a v2 class and keeps its v2 behaviour (pattern discovery, relevance slots)
+// until the content lane re-authors it. Today's Keepsakes (`imprint`, Class Level 5) work unchanged until Phase 2.
+// The class tree is gone: no points, no nodes.
 import type { Registry } from './registry';
-import { countTagged, describeRequirement, meetsRequirement, type RequirementContext } from './requirements';
+import { countTagged, describeRequirement, meetsRequirement, weaponOk, type RequirementContext } from './requirements';
 import type { ClassProgress, SkillBookState, SkillProgress } from './state';
-import type { ClassClause, ClassDef, ClassTier, ElementId, SkillDef, StatBonus } from './types';
+import {
+  GRIP_TAG,
+  type ClassClause,
+  type ClassDef,
+  type ClassMechanic,
+  type ClassTier,
+  type ElementId,
+  type Rarity,
+  type SkillDef,
+  type StatBonus,
+  type WeaponType,
+} from './types';
 
-/** Class tuning (SPEC §5). */
+/** Class tuning (SPEC-v4 §3.4). All [T]. */
 export const CLASS: {
-  /** Highest Class Rank per tier. */
-  readonly maxRank: Readonly<Record<ClassTier, number>>;
-  /** Share of a skill's mastery XP the worn class gains when the skill matches one of its clauses. */
+  /** The one max Class Level. "Mastered" means this level, nothing else. */
+  readonly maxLevel: number;
+  /** kit[i] unlocks at Class Level kitAt[i]. */
+  readonly kitAt: readonly [number, number, number, number, number];
+  /** Class Level from which `ClassDef.mechanicUpgrade` replaces the mechanic. */
+  readonly mechanicUpgradeAt: number;
+  /** Share of a skill's mastery XP the worn class gains. Unworn classes gain nothing. */
   readonly wornShare: number;
-  /** Share every other discovered, matching class gains. */
-  readonly bleedShare: number;
-  /** Class Rank at which a class's imprint unlocks, per tier. */
-  readonly imprintAt: Readonly<Record<ClassTier, number>>;
+  /** Class XP curve multiplier per rarity. */
+  readonly xpMul: Readonly<Record<Rarity, number>>;
+  /** Share of the class bonus at Class Level 1; it grows linearly to 1 at maxLevel. */
+  readonly bonusAtOne: number;
+  /** Class Level at which today's Keepsake (`ClassDef.imprint`) unlocks. Goes away in Phase 2. */
+  readonly imprintAt: number;
 } = {
-  maxRank: { 1: 10, 2: 8, 3: 5 },
+  maxLevel: 10,
+  kitAt: [1, 1, 2, 4, 6],
+  mechanicUpgradeAt: 8,
   wornShare: 0.5,
-  bleedShare: 0.15,
-  imprintAt: { 1: 5, 2: 4, 3: 3 },
+  xpMul: { common: 1, uncommon: 1, rare: 1.2, epic: 1.4, legendary: 1.6, mythic: 1.6 },
+  bonusAtOne: 0.4,
+  imprintAt: 5,
 };
 
-/** Hardened discovery (Tier II/III) counts only skills at this rank or above. */
+/** Hardened v2 discovery (Tier II/III) counts only skills at this rank or above. */
 export const HARDENED_RANK = 5;
 
-/** Codex thresholds on discovery progress: whispered from 25%, near (clause bars shown) from 50%. */
+/** Codex thresholds on discovery progress: whispered from 25%, near (progress shown) from 50%. */
 export const CODEX = { whisperAt: 0.25, nearAt: 0.5 } as const;
 
 /** Discovered classes that open the third imprint slot (any Tier III class also does). */
 export const IMPRINT_THIRD_SLOT_CLASSES = 12;
-
-/** Class Rank curve multiplier per tier. */
-const TIER_XP_MULT: Readonly<Record<ClassTier, number>> = { 1: 1, 2: 1.8, 3: 3 };
 
 /** StatBonus fields that are plain stats (everything except `tagPower`). */
 const STAT_KEYS = ['atk', 'matk', 'hp', 'sp', 'speed', 'crit', 'cdr'] as const satisfies readonly Exclude<
@@ -43,59 +64,136 @@ const STAT_KEYS = ['atk', 'matk', 'hp', 'sp', 'speed', 'crit', 'cdr'] as const s
   'tagPower'
 >[];
 
-/** Codex state of a class: hidden riddle → riddle shown → clause bars → discovered. */
+/** Codex state of a class: hidden riddle → riddle shown → progress shown → discovered. */
 export type CodexState = 'unknown' | 'whispered' | 'near' | 'known';
 
 /** Everything the class panel and codex show about one class. */
 export interface ClassView {
   cls: ClassDef;
   discovered: boolean;
-  /** Class Rank (0 while undiscovered). */
+  /** Class Level (0 while undiscovered). */
   rank: number;
   /** Discovery progress 0..1: the mean fill of every component below (1 once discovered). */
   progress: number;
-  /** Matching skills per clause (hardened counting for Tier II/III). */
+  /** v2 classes: matching skills per clause (hardened counting for Tier II/III). Empty for v4 classes. */
   clauses: { clause: ClassClause; have: number }[];
-  /** Distinct skill elements, when the class asks for them. */
+  /** Distinct skill elements, when a v2 class asks for them. */
   elements?: { have: number; need: number };
-  /** Parent classes and their current Class Rank (0 if undiscovered), when the class has parents. */
+  /** v2 parent classes and their current Class Level (0 if undiscovered). */
   parents?: { id: string; need: number; have: number }[];
-  /** Extra requirements with display text, when the class has any. */
+  /** Requirements with display text: `discover.requires` (v4) or the v2 extras. */
   requires?: { text: string; ok: boolean }[];
+  /**
+   * v4 classes with a Trial: the quest, whether every requirement holds (the card reads "Trial ready" and the one
+   * action is Begin Trial) and whether the Trial is finished.
+   */
+  trial?: { quest: string; ready: boolean; done: boolean };
   codex: CodexState;
 }
 
-/** One Class Rank gained by a class (grantClassXp reports one entry per rank). */
+/** One Class Level gained by a class (grantClassXp reports one entry per level). */
 export interface ClassRankUp {
   cls: ClassDef;
-  /** The rank just reached. */
+  /** The level just reached. */
   rank: number;
 }
 
-/** Outcome of a tree purchase check; `reason` is player-facing text when `ok` is false. */
+/** @deprecated Outcome of a class-tree purchase check. The tree is gone; canBuyNode always refuses. */
 export interface NodeCheck {
   ok: boolean;
   reason?: string;
 }
 
-// ------------------------------------------------------------------ ranks
+// ------------------------------------------------------------------ rarity, levels, the level table
 
-/** XP to go from Class Rank `rank` to `rank + 1`: round(60 × 1.22^(rank-1) × [1, 1.8, 3][tier-1]). */
-export function classXpToNext(rank: number, tier: ClassTier): number {
-  return Math.round(60 * Math.pow(1.22, rank - 1) * TIER_XP_MULT[tier]);
+/** v2 tier of a class: its own `tier`, else by rarity (common/uncommon 1, rare 2, epic and above 3). */
+export function classTier(cls: Pick<ClassDef, 'tier' | 'rarity'>): ClassTier {
+  if (cls.tier !== undefined) return cls.tier;
+  if (cls.rarity === 'rare') return 2;
+  return cls.rarity === 'epic' || cls.rarity === 'legendary' || cls.rarity === 'mythic' ? 3 : 1;
 }
 
-/** Highest Class Rank of a class (CLASS.maxRank by tier). */
-export function classMaxRank(cls: Pick<ClassDef, 'tier'>): number {
-  return CLASS.maxRank[cls.tier];
+/** Rarity of a class: its own, else from the v2 tier (I uncommon, II rare, III epic). */
+export function classRarity(cls: Pick<ClassDef, 'tier' | 'rarity'>): Rarity {
+  if (cls.rarity !== undefined) return cls.rarity;
+  return cls.tier === 3 ? 'epic' : cls.tier === 2 ? 'rare' : 'uncommon';
 }
 
-/** Tier II/III classes use hardened discovery counting. */
+/** Whether a class is authored for v4 (it has a kit). */
+export function isKitClass(cls: ClassDef): cls is ClassDef & { kit: [string, string, string, string, string] } {
+  return cls.kit !== undefined;
+}
+
+/** XP to go from Class Level `level` to `level + 1`: round(60 × 1.22^(level-1) × CLASS.xpMul[rarity]). */
+export function classXpToNext(level: number, rarity: Rarity = 'common'): number {
+  return Math.round(60 * Math.pow(1.22, level - 1) * CLASS.xpMul[rarity]);
+}
+
+/** XP a class needs for its next level (classXpToNext at its rarity). */
+export function classXpNeed(cls: Pick<ClassDef, 'tier' | 'rarity'>, level: number): number {
+  return classXpToNext(level, classRarity(cls));
+}
+
+/** Highest Class Level: CLASS.maxLevel for every class. */
+export function classMaxRank(_cls?: unknown): number {
+  return CLASS.maxLevel;
+}
+
+/** "Mastered" means Class Level 10. Nothing else. */
+export function mastered(_cls: unknown, progress: Pick<ClassProgress, 'rank'> | undefined): boolean {
+  return (progress?.rank ?? 0) >= CLASS.maxLevel;
+}
+
+/** How many kit skills a Class Level has unlocked (2 / 3 / 4 / 5 at levels 1 / 2 / 4 / 6). */
+export function kitUnlocked(level: number): number {
+  return CLASS.kitAt.filter((at) => level >= at).length;
+}
+
+/** The kit skills a class has unlocked at `level`, in kit order ([] for a class without a kit). */
+export function kitSkillsAt(cls: Pick<ClassDef, 'kit'>, level: number): string[] {
+  return cls.kit ? cls.kit.slice(0, kitUnlocked(level)) : [];
+}
+
+/** The Class Level that unlocks a kit skill, or undefined when the skill is not in the kit. */
+export function kitLevelOf(cls: Pick<ClassDef, 'kit'>, skillId: string): number | undefined {
+  const i = cls.kit?.indexOf(skillId) ?? -1;
+  return i < 0 ? undefined : CLASS.kitAt[i];
+}
+
+/** The mechanic a class runs at `level`: `mechanicUpgrade.mechanic` from CLASS.mechanicUpgradeAt on. */
+export function classMechanic(cls: Pick<ClassDef, 'mechanic' | 'mechanicUpgrade'>, level: number): ClassMechanic | undefined {
+  return level >= CLASS.mechanicUpgradeAt && cls.mechanicUpgrade ? cls.mechanicUpgrade.mechanic : cls.mechanic;
+}
+
+/** Share of the class bonus at a Class Level: 40% at 1, growing linearly to 100% at 10. */
+export function bonusShare(level: number): number {
+  const l = Math.max(1, Math.min(CLASS.maxLevel, level));
+  return CLASS.bonusAtOne + ((1 - CLASS.bonusAtOne) * (l - 1)) / (CLASS.maxLevel - 1);
+}
+
+const round2 = (n: number): number => Math.round(n * 100) / 100;
+
+/** A class's `bonus` at a Class Level (every number × bonusShare, to 0.01). */
+export function classBonusAt(cls: Pick<ClassDef, 'bonus'>, level: number): StatBonus {
+  const share = bonusShare(level);
+  const out: StatBonus = {};
+  for (const key of STAT_KEYS) {
+    const v = cls.bonus[key];
+    if (v !== undefined) out[key] = round2(v * share);
+  }
+  if (cls.bonus.tagPower) {
+    out.tagPower = {};
+    for (const [tag, pct] of Object.entries(cls.bonus.tagPower)) out.tagPower[tag] = round2(pct * share);
+  }
+  return out;
+}
+
+// ------------------------------------------------------------------ matching & counting (v2 patterns)
+
+/** v2 Tier II/III classes use hardened discovery counting. */
 function isHardened(cls: Pick<ClassDef, 'tier'>): boolean {
-  return cls.tier >= 2;
+  return (cls.tier ?? 1) >= 2;
 }
-
-// ------------------------------------------------------------------ matching & counting
 
 /** Whether a skill has every tag of a clause (element ids and weapons are tags). */
 function clauseMatches(clause: ClassClause, skill: Pick<SkillDef, 'tags'>): boolean {
@@ -111,9 +209,10 @@ export function classMatchesSkill(
   cls: Pick<ClassDef, 'clauses' | 'distinctElements'>,
   skill: Pick<SkillDef, 'tags' | 'element'>,
 ): boolean {
-  if (cls.clauses.length === 0 && !cls.distinctElements) return true;
+  const clauses = cls.clauses ?? [];
+  if (clauses.length === 0 && !cls.distinctElements) return true;
   if (cls.distinctElements && skill.element !== undefined) return true;
-  return cls.clauses.some((c) => clauseMatches(c, skill));
+  return clauses.some((c) => clauseMatches(c, skill));
 }
 
 /**
@@ -205,10 +304,33 @@ interface Evaluation {
   fills: number[];
 }
 
+/** Whether every `discover.requires` entry holds. */
+function discoveryMet(cls: ClassDef, ctx: RequirementContext): boolean {
+  return (cls.discover?.requires ?? []).every((req) => meetsRequirement(req, ctx));
+}
+
+function trialDone(cls: ClassDef, ctx: RequirementContext): boolean {
+  return cls.discover?.trial === undefined || (ctx.questDone?.(cls.discover.trial) ?? 0) >= 1;
+}
+
 function evaluate(reg: Registry, state: Readonly<SkillBookState>, cls: ClassDef, ctx: RequirementContext): Evaluation {
-  const hardened = isHardened(cls);
   const fills: number[] = [];
-  const clauses = cls.clauses.map((clause) => {
+  if (cls.discover) {
+    const view: Evaluation['view'] = { cls, clauses: [] };
+    view.requires = cls.discover.requires.map((req) => {
+      const ok = meetsRequirement(req, ctx);
+      fills.push(ok ? 1 : 0);
+      return { text: describeRequirement(reg, req, ctx), ok };
+    });
+    if (cls.discover.trial !== undefined) {
+      const done = trialDone(cls, ctx);
+      fills.push(done ? 1 : 0);
+      view.trial = { quest: cls.discover.trial, ready: !done && view.requires.every((r) => r.ok), done };
+    }
+    return { view, fills };
+  }
+  const hardened = isHardened(cls);
+  const clauses = (cls.clauses ?? []).map((clause) => {
     const have = clauseCount(reg, state, clause, hardened);
     fills.push(fill(have, clause.count));
     return { clause, have };
@@ -271,7 +393,17 @@ export function classProgress(
 }
 
 /**
- * Whether an undiscovered class's requirements are all met right now: every parent Class Rank,
+ * Whether an undiscovered v4 class is waiting on its Trial only: every `discover.requires` entry holds and the
+ * Trial quest is not finished ("Trial ready: Glyphwarden" — Begin Trial).
+ */
+export function trialReady(state: Readonly<SkillBookState>, cls: ClassDef, ctx: RequirementContext): boolean {
+  if (state.classes[cls.id] || cls.discover?.trial === undefined) return false;
+  return discoveryMet(cls, ctx) && !trialDone(cls, ctx);
+}
+
+/**
+ * v4 classes (`discover`): every requirement holds and the Trial quest, if any, is finished. v2 classes:
+ * whether an undiscovered class's requirements are all met right now: every parent Class Rank,
  * extra requirement, distinct elements and clause count (checked in that order, cheapest first,
  * stopping at the first unmet one). False for discovered classes and for classes with nothing to
  * satisfy (invalid data, reported by Registry.validate). Agrees with classProgress: true exactly
@@ -284,6 +416,10 @@ export function discoverableNow(
   ctx: RequirementContext,
 ): boolean {
   if (state.classes[cls.id]) return false;
+  if (cls.discover) {
+    const components = cls.discover.requires.length + (cls.discover.trial !== undefined ? 1 : 0);
+    return components > 0 && discoveryMet(cls, ctx) && trialDone(cls, ctx);
+  }
   let components = 0;
   for (const p of cls.parents ?? []) {
     if ((state.classes[p.id]?.rank ?? 0) < p.rank) return false;
@@ -298,26 +434,26 @@ export function discoverableNow(
     if (distinctElementCount(reg, state.skills, hardened) < cls.distinctElements) return false;
     components++;
   }
-  for (const clause of cls.clauses) {
+  for (const clause of cls.clauses ?? []) {
     if (clauseCount(reg, state, clause, hardened) < clause.count) return false;
     components++;
   }
   return components > 0;
 }
 
-// ------------------------------------------------------------------ Class Rank XP
+// ------------------------------------------------------------------ Class XP (only while worn)
 
-/** Adds XP to one class, levelling it up to its max rank (XP is dropped at max). */
+/** Adds XP to one class, levelling it up to CLASS.maxLevel (XP is dropped at max). */
 function addClassXp(cls: ClassDef, progress: ClassProgress, amount: number): ClassRankUp[] {
-  const max = classMaxRank(cls);
+  const max = CLASS.maxLevel;
   const ups: ClassRankUp[] = [];
   if (progress.rank >= max) {
     progress.xp = 0;
     return ups;
   }
   progress.xp += amount;
-  while (progress.rank < max && progress.xp >= classXpToNext(progress.rank, cls.tier)) {
-    progress.xp -= classXpToNext(progress.rank, cls.tier);
+  while (progress.rank < max && progress.xp >= classXpNeed(cls, progress.rank)) {
+    progress.xp -= classXpNeed(cls, progress.rank);
     progress.rank++;
     ups.push({ cls, rank: progress.rank });
   }
@@ -326,102 +462,56 @@ function addClassXp(cls: ClassDef, progress: ClassProgress, amount: number): Cla
 }
 
 /**
- * Feeds `xp` mastery XP earned by `skill` into Class Ranks (mutates `state.classes`): the worn
- * class gains `CLASS.wornShare × xp` and every other discovered class `CLASS.bleedShare × xp`,
- * each only if classMatchesSkill. Returns one entry per rank gained (worn class first), never
- * beyond a class's max rank. Non-positive or non-finite XP is ignored.
+ * Whether a skill's mastery XP feeds a class while it is worn. v4 (kit) classes: the skill is in the kit (a
+ * variant counts as its base) or is usable with the class weapon (free skills always are; an 'any' class takes
+ * every skill). v2 classes: classMatchesSkill.
+ */
+export function classFeeds(reg: Registry, cls: ClassDef, skill: SkillDef): boolean {
+  if (!isKitClass(cls)) return classMatchesSkill(cls, skill);
+  if (cls.kit.includes(reg.baseOf(skill.id) ?? skill.id)) return true;
+  return cls.weapon === undefined || cls.weapon === 'any' || weaponOk(skill, cls.weapon);
+}
+
+/**
+ * Feeds `xp` mastery XP earned by `skill` into the WORN class only (mutates `state.classes`): it gains
+ * `CLASS.wornShare × xp` when classFeeds. Unworn classes gain nothing: mastery must mean you played it. Returns one
+ * entry per level gained, never beyond CLASS.maxLevel. Non-positive or non-finite XP is ignored.
  */
 export function grantClassXp(reg: Registry, state: SkillBookState, skill: SkillDef, xp: number): ClassRankUp[] {
   if (!Number.isFinite(xp) || xp <= 0) return [];
-  const ids = Object.keys(state.classes);
-  const ordered = state.worn && ids.includes(state.worn) ? [state.worn, ...ids.filter((id) => id !== state.worn)] : ids;
-  const ups: ClassRankUp[] = [];
-  for (const id of ordered) {
-    const cls = reg.classDef(id);
-    if (!cls || !classMatchesSkill(cls, skill)) continue;
-    const share = id === state.worn ? CLASS.wornShare : CLASS.bleedShare;
-    ups.push(...addClassXp(cls, state.classes[id], xp * share));
-  }
-  return ups;
+  const cls = wornClass(reg, state);
+  if (!cls || !classFeeds(reg, cls, skill)) return [];
+  return addClassXp(cls, state.classes[cls.id], xp * CLASS.wornShare);
 }
 
-// ------------------------------------------------------------------ tree
+// ------------------------------------------------------------------ the removed tree (stubs for old screens)
 
-/** Points spent in a class tree: Σ ranks bought × node cost (unknown node ids are ignored). */
-export function spentPoints(cls: ClassDef, progress: ClassProgress): number {
-  let spent = 0;
-  for (const node of cls.tree ?? []) spent += (progress.spent[node.id] ?? 0) * node.cost;
-  return spent;
+/** @deprecated The class tree is gone (SPEC-v4 §3.4): always 0. */
+export function spentPoints(_cls?: unknown, _progress?: unknown): number {
+  return 0;
 }
 
-/** Unspent tree points: Class Rank × tier − spentPoints. */
-export function classPoints(cls: ClassDef, progress: ClassProgress): number {
-  return progress.rank * cls.tier - spentPoints(cls, progress);
+/** @deprecated The class tree is gone: always 0. */
+export function classPoints(_cls?: unknown, _progress?: unknown): number {
+  return 0;
 }
 
-const plural = (n: number, one: string, many: string): string => `${n} ${n === 1 ? one : many}`;
-
-/**
- * Whether one more rank of a tree node can be bought. Checked in order: the node exists, it is not
- * at max rank, its prerequisite nodes have the required ranks, `minSpent` points are already in the
- * tree, and enough unspent points remain for its cost.
- */
-export function canBuyNode(cls: ClassDef, progress: ClassProgress, nodeId: string): NodeCheck {
-  const node = cls.tree?.find((n) => n.id === nodeId);
-  if (!node) return { ok: false, reason: `${cls.name} has no such tree node.` };
-  if ((progress.spent[node.id] ?? 0) >= node.maxRank) return { ok: false, reason: 'Already at max rank.' };
-  for (const req of node.requires ?? []) {
-    if ((progress.spent[req.node] ?? 0) < req.rank) {
-      return { ok: false, reason: `Requires node ${req.node} at rank ${req.rank}.` };
-    }
-  }
-  if (node.minSpent !== undefined && spentPoints(cls, progress) < node.minSpent) {
-    return { ok: false, reason: `Spend ${plural(node.minSpent, 'point', 'points')} in the ${cls.name} tree first.` };
-  }
-  const points = classPoints(cls, progress);
-  if (points < node.cost) {
-    return { ok: false, reason: `Needs ${plural(node.cost, 'point', 'points')} (${points} available).` };
-  }
-  return { ok: true };
+/** @deprecated The class tree is gone: always refuses. */
+export function canBuyNode(_cls?: unknown, _progress?: unknown, _nodeId?: string): NodeCheck {
+  return { ok: false, reason: 'Classes grow by themselves now.' };
 }
 
-/**
- * Buys one rank of a tree node when canBuyNode allows it (mutates `progress.spent`) and returns
- * that check. Learning a skill node's skill is the SkillBook's job.
- */
-export function buyNode(cls: ClassDef, progress: ClassProgress, nodeId: string): NodeCheck {
-  const check = canBuyNode(cls, progress, nodeId);
-  if (check.ok) progress.spent[nodeId] = (progress.spent[nodeId] ?? 0) + 1;
-  return check;
-}
+// ------------------------------------------------------------------ imprints (today's Keepsakes, until Phase 2)
 
-/**
- * Refunds a class tree (mutates `progress`). Safe maps only — the game enforces where. With `cls`,
- * every passive and capstone node is refunded but `kind: 'skill'` nodes stay bought, since the skill
- * they taught is kept (refunding them would make the skill free). Without `cls`, every node rank
- * is refunded.
- */
-export function respec(progress: ClassProgress, cls?: ClassDef): void {
-  const kept: Record<string, number> = {};
-  for (const node of cls?.tree ?? []) {
-    if (node.kind !== 'skill' || !Object.hasOwn(progress.spent, node.id)) continue;
-    const rank = progress.spent[node.id];
-    if (rank > 0) kept[node.id] = rank;
-  }
-  progress.spent = kept;
-}
-
-// ------------------------------------------------------------------ imprints
-
-/** Whether a class has an imprint and has reached its imprint Class Rank (CLASS.imprintAt by tier). */
+/** Whether a class has an imprint and has reached CLASS.imprintAt (Class Level 5). */
 export function imprintUnlocked(cls: ClassDef, progress: ClassProgress): boolean {
-  return cls.imprint !== undefined && progress.rank >= CLASS.imprintAt[cls.tier];
+  return cls.imprint !== undefined && progress.rank >= CLASS.imprintAt;
 }
 
 /**
- * Imprint slots unlocked: 1 once any discovered class reaches its imprint Class Rank, 2 once any
- * Tier II class is discovered, 3 once any Tier III class or IMPRINT_THIRD_SLOT_CLASSES classes are
- * discovered (the highest satisfied rule wins). Classes missing from the registry are ignored.
+ * Imprint slots unlocked: 1 once any discovered class reaches CLASS.imprintAt, 2 once any Tier II (rare) class is
+ * discovered, 3 once any Tier III (epic or above) class or IMPRINT_THIRD_SLOT_CLASSES classes are discovered (the
+ * highest satisfied rule wins). Classes missing from the registry are ignored.
  */
 export function imprintSlots(reg: Registry, state: Readonly<SkillBookState>): number {
   let discovered = 0;
@@ -432,9 +522,10 @@ export function imprintSlots(reg: Registry, state: Readonly<SkillBookState>): nu
     const cls = reg.classDef(id);
     if (!cls) continue;
     discovered++;
-    if (progress.rank >= CLASS.imprintAt[cls.tier]) atImprintRank = true;
-    if (cls.tier === 2) tier2 = true;
-    if (cls.tier === 3) tier3 = true;
+    if (progress.rank >= CLASS.imprintAt) atImprintRank = true;
+    const tier = classTier(cls);
+    if (tier === 2) tier2 = true;
+    if (tier === 3) tier3 = true;
   }
   if (tier3 || discovered >= IMPRINT_THIRD_SLOT_CLASSES) return 3;
   if (tier2) return 2;
@@ -448,13 +539,25 @@ export function wornClass(reg: Registry, state: Readonly<SkillBookState>): Class
   return state.worn !== null && state.classes[state.worn] ? reg.classDef(state.worn) : undefined;
 }
 
+/** The worn class's whole bonus at its current Class Level (classBonusAt). Empty when nothing is worn. */
+export function wornBonus(reg: Registry, state: Readonly<SkillBookState>): StatBonus {
+  const cls = wornClass(reg, state);
+  return cls ? classBonusAt(cls, state.classes[cls.id].rank) : {};
+}
+
+/** The worn class's mechanic at its current Class Level, if it has one. */
+export function wornMechanic(reg: Registry, state: Readonly<SkillBookState>): ClassMechanic | undefined {
+  const cls = wornClass(reg, state);
+  return cls ? classMechanic(cls, state.classes[cls.id].rank) : undefined;
+}
+
 /**
- * Percent bonus damage the worn class's `bonus.tagPower` gives a skill: the sum over the skill's
+ * Percent bonus damage the worn class's `bonus.tagPower` (at its Class Level) gives a skill: the sum over the skill's
  * distinct tags. Display breakdown only — passives.powerPctFor already includes it (under the
  * shared per-skill cap), so never add the two together.
  */
 export function classTagPct(reg: Registry, state: Readonly<SkillBookState>, skill: Pick<SkillDef, 'tags'>): number {
-  const tagPower = wornClass(reg, state)?.bonus.tagPower;
+  const tagPower = wornBonus(reg, state).tagPower;
   if (!tagPower) return 0;
   let pct = 0;
   for (const tag of new Set(skill.tags)) if (Object.hasOwn(tagPower, tag)) pct += tagPower[tag];
@@ -462,21 +565,15 @@ export function classTagPct(reg: Registry, state: Readonly<SkillBookState>, skil
 }
 
 /**
- * The worn class's stat bonus (atk, matk, hp, sp, speed, crit, cdr; percentages as authored),
- * without `tagPower` — skill damage goes through passives.powerPctFor. Empty when nothing is worn.
+ * The worn class's stat bonus at its Class Level (atk, matk, hp, sp, speed, crit, cdr; percentages as authored ×
+ * bonusShare), without `tagPower` — skill damage goes through passives.powerPctFor. Empty when nothing is worn.
  */
 export function classStatBonus(reg: Registry, state: Readonly<SkillBookState>): StatBonus {
-  const bonus = wornClass(reg, state)?.bonus;
-  const out: StatBonus = {};
-  if (!bonus) return out;
-  for (const key of STAT_KEYS) {
-    const v = bonus[key];
-    if (v !== undefined) out[key] = v;
-  }
-  return out;
+  const { tagPower: _tagPower, ...stats } = wornBonus(reg, state);
+  return stats;
 }
 
-// ------------------------------------------------------------------ class slots (SPEC §5.1 v3.1)
+// ------------------------------------------------------------------ class slots (SPEC-v4 §3.4)
 
 /** Class slots on the skill bar that a class fills automatically. */
 export const CLASS_SLOTS = 5;
@@ -487,10 +584,24 @@ export function barEligible(skill: Pick<SkillDef, 'tier' | 'tags'>): boolean {
 }
 
 /**
- * The tags a class's tree builds on, main tag first: the `tag` of each tree passive node and of the imprint
- * (classTreeTemplate puts the seed's `tree.tag` on n1/n2 and its `tree.tag2` on n3). Pyroblade → ['fire', 'blade'].
+ * A skill that can sit in one of YOUR slots: bar-eligible and not a class skill (`classOf` skills only ever sit in
+ * a class slot of their class).
  */
-export function classTreeTags(reg: Registry, cls: Pick<ClassDef, 'tree' | 'imprint'>): string[] {
+export function ownSlotEligible(skill: Pick<SkillDef, 'tier' | 'tags' | 'classOf'>): boolean {
+  return barEligible(skill) && skill.classOf === undefined;
+}
+
+/** Whether a skill may sit in a class slot of `cls`: bar-eligible and not another class's own skill. */
+export function classSlotEligible(cls: Pick<ClassDef, 'id'>, skill: Pick<SkillDef, 'tier' | 'tags' | 'classOf'>): boolean {
+  return barEligible(skill) && (skill.classOf === undefined || skill.classOf === cls.id);
+}
+
+/**
+ * The tags a class builds on, main tag first. v2 classes: the `tag` of each passive in the old tree data (still
+ * read for this theme only — the nodes themselves do nothing) and of the imprint, e.g. Pyroblade → ['fire',
+ * 'blade']. v4 classes: the class weapon's grip tag.
+ */
+export function classTreeTags(reg: Registry, cls: Pick<ClassDef, 'tree' | 'imprint' | 'weapon'>): string[] {
   const tags: string[] = [];
   const add = (passiveId: string | undefined) => {
     const effect = passiveId ? reg.passive(passiveId)?.effect : undefined;
@@ -499,17 +610,18 @@ export function classTreeTags(reg: Registry, cls: Pick<ClassDef, 'tree' | 'impri
   };
   for (const node of cls.tree ?? []) if (node.kind !== 'skill') add(node.ref);
   add(cls.imprint);
+  if (cls.weapon !== undefined && cls.weapon !== 'any' && !tags.includes(GRIP_TAG[cls.weapon])) tags.push(GRIP_TAG[cls.weapon]);
   return tags;
 }
 
-/** What a class is about, for "related" skills: tags (patterns + tree) and elements (patterns, requirements, bonus). */
+/** What a v2 class is about, for "related" skills: tags (patterns + keepsake) and elements (patterns, requirements, bonus). */
 interface ClassTheme {
   tags: ReadonlySet<string>;
   elements: ReadonlySet<string>;
 }
 
 function classTheme(reg: Registry, cls: ClassDef): ClassTheme {
-  const clauseTags = cls.clauses.flatMap((c) => c.tags);
+  const clauseTags = (cls.clauses ?? []).flatMap((c) => c.tags);
   const named = [
     ...clauseTags,
     ...Object.keys(cls.bonus.tagPower ?? {}),
@@ -521,7 +633,7 @@ function classTheme(reg: Registry, cls: ClassDef): ClassTheme {
   };
 }
 
-/** How a skill fits a class: 'match' (fits a pattern, classMatchesSkill), 'related' (shares a theme), else null. */
+/** How a skill fits a class: 'match' (a kit skill; v2: fits a pattern), 'related' (a fill), else null. */
 export type ClassFit = 'match' | 'related';
 
 function fitOf(cls: ClassDef, theme: ClassTheme, skill: Pick<SkillDef, 'tags' | 'element'>): ClassFit | null {
@@ -531,35 +643,111 @@ function fitOf(cls: ClassDef, theme: ClassTheme, skill: Pick<SkillDef, 'tags' | 
   return null;
 }
 
-/**
- * How a skill fits a class's slots (pure): 'match' when it fits one of the class's patterns (classMatchesSkill);
- * 'related' when it shares any tag with the class's patterns or its tree (tree.tag / tree.tag2), or carries an
- * element the class's patterns, requirements or bonus name (a blade skill for Pyroblade, a heavy one for
- * Earthshaper); null when it has nothing to do with the class.
- */
-export function classSkillFit(reg: Registry, cls: ClassDef, skill: Pick<SkillDef, 'tags' | 'element'>): ClassFit | null {
-  return fitOf(cls, classTheme(reg, cls), skill);
+/** Whether a skill is usable with a class's weapon ('any' classes and v2 classes take every weapon). */
+export function classWeaponOk(cls: Pick<ClassDef, 'weapon'>, skill: Pick<SkillDef, 'weapons'>): boolean {
+  return cls.weapon === undefined || cls.weapon === 'any' || weaponOk(skill, cls.weapon);
+}
+
+/** Kit fit of a skill: a kit skill (or a variant of one) is 'match'; anything else its slots may hold is 'related'. */
+function kitFit(reg: Registry, cls: ClassDef & { kit: readonly string[] }, skill: SkillDef): ClassFit | null {
+  if (cls.kit.includes(reg.baseOf(skill.id) ?? skill.id)) return 'match';
+  if (!classSlotEligible(cls, skill) || !classWeaponOk(cls, skill)) return null;
+  return 'related';
 }
 
 /**
- * The skills a class equips into its class slots, picked from KNOWN bar-eligible skills (pure and deterministic),
- * most relevant first:
- *   1. enough pattern matches to satisfy each clause's count (in clause order);
- *   2. elemental classes (distinctElements): one matching skill per distinct element;
- *   3. the best remaining pattern matches, then the best RELATED skills (classSkillFit) — one skill per authored
- *      base first (a variant and its base do not both take slots while another skill could), then the rest;
- *   4. nothing related known: fewer ids than `n` (those class slots stay empty).
- * "Best" = higher tier, then higher rank, then the class's own signature skills, then most recently learned, then
- * id. Returns at most `n` skill ids (ask for more than CLASS_SLOTS to get spares for picks that sit elsewhere).
+ * How a skill fits a class's slots (pure).
+ * - v4 (kit) classes: 'match' for a kit skill (or a variant of one); 'related' for any other skill usable with the
+ *   class weapon that is not another class's own skill (the fills of slots whose kit skill is not known yet); null
+ *   otherwise. A 'match' never gives its slot to a 'related' skill, whatever their tiers.
+ * - v2 classes: 'match' when it fits one of the class's patterns (classMatchesSkill); 'related' when it shares a tag
+ *   with the patterns or the keepsake, or carries an element the patterns, requirements or bonus name; else null.
  */
-export function classSkills(reg: Registry, state: Readonly<SkillBookState>, cls: ClassDef, n = CLASS_SLOTS): string[] {
-  const grants = new Set(cls.grants ?? []);
-  const theme = classTheme(reg, cls);
-  type Known = { p: SkillProgress; s: SkillDef; fit: ClassFit };
+export function classSkillFit(reg: Registry, cls: ClassDef, skill: SkillDef): ClassFit | null {
+  if (isKitClass(cls)) return kitFit(reg, cls, skill);
+  return classSlotEligible(cls, skill) ? fitOf(cls, classTheme(reg, cls), skill) : null;
+}
+
+/** How close a fill is to a kit class, higher first: bound to its weapon and of its element, bound, of its element, free. */
+function fillAffinity(cls: ClassDef, skill: SkillDef): number {
+  const bound = cls.weapon !== undefined && cls.weapon !== 'any' && (skill.weapons?.includes(cls.weapon as WeaponType) ?? false);
+  const element = skill.element !== undefined && skill.element === cls.source;
+  return (bound ? 2 : 0) + (element ? 1 : 0);
+}
+
+type Known = { p: SkillProgress; s: SkillDef; fit: ClassFit };
+
+/** v4: the kit in kit order; a kit skill not known yet leaves its slot to the best related fill. */
+function kitSlots(reg: Registry, state: Readonly<SkillBookState>, cls: ClassDef & { kit: readonly string[] }, n: number): string[] {
   const known: Known[] = [];
   for (const p of Object.values(state.skills)) {
     const s = reg.skill(p.id);
-    const fit = s && barEligible(s) ? fitOf(cls, theme, s) : null;
+    const fit = s && barEligible(s) ? kitFit(reg, cls, s) : null;
+    if (s && fit) known.push({ p, s, fit });
+  }
+  const baseOf = (id: string) => reg.baseOf(id) ?? id;
+  const best = (x: Known) => x.s.tier * 1e6 + x.p.rank * 1e4 + Math.min(4999, x.p.learnedAt / 1e9);
+  const byId = (a: Known, b: Known) => (a.s.id < b.s.id ? -1 : a.s.id > b.s.id ? 1 : 0);
+  // A kit slot holds the kit skill itself, else the best known variant of it.
+  const holder = (kitId: string): string | undefined => {
+    if (Object.hasOwn(state.skills, kitId)) return kitId;
+    return known.filter((x) => x.fit === 'match' && baseOf(x.s.id) === kitId).sort((a, b) => best(b) - best(a) || byId(a, b))[0]?.s.id;
+  };
+  const held = cls.kit.map(holder);
+  const taken = new Set(held.filter((id): id is string => id !== undefined));
+  const fills = known
+    .filter((x) => x.fit === 'related')
+    .sort((a, b) => fillAffinity(cls, b.s) - fillAffinity(cls, a.s) || best(b) - best(a) || byId(a, b));
+  // One fill per authored base first (a variant and its base do not both take slots while another skill could).
+  const bases = new Set<string>();
+  const ordered: string[] = [];
+  for (const distinct of [true, false]) {
+    for (const x of fills) {
+      if (ordered.includes(x.s.id) || (distinct && bases.has(baseOf(x.s.id)))) continue;
+      ordered.push(x.s.id);
+      bases.add(baseOf(x.s.id));
+    }
+  }
+  const out: string[] = [];
+  for (const id of held) {
+    const pick = id ?? ordered.shift();
+    if (pick !== undefined && out.length < n) out.push(pick);
+  }
+  // Spare kit variants (a kit skill and its variant both known), then the remaining fills.
+  for (const x of known) if (x.fit === 'match' && !taken.has(x.s.id) && !ordered.includes(x.s.id)) ordered.push(x.s.id);
+  for (const id of ordered) {
+    if (out.length >= n) break;
+    if (!out.includes(id)) out.push(id);
+  }
+  return out;
+}
+
+/**
+ * The skills a class equips into its class slots, picked from KNOWN bar-eligible skills (pure and deterministic).
+ *
+ * v4 (kit) classes — SPEC-v4 §3.4: slots 1 – 5 hold the kit, in kit order. A kit skill that is not known yet leaves
+ * its slot to the best related skill: one usable with the class weapon that is not another class's own skill —
+ * bound to the weapon and of the class's element first, then higher tier, higher rank, most recently learned, id —
+ * so a new class never shows empty slots while anything usable is known. Asking for more than CLASS_SLOTS appends
+ * the remaining fills (spares for picks that sit elsewhere). Tier never decides between a kit skill and a fill.
+ *
+ * v2 classes (no kit), most relevant first:
+ *   1. enough pattern matches to satisfy each clause's count (in clause order);
+ *   2. elemental classes (distinctElements): one matching skill per distinct element;
+ *   3. the best remaining pattern matches, then the best RELATED skills (classSkillFit) — one skill per authored
+ *      base first, then the rest;
+ *   4. nothing related known: fewer ids than `n` (those class slots stay empty).
+ * "Best" = higher tier, then higher rank, then the class's own signature skills, then most recently learned, then id.
+ */
+export function classSkills(reg: Registry, state: Readonly<SkillBookState>, cls: ClassDef, n = CLASS_SLOTS): string[] {
+  if (isKitClass(cls)) return kitSlots(reg, state, cls, n);
+  const grants = new Set(cls.grants ?? []);
+  const theme = classTheme(reg, cls);
+  const clauseList = cls.clauses ?? [];
+  const known: Known[] = [];
+  for (const p of Object.values(state.skills)) {
+    const s = reg.skill(p.id);
+    const fit = s && barEligible(s) && classSlotEligible(cls, s) ? fitOf(cls, theme, s) : null;
     if (s && fit) known.push({ p, s, fit });
   }
   const score = (x: Known) =>
@@ -578,7 +766,7 @@ export function classSkills(reg: Registry, state: Readonly<SkillBookState>, cls:
   const free = (x: Known, distinct: boolean) => !picked.includes(x.s.id) && (!distinct || !bases.has(baseOf(x.s.id)));
 
   // 1) satisfy each clause's own count.
-  for (const clause of cls.clauses) {
+  for (const clause of clauseList) {
     let have = picked.filter((id) => clause.tags.every((t) => reg.skill(id)!.tags.includes(t))).length;
     for (const distinct of [true, false]) {
       for (const x of matches) {

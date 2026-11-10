@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { CLASS_TREE_POWER, classTreeTemplate } from '../src/core/balance';
+import { classTreeTemplate } from '../src/core/balance';
 import {
   BESTIARY_BONUS,
   IMPRINT_STRENGTH,
@@ -276,23 +276,33 @@ describe('activePassives', () => {
     ]);
   });
 
-  it('activates bought nodes of the worn class tree only', () => {
-    const state = stateWith(
-      {},
-      {
-        classes: {
-          blademaster: { rank: 6, xp: 0, spent: { n1: 2, n2: 0, n3: 1, cap: 1, ghost: 3 } },
-          arcanist: { rank: 6, xp: 0, spent: { n1: 3 } },
-        },
-        worn: 'blademaster',
-      },
-    );
-    const cls = activePassives(reg, state).filter((p) => p.source === 'class');
-    expect(cls.map((p) => [p.def.id, p.rank])).toEqual([
-      ['cls_blademaster_1', 2],
-      ['cls_blademaster_3', 1],
-      ['cls_blademaster_5', 1],
-    ]);
+  it('reads nothing from the old class tree: no node is a passive any more', () => {
+    const state = stateWith({}, { classes: { blademaster: { rank: 6, xp: 0 }, arcanist: { rank: 6, xp: 0 } }, worn: 'blademaster' });
+    expect(BLADEMASTER.cls.tree?.length).toBeGreaterThan(0);
+    expect(activePassives(reg, state).filter((p) => p.source === 'class')).toEqual([]);
+  });
+
+  it("turns the worn class's own passive on from Class Level 1, and lists trigger passives in the totals", () => {
+    const gift = passive('clean_edge', 'class', { kind: 'trigger', when: 'nthHit', n: 3, do: { guaranteeCrit: true }, icdMs: 500 }, 1);
+    const numeric = passive('steady_hand', 'class', { kind: 'power', tag: 'blade', pct: 4 }, 1);
+    const withGift = new Registry({
+      ...DATA,
+      classes: DATA.classes.map((c) => (c.id === 'blademaster' ? { ...c, passive: 'clean_edge' } : c.id === 'arcanist' ? { ...c, passive: 'steady_hand' } : c)),
+      passives: [...DATA.passives, gift, numeric],
+    });
+    expect(withGift.validate()).toEqual([]);
+    const state = stateWith({}, { classes: { blademaster: { rank: 1, xp: 0 }, arcanist: { rank: 10, xp: 0 } }, worn: 'blademaster' });
+    expect(activePassives(withGift, state).filter((p) => p.source === 'class').map((p) => [p.def.id, p.rank, p.strength])).toEqual([['clean_edge', 1, 1]]);
+    const t = aggregate(withGift, state);
+    expect(t.triggers).toEqual([{ id: 'clean_edge', source: 'class', when: 'nthHit', n: 3, do: { guaranteeCrit: true }, icdMs: 500 }]);
+    // A trigger changes no sum; a numeric class passive does, at full strength, only while its class is worn.
+    expect(powerPctFor(t, { tags: ['blade'] })).toBe(4); // the Level 1 share of the blade tagPower (40% of 10) alone
+    state.worn = 'arcanist';
+    const worn = aggregate(withGift, state);
+    expect(worn.triggers).toEqual([]);
+    expect(powerPctFor(worn, { tags: ['blade'] })).toBe(4); // steady_hand 4
+    state.worn = null;
+    expect(activePassives(withGift, state).filter((p) => p.source === 'class')).toEqual([]);
   });
 
   it('ignores a worn class that is not discovered', () => {
@@ -305,9 +315,9 @@ describe('activePassives', () => {
       {},
       {
         classes: {
-          blademaster: { rank: 5, xp: 0, spent: {} },
-          arcanist: { rank: 10, xp: 0, spent: {} },
-          archmage: { rank: 4, xp: 0, spent: {} },
+          blademaster: { rank: 5, xp: 0 },
+          arcanist: { rank: 10, xp: 0 },
+          archmage: { rank: 5, xp: 0 },
         },
         worn: 'blademaster',
         imprints: ['blademaster', 'archmage'],
@@ -330,7 +340,7 @@ describe('activePassives', () => {
     const state = stateWith(
       {},
       {
-        classes: { blademaster: { rank: 5, xp: 0, spent: {} }, arcanist: { rank: 4, xp: 0, spent: {} } },
+        classes: { blademaster: { rank: 5, xp: 0 }, arcanist: { rank: 4, xp: 0 } },
         worn: null,
         imprints: ['blademaster', 'blademaster', 'arcanist', 'archmage'],
       },
@@ -370,7 +380,7 @@ describe('aggregate and readers', () => {
         { slash: 10, whirlwind: 10, cleave: 10 },
         {
           passives: { big_power: 3, thrift: 2 },
-          classes: { blademaster: { rank: 10, xp: 0, spent: { n1: 3 } }, archmage: { rank: 4, xp: 0, spent: {} } },
+          classes: { blademaster: { rank: 10, xp: 0 }, archmage: { rank: 5, xp: 0 } },
           worn: 'blademaster',
           imprints: ['archmage'],
           bestiary: { sprite_0: BESTIARY_BONUS.hpKills, sprite_1: BESTIARY_BONUS.familyKills },
@@ -421,20 +431,19 @@ describe('aggregate and readers', () => {
       { slash: 10, whirlwind: 10, cleave: 10 },
       {
         passives: { big_power: 3 },
-        classes: { blademaster: { rank: 10, xp: 0, spent: { n1: 3 } } },
+        classes: { blademaster: { rank: 10, xp: 0 } },
         worn: 'blademaster',
       },
     );
     const t = aggregate(reg, state);
     expect(t.classTagPower).toEqual({ blade: 10, fire: 5 });
-    // tag 12 + big_power 30 + tree n1 (+3 blade × 3) 9 + class blade 10 = 61 → 45.
+    // tag 12 + big_power 30 + class blade 10 = 52 → 45.
     expect(powerPctFor(t, blade)).toBe(PASSIVE_CAPS.power);
     // orb: big_power 30 only.
     expect(powerPctFor(t, orb)).toBe(30);
     // The class bonus counts each matching tag once.
     const fireBlade = reg.skill('slash@fire')!;
     state.passives = {};
-    state.classes.blademaster.spent = {};
     expect(powerPctFor(aggregate(reg, state), fireBlade)).toBe(12 + 10 + 5);
   });
 
@@ -442,14 +451,14 @@ describe('aggregate and readers', () => {
     const state = stateWith(
       {},
       {
-        classes: { arcanist: { rank: 10, xp: 0, spent: {} }, archmage: { rank: 4, xp: 0, spent: {} } },
+        classes: { arcanist: { rank: 10, xp: 0 }, archmage: { rank: 5, xp: 0 } },
         worn: 'arcanist',
         imprints: ['archmage'],
       },
     );
     const imprint = reg.passive('imprint_archmage')!;
     expect(imprint.effect.kind).toBe('power');
-    expect(powerPctFor(aggregate(reg, state), orb)).toBeCloseTo(imprint.effect.pct * 0.6, 10);
+    expect(powerPctFor(aggregate(reg, state), orb)).toBeCloseTo((imprint.effect as { pct: number }).pct * 0.6, 10);
   });
 
   it('floors SP cost and cooldown reductions', () => {
@@ -476,13 +485,13 @@ describe('aggregate and readers', () => {
           res_any_burn: 1,
         },
         bestiary: { sprite_0: 100, sprite_1: 30 },
-        classes: { blademaster: { rank: 3, xp: 0, spent: { n2: 1, n4: 2 } } },
+        classes: { blademaster: { rank: 3, xp: 0 } },
         worn: 'blademaster',
       },
     );
     const t = aggregate(reg, state);
-    // forgehand 3×2 + tree n4 (atk stat node × 2).
-    expect(statPct(t, 'atk')).toBe(6 + 2 * CLASS_TREE_POWER[1].damageStat);
+    // forgehand 3×2 (the worn class's stat bonus is not a passive: classes.classStatBonus).
+    expect(statPct(t, 'atk')).toBe(6);
     expect(statPct(t, 'sp')).toBe(5);
     // bestiary 3-star species.
     expect(statPct(t, 'hp')).toBe(1);
@@ -499,8 +508,8 @@ describe('aggregate and readers', () => {
     expect(masteryXpPct(t, { tags: ['echo', 'strike'] })).toBe(21);
     // patience 20×2; palm (spirit) is 10 → tag_spirit locked.
     expect(regenStillPct(t)).toBe(40);
-    // tree n2: SP cost for blade skills.
-    expect(spCostPctFor(t, blade)).toBe(reg.passive('cls_blademaster_2')!.effect.pct);
+    // No tree node changes SP costs any more.
+    expect(spCostPctFor(t, blade)).toBe(0);
     expect(spCostPctFor(t, orb)).toBe(0);
   });
 

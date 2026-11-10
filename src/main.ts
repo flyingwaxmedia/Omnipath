@@ -182,7 +182,7 @@ game.events.once('omnipath:ready', async () => {
     /** Becomes a class (null = "No class") through the real path; unlocks it first when `force` (QA only). */
     become: (classId: string | null, force = false) => {
       if (classId && force && !session.book.state.classes[classId] && reg.classDef(classId)) {
-        session.book.state.classes[classId] = { rank: 1, xp: 0, spent: {} };
+        session.book.state.classes[classId] = { rank: 1, xp: 0 };
       }
       const r = scene.becomeClass(classId);
       ui.refresh();

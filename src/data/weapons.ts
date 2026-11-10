@@ -16,6 +16,12 @@ export interface WeaponDef {
   blurb: string;
 }
 
+/**
+ * Weapons a new hero may pick and the smith sells today. Bare Hands is never sold (it is always owned, SPEC-v4
+ * §2.1) and joins the picker when its tree lands (content lane).
+ */
+export const SOLD_WEAPONS: readonly WeaponType[] = ['sword', 'dagger', 'staff'];
+
 export const WEAPONS: Record<WeaponType, WeaponDef> = {
   sword: {
     id: 'sword',
@@ -55,5 +61,19 @@ export const WEAPONS: Record<WeaponType, WeaponDef> = {
     range: 260,
     price: 60,
     blurb: 'Ranged magic. Morphs toward orbs, novas, and elemental spells.',
+  },
+  // SPEC-v4 §2.1: "nothing equipped". Always owned, price 0. Its basic `jab` and tree land with the content lane.
+  fists: {
+    id: 'fists',
+    name: 'Bare Hands',
+    icon: '👊',
+    basic: 'jab',
+    atk: 8,
+    matk: 8,
+    crit: 8,
+    delay: 450,
+    range: 36,
+    price: 0,
+    blurb: 'Nothing but your hands. Fast, close, and always with you.',
   },
 };

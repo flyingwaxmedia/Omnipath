@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CLASS_TREE_POWER, classTreeTemplate } from '../src/core/balance';
-import { CLASS, HARDENED_RANK, classPoints, classXpToNext } from '../src/core/classes';
+import { CLASS, HARDENED_RANK, classTagPct, classXpToNext } from '../src/core/classes';
 import { MASTERY, monsterThreat, overmasteryCost, xpForHit, xpToNext } from '../src/core/mastery';
 import { Registry } from '../src/core/registry';
 import { BOOK_FLAGS } from '../src/core/save';
@@ -788,7 +788,7 @@ describe('passives', () => {
   it('unlocks a tag passive when the tag total reaches 15 and announces it once', () => {
     const passives = listen(book, 'passive');
     for (const id of ['slash', 'whirlwind', 'sword_throw', 'heavy_cleave']) book.learn(id, 'start');
-    expect(book.tagPowerFor(reg.skill('slash')!)).toBe(10); // worn Blademaster's blade tagPower
+    expect(book.tagPowerFor(reg.skill('slash')!)).toBe(4); // worn Blademaster's blade tagPower: 40% of 10 at Class Level 1
     trainTo(book, 'slash', 4); // total 7
     trainTo(book, 'whirlwind', 5); // 11
     expect(passives).toEqual([]);
@@ -797,35 +797,36 @@ describe('passives', () => {
     expect(passives[0]).toMatchObject({ rank: 1, source: 'tag' });
     expect(passives[0].def.id).toBe('tag_blade');
     expect(book.passives().filter((p) => p.source === 'tag').map((p) => [p.def.id, p.rank])).toEqual([['tag_blade', 1]]);
-    expect(book.tagPowerFor(reg.skill('slash')!)).toBe(13);
+    // The class bonus has grown with its Class Level meanwhile; the tag passive adds its 3 on top.
+    expect(book.tagPowerFor(reg.skill('slash')!)).toBeCloseTo(classTagPct(reg, book.state, reg.skill('slash')!) + 3, 10);
     trainTo(book, 'heavy_cleave', 5); // 19: still rank 1
     book.learn('sword_throw~split', 'test'); // a variant counts toward its base, not on top
     expect(passives).toHaveLength(1);
   });
 
-  it('keeps totals across a Class Rank-up below the imprint CR, refreshes them at it', () => {
+  it('refreshes totals on every Class Level of the worn class; an unworn class never levels', () => {
     const saved = emptyState();
     saved.skills.ember_edge = { id: 'ember_edge', rank: 5, xp: 0, charges: 1, uses: 0, source: 'start', learnedAt: 0, overBars: 0, study: {} };
-    saved.classes.mimic = { rank: 1, xp: 0, spent: {} };
-    saved.classes.blademaster = { rank: 3, xp: 0, spent: {} };
-    saved.worn = 'mimic';
+    saved.classes.mimic = { rank: 1, xp: 0 };
+    saved.classes.blademaster = { rank: 4, xp: 0 };
+    saved.worn = 'blademaster';
     const b = new SkillBook(reg, saved);
-    // A slot set while Blademaster's imprint was still locked (the API refuses that; a hand-edited
-    // or server state need not): it switches on when Blademaster reaches its imprint CR.
-    b.state.imprints.push('blademaster');
     const ember = reg.skill('ember_edge')!;
     const before = b.totals();
     const powerBefore = b.tagPowerFor(ember);
-    expect(b.passives().some((p) => p.source === 'imprint')).toBe(false);
-    // ember_edge is at max rank: only overmastery, and Blademaster bleeds 15% of it.
-    b.addMastery('ember_edge', classXpToNext(3, 1) / CLASS.bleedShare + 1);
-    expect(b.state.classes.blademaster.rank).toBe(4);
-    expect(b.totals()).toBe(before);
-    b.addMastery('ember_edge', classXpToNext(4, 1) / CLASS.bleedShare + 1);
-    expect(b.state.classes.blademaster.rank).toBe(CLASS.imprintAt[1]);
+    // ember_edge is at max rank: only overmastery, and the worn Blademaster takes 50% of it.
+    b.addMastery('ember_edge', 10);
+    expect(b.totals()).toBe(before); // no level gained: the cache holds
+    b.addMastery('ember_edge', classXpToNext(4) / CLASS.wornShare);
+    expect(b.state.classes.blademaster.rank).toBe(CLASS.imprintAt);
     expect(b.totals()).not.toBe(before);
+    expect(b.tagPowerFor(ember)).toBeGreaterThan(powerBefore); // the bonus grew with the level
+    expect(b.state.classes.mimic).toEqual({ rank: 1, xp: 0 }); // not worn: nothing
+    // The imprint unlocked at Class Level 5 works once another class is worn and it is slotted.
+    expect(b.wear('mimic').ok).toBe(true);
+    expect(b.setImprints(['blademaster']).ok).toBe(true);
     expect(b.passives().find((p) => p.source === 'imprint')?.def.id).toBe('imprint_blademaster');
-    expect(b.tagPowerFor(ember)).toBe(powerBefore + CLASS_TREE_POWER[1].imprint);
+    expect(b.tagPowerFor(ember)).toBe(CLASS_TREE_POWER[1].imprint);
   });
 
   it('caches totals until something changes', () => {
@@ -840,7 +841,7 @@ describe('passives', () => {
 });
 
 describe('classes', () => {
-  it('feeds Class Rank XP: worn 50%, other matching classes 15%', () => {
+  it('feeds Class XP to the worn class only (50%)', () => {
     book.learn('slash', 'start');
     book.learn('ember_edge', 'test'); // 2 blade → Blademaster (worn)
     book.learn('flame_spin', 'test'); // 2 blade+fire → Pyroblade
@@ -849,14 +850,15 @@ describe('classes', () => {
     const ranks = listen(book, 'classRank');
     book.addMastery('ember_edge', 10);
     expect(book.state.classes.blademaster.xp).toBeCloseTo(5, 10);
-    expect(book.state.classes.pyroblade.xp).toBeCloseTo(1.5, 10);
-    book.addMastery('slash', 10); // no fire: Pyroblade gains nothing
+    expect(book.state.classes.pyroblade.xp).toBe(0); // a matching skill, but Pyroblade is not worn
+    book.addMastery('slash', 10);
     expect(book.state.classes.blademaster.xp).toBeCloseTo(10, 10);
-    expect(book.state.classes.pyroblade.xp).toBeCloseTo(1.5, 10);
+    expect(book.state.classes.pyroblade.xp).toBe(0);
     book.addMastery('ember_edge', 110);
     expect(ranks.map((r) => [r.cls.id, r.rank])).toEqual([['blademaster', 2]]);
     expect(book.state.classes.blademaster).toMatchObject({ rank: 2 });
-    expect(book.state.classes.blademaster.xp).toBeCloseTo(65 - classXpToNext(1, 1), 10);
+    expect(book.state.classes.blademaster.xp).toBeCloseTo(65 - classXpToNext(1), 10);
+    expect(book.state.classes.pyroblade).toEqual({ rank: 1, xp: 0 });
   });
 
   it('discovers Tier I permissively, auto-wears it, and hardens Tier II (rank 5, parents CR)', () => {
@@ -888,7 +890,7 @@ describe('classes', () => {
 
     book.addMastery('whirlwind', 50); // overmastery XP still feeds Class Rank
     expect(book.state.classes.blademaster.rank).toBe(4);
-    expect(book.state.classes.sword_saint).toEqual({ rank: 1, xp: 0, spent: {} });
+    expect(book.state.classes.sword_saint).toEqual({ rank: 1, xp: 0 });
     expect(discovered.map((d) => [d.cls.id, d.worn])).toEqual([
       ['blademaster', true],
       ['sword_saint', false],
@@ -900,9 +902,12 @@ describe('classes', () => {
     expect(book.imprintSlots()).toBe(2);
     expect(book.setImprints(['blademaster'])).toMatchObject({ ok: false });
     expect(book.wear('sword_saint')).toEqual({ ok: true, message: 'You now wear Sword Saint.' });
-    expect(book.setImprints(['blademaster'])).toEqual({ ok: false, message: "Blademaster's imprint unlocks at CR 5." });
-    book.addMastery('whirlwind', 720); // Blademaster now bleeds 15%
-    expect(book.state.classes.blademaster.rank).toBe(5);
+    expect(book.setImprints(['blademaster'])).toEqual({ ok: false, message: "Blademaster's Keepsake unlocks at Class Level 5." });
+    book.addMastery('whirlwind', 720); // not worn: Blademaster gains nothing any more
+    expect(book.state.classes.blademaster.rank).toBe(4);
+    expect(book.wear('blademaster').ok).toBe(true);
+    while (book.state.classes.blademaster.rank < 5) book.addMastery('whirlwind', 20);
+    expect(book.wear('sword_saint').ok).toBe(true);
     expect(book.setImprints(['blademaster', 'blademaster'])).toMatchObject({ ok: false });
     expect(book.setImprints(['blademaster', 'pyroblade'])).toMatchObject({ ok: false });
     expect(book.setImprints(['blademaster', 'sword_saint', 'mimic'])).toMatchObject({ ok: false });
@@ -914,47 +919,18 @@ describe('classes', () => {
     expect(book.state.imprints).toEqual([]);
   });
 
-  it('buys and refunds tree nodes, folding stat nodes into activeBonus', () => {
+  it('has no tree to buy from any more; the worn bonus grows with the Class Level instead', () => {
     book.learn('slash', 'start');
     book.learn('whirlwind', 'start');
-    expect(book.activeBonus()).toEqual({ atk: 10 });
-    expect(book.buyNode('blademaster', 'n4')).toMatchObject({ ok: false });
-    expect(book.buyNode('pyroblade', 'n1')).toEqual({ ok: false, message: 'You have not discovered that class.' });
-    expect(book.buyNode('blademaster', 'n1')).toEqual({ ok: true, message: 'Blade Power rank 1.' });
-    expect(book.tagPowerFor(reg.skill('slash')!)).toBe(10 + CLASS_TREE_POWER[1].power);
-    expect(book.buyNode('blademaster', 'n2')).toEqual({ ok: false, message: 'Needs 1 point (0 available).' });
-    expect(book.respec('blademaster').ok).toBe(true);
-    expect(book.tagPowerFor(reg.skill('slash')!)).toBe(10);
-    expect(book.buyNode('blademaster', 'n2').ok).toBe(true);
-    book.addMastery('whirlwind', 120); // 60 class XP → CR 2
+    expect(book.activeBonus()).toEqual({ atk: 4 }); // 40% of 10 at Class Level 1
+    expect(book.buyNode('blademaster', 'n1').ok).toBe(false);
+    expect(book.respec('blademaster').ok).toBe(false);
+    expect(book.passives().some((p) => p.source === 'class')).toBe(false);
+    book.addMastery('whirlwind', 120); // 60 class XP → Class Level 2
     expect(book.state.classes.blademaster.rank).toBe(2);
-    expect(book.buyNode('blademaster', 'n4').ok).toBe(true);
-    expect(book.activeBonus()).toEqual({ atk: 10 + CLASS_TREE_POWER[1].damageStat });
+    expect(book.activeBonus().atk).toBeCloseTo(10 * (0.4 + 0.6 / 9), 1);
     expect(book.wear('pyroblade')).toMatchObject({ ok: false });
     expect(book.wear('blademaster')).toMatchObject({ ok: true });
-  });
-
-  it('respec keeps skill nodes bought, so their skill is not free (real data)', () => {
-    const real = createRegistry();
-    const saved = emptyState();
-    saved.classes.assassin = { rank: 5, xp: 0, spent: { n1: 1, n2: 2 } };
-    saved.worn = 'assassin';
-    const b = new SkillBook(real, saved);
-    const assassin = real.classDef('assassin')!;
-    const progress = b.state.classes.assassin;
-    expect(b.buyNode('assassin', 'n5').ok).toBe(true);
-    expect(b.progress('shade_cloak')?.source).toBe('class:assassin');
-    expect(classPoints(assassin, progress)).toBe(0);
-    expect(b.respec('assassin')).toEqual({ ok: true, message: 'Nightblade points refunded.' });
-    expect(progress.spent).toEqual({ n5: 1 });
-    expect(classPoints(assassin, progress)).toBe(progress.rank * assassin.tier - 2);
-    expect(b.has('shade_cloak')).toBe(true);
-    // Only the 3 refunded points can be re-bought.
-    expect(b.buyNode('assassin', 'n1').ok).toBe(true);
-    expect(b.buyNode('assassin', 'n2').ok).toBe(true);
-    expect(b.buyNode('assassin', 'n2').ok).toBe(true);
-    expect(b.buyNode('assassin', 'n1')).toEqual({ ok: false, message: 'Needs 1 point (0 available).' });
-    expect(b.buyNode('assassin', 'n5')).toEqual({ ok: false, message: 'Already at max rank.' });
   });
 });
 
@@ -1017,8 +993,8 @@ describe('discovery triggers (incFlag)', () => {
         study: {},
       };
     }
-    saved.classes.sword_saint = { rank: 6, xp: 0, spent: {} };
-    saved.classes.archmage = { rank: 6, xp: 0, spent: {} };
+    saved.classes.sword_saint = { rank: 6, xp: 0 };
+    saved.classes.archmage = { rank: 6, xp: 0 };
     saved.worn = 'sword_saint';
     const b = new SkillBook(real, saved);
     b.evaluateClasses();

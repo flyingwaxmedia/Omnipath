@@ -83,7 +83,7 @@ export function movedObjective<T extends { have: number; done: boolean }>(prev: 
  *  built on many elements. */
 export function classSkillWord(reg: Registry, cls: ClassDef): string {
   if (cls.distinctElements) return 'elemental';
-  const tag = classTreeTags(reg, cls)[0] ?? cls.clauses[0]?.tags[0];
+  const tag = classTreeTags(reg, cls)[0] ?? cls.clauses?.[0]?.tags[0];
   return tag ? tagWords([tag]) : '';
 }
 

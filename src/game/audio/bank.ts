@@ -240,6 +240,10 @@ export const CAST_SHAPES: readonly CastShape[] = ['strike', 'spin', 'projectile'
 function castDef(shape: CastShape, el: ElementKey): SoundDef {
   const t = TIMBRE[el];
   const tonal = t.noise < 0.6;
+  // v4 kinds borrow the nearest v2 template until the audio lane voices them.
+  if (shape === 'zone') return castDef('nova', el);
+  if (shape === 'blink') return castDef('dash', el);
+  if (shape === 'mend' || shape === 'shield') return castDef('buff', el);
   switch (shape) {
     case 'strike': // the element's sheen on a weapon swing
       return { group: 'cast', trim: -5, layers: [L(tz(t, { f: t.f * 1.1, a: 0.005, s: 0.02, r: 0.09, slide: 1, v: 0.55 }))] };

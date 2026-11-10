@@ -4,7 +4,7 @@
 // pure; every state mutation and every event happens here. Engine-agnostic: game time comes from
 // `now()` (or an explicit argument), randomness from rng.ts, and the bag from `inv`.
 import {
-  buyNode as buyTreeNode,
+  classMechanic as mechanicAt,
   classProgress as classView,
   classSkills as classSkillsPick,
   classStatBonus,
@@ -13,7 +13,9 @@ import {
   grantClassXp,
   imprintSlots as unlockedImprintSlots,
   imprintUnlocked,
-  respec as respecTree,
+  kitSkillsAt,
+  mastered,
+  trialReady as trialReadyFor,
   type ClassRankUp,
   type ClassView,
 } from './classes';
@@ -77,6 +79,7 @@ import { lessonOwned as lessonOwnedFor, lessonState as lessonStateFor, type Less
 import {
   PRIMAL_ELEMENTS,
   type ClassDef,
+  type ClassMechanic,
   type ElementDef,
   type ElementId,
   type EssenceDef,
@@ -443,6 +446,10 @@ export interface SkillBookEvents {
   fused: FusedEvent;
   classDiscovered: ClassDiscoveredEvent;
   classRank: ClassRankEvent;
+  /** A class reached Class Level 10. */
+  classMastered: { cls: ClassDef };
+  /** An undiscovered class now waits only on its Trial (announced once per class). */
+  trialReady: { cls: ClassDef; quest: string };
   hint: HintEvent;
   spark: SparkEvent;
   witness: WitnessEvent;
@@ -736,7 +743,9 @@ export class SkillBook {
    * Low-level mastery grant: adds `amount × MASTERY.rate` XP to a known skill, ranking it up (a
    * charge and `mastered` at max rank), then filling overmastery bars: each bar adds overBars + 1 and
    * a charge while below MASTERY.maxCharges. With charges capped a bar still completes until the 2nd
-   * essence slot is open (so that slot never depends on spending charges); after that it holds full. Every grant also feeds Class Ranks (classRank events), and rank-ups re-run discovery.
+   * essence slot is open (so that slot never depends on spending charges); after that it holds full. Every grant
+   * also feeds the WORN class's Class Level (classRank events; a level that unlocks a kit skill learns it, level 10
+   * emits classMastered), and rank-ups re-run discovery.
    * Returns the XP granted (0 for unknown skills or non-positive amounts).
    */
   addMastery(id: string, amount: number): number {
@@ -762,10 +771,13 @@ export class SkillBook {
     if (p.rank >= skill.maxRank) this.fillOverBars(p, skill);
     if (p.charges > startCharges) this.events.emit('charge', { skill, charges: p.charges });
     const classUps = grantClassXp(this.reg, this.state, skill, xp);
-    // A Class Rank changes active passives only when it reaches the imprint CR (imprint unlock and
-    // imprint slots); tree passives follow points spent and tagPower the worn class, not the rank.
-    if (classUps.some((u) => u.rank === CLASS.imprintAt[u.cls.tier])) this.invalidate();
-    for (const up of classUps) this.events.emit('classRank', up);
+    // Every Class Level moves the worn class's bonus (40% → 100%), and some unlock an imprint or a slot.
+    if (classUps.length > 0) this.invalidate();
+    for (const up of classUps) {
+      this.events.emit('classRank', up);
+      this.grantKit(up.cls, up.rank);
+      if (up.rank === CLASS.maxLevel) this.events.emit('classMastered', { cls: up.cls });
+    }
     if (ranked) this.checkTagPassives();
     if (ranked || classUps.length > 0) this.evaluateClasses();
     return xp;
@@ -1169,6 +1181,8 @@ export class SkillBook {
       }
     };
     this.applyQuestRewards(quest, rewards, guard);
+    // A finished Trial unlocks its class.
+    if (quest.trialOf !== undefined) guard(() => void this.evaluateClasses());
     guard(() => this.events.emit('questCompleted', { quest, rewards, gameRewards, count }));
     if (npc !== undefined) guard(() => this.notifyQuest({ type: 'talk', npc }));
     const out: QuestTurnInResult = { ok: true, message: res.message, rewards, gameRewards };
@@ -1247,9 +1261,11 @@ export class SkillBook {
   }
 
   /**
-   * Discovers every class whose requirements are met now (Tier I permissive, Tier II/III hardened),
-   * repeating until nothing new is found. Each discovery starts at CR 1, is worn if nothing is worn
-   * yet, emits 'classDiscovered' and learns its signature skills. Returns the classes discovered.
+   * Discovers every class whose requirements are met now (v4: `discover.requires` and a finished Trial; v2: Tier I
+   * permissive, Tier II/III hardened), repeating until nothing new is found. Each discovery starts at Class Level 1,
+   * is worn if nothing is worn yet, emits 'classDiscovered', takes its shelved skills back and learns kit skills 1
+   * and 2 (v2: its signature skills). Classes now waiting only on a Trial emit 'trialReady' once. Returns the
+   * classes discovered.
    */
   evaluateClasses(): ClassDef[] {
     if (this.evaluating) {
@@ -1272,11 +1288,24 @@ export class SkillBook {
         again = discovered || this.reevaluate;
       }
       this.pendingDiscovery = false;
+      this.announceTrials();
     } finally {
       this.evaluating = false;
     }
     this.syncQuests();
     return found;
+  }
+
+  /** Emits 'trialReady' once per class whose requirements now hold and whose Trial is not finished. */
+  private announceTrials(): void {
+    for (const cls of this.reg.classes) {
+      const quest = cls.discover?.trial;
+      if (quest === undefined) continue;
+      const key = BOOK_FLAGS.trialReadyPrefix + cls.id;
+      if (this.flag(key) >= 1 || !trialReadyFor(this.state, cls, this.ctx)) continue;
+      this.state.flags[key] = 1;
+      this.events.emit('trialReady', { cls, quest });
+    }
   }
 
   /** Wears a discovered class (free; the game restricts it to safe maps). Unslots its own imprint. */
@@ -1299,31 +1328,45 @@ export class SkillBook {
     return { ok: true, message: `You set ${this.reg.classDef(id)?.name ?? 'your class'} aside.` };
   }
 
-  /** Buys one rank of a tree node of a discovered class; a skill node also learns its skill. */
-  buyNode(classId: string, nodeId: string): BookOutcome {
-    const cls = this.reg.classDef(classId);
-    const progress = own(this.state.classes, classId);
-    if (!cls || !progress) return { ok: false, message: 'You have not discovered that class.' };
-    const check = buyTreeNode(cls, progress, nodeId);
-    if (!check.ok) return { ok: false, message: check.reason ?? 'That node cannot be bought.' };
-    this.invalidate();
-    const node = cls.tree?.find((n) => n.id === nodeId);
-    if (node?.kind === 'skill' && this.reg.skill(node.ref)) this.learn(node.ref, `class:${classId}`);
-    const label = node ? (this.reg.passive(node.ref)?.name ?? this.reg.skill(node.ref)?.name ?? node.id) : nodeId;
-    return { ok: true, message: `${label} rank ${progress.spent[nodeId]}.` };
+  /** @deprecated The class tree is gone (SPEC-v4 §3.4): always refuses. Kept so old screens compile. */
+  buyNode(_classId: string, _nodeId: string): BookOutcome {
+    return { ok: false, message: 'Classes grow by themselves now.' };
   }
 
-  /**
-   * Refunds the tree points of a discovered class (safe maps; the game enforces where): every passive
-   * and capstone node. Skill nodes stay bought, since their skill is kept (classes.respec).
-   */
-  respec(classId: string): BookOutcome {
+  /** @deprecated The class tree is gone: nothing to refund. */
+  respec(_classId: string): BookOutcome {
+    return { ok: false, message: 'Classes grow by themselves now.' };
+  }
+
+  /** The worn class's mechanic at its Class Level (mechanics.ts runs it), if it has one. */
+  mechanic(): ClassMechanic | undefined {
+    const id = this.state.worn;
+    return id === null ? undefined : this.classMechanic(id);
+  }
+
+  /** A discovered class's mechanic at its current Class Level (the Level 8 upgrade included). */
+  classMechanic(classId: string): ClassMechanic | undefined {
     const cls = this.reg.classDef(classId);
     const progress = own(this.state.classes, classId);
-    if (!cls || !progress) return { ok: false, message: 'You have not discovered that class.' };
-    respecTree(progress, cls);
-    this.invalidate();
-    return { ok: true, message: `${cls.name} points refunded.` };
+    return cls && progress ? mechanicAt(cls, progress.rank) : undefined;
+  }
+
+  /** The kit skills a discovered class has unlocked at its Class Level, in kit order. */
+  kitSkills(classId: string): string[] {
+    const cls = this.reg.classDef(classId);
+    const progress = own(this.state.classes, classId);
+    return cls && progress ? kitSkillsAt(cls, progress.rank) : [];
+  }
+
+  /** Whether a class is mastered: Class Level 10. */
+  isMastered(classId: string): boolean {
+    return mastered(undefined, own(this.state.classes, classId));
+  }
+
+  /** Whether an undiscovered class waits only on its Trial ("Trial ready" — Begin Trial). */
+  trialReady(classId: string): boolean {
+    const cls = this.reg.classDef(classId);
+    return !!cls && trialReadyFor(this.state, cls, this.ctx);
   }
 
   /**
@@ -1343,7 +1386,7 @@ export class SkillBook {
       if (id === this.state.worn) return { ok: false, message: `${cls.name} is worn; its imprint is already yours.` };
       if (!cls.imprint) return { ok: false, message: `${cls.name} has no imprint.` };
       if (!imprintUnlocked(cls, progress)) {
-        return { ok: false, message: `${cls.name}'s imprint unlocks at CR ${CLASS.imprintAt[cls.tier]}.` };
+        return { ok: false, message: `${cls.name}'s Keepsake unlocks at Class Level ${CLASS.imprintAt}.` };
       }
     }
     this.state.imprints = [...ids];
@@ -1466,6 +1509,8 @@ export class SkillBook {
       tagCount: (tags, minRank) => countTagged(book.reg, book.state.skills, tags, minRank),
       itemCount: (id) => book.inv.count(id),
       witness: (id) => own(book.state.witness, id) ?? 0,
+      deed: (id) => own(book.state.deeds, id) ?? 0,
+      questDone: (id) => own(book.state.quests?.done ?? {}, id) ?? 0,
       has: (id) => book.has(id),
       passiveRank: (id) => own(book.state.passives, id) ?? 0,
       coins: () => book.inv.coins(),
@@ -1491,7 +1536,7 @@ export class SkillBook {
     if (!this.classFlagIds) {
       const ids = new Set<string>();
       for (const cls of this.reg.classes) {
-        for (const req of cls.requires ?? []) {
+        for (const req of [...(cls.requires ?? []), ...(cls.discover?.requires ?? [])]) {
           if (req.type === 'flag') ids.add(req.id);
           else if (req.type === 'mapVisited') ids.add(VISITED_FLAG_PREFIX + req.id);
         }
@@ -1557,12 +1602,33 @@ export class SkillBook {
   }
 
   private discover(cls: ClassDef): void {
-    this.state.classes[cls.id] = { rank: 1, xp: 0, spent: {} };
+    this.state.classes[cls.id] = { rank: 1, xp: 0 };
     const worn = this.state.worn === null || !this.discovered(this.state.worn);
     if (worn) this.setWorn(cls.id);
     this.invalidate();
     this.events.emit('classDiscovered', { cls, worn });
+    this.unshelve(cls);
+    this.grantKit(cls, 1);
     for (const g of cls.grants ?? []) if (this.reg.skill(g)) this.learn(g, `class:${cls.id}`);
+  }
+
+  /** Learns the kit skills a class has unlocked at `level` (source `class:<id>`); known ones are skipped. */
+  private grantKit(cls: ClassDef, level: number): void {
+    for (const id of kitSkillsAt(cls, level)) if (this.reg.skill(id) && !this.has(id)) this.learn(id, `class:${cls.id}`);
+  }
+
+  /** Returns a newly discovered class's shelved skills (save rule 8) to the known skills, rank kept. */
+  private unshelve(cls: ClassDef): void {
+    for (const [id, progress] of Object.entries(this.state.shelved)) {
+      const skill = this.reg.skill(id);
+      if (!skill || skill.classOf !== cls.id) continue;
+      delete this.state.shelved[id];
+      if (this.has(id)) continue;
+      this.state.skills[id] = progress;
+      this.invalidate();
+      this.events.emit('learned', { skill, source: `class:${cls.id}` });
+    }
+    this.checkTagPassives();
   }
 
   private setWorn(id: string): void {
@@ -1698,7 +1764,9 @@ export class SkillBook {
       (c) =>
         !this.discovered(c.id) &&
         !this.state.whispered.includes(c.id) &&
-        c.clauses.some((clause) => clause.tags.length > 0 && clause.tags.every((t) => have.has(t))),
+        ((c.clauses ?? []).some((clause) => clause.tags.length > 0 && clause.tags.every((t) => have.has(t))) ||
+          // v4 classes: the class's element source is among the tags.
+          (c.discover !== undefined && typeof c.source === 'string' && have.has(c.source))),
     );
     if (cls) this.whisperClass(cls.id, source);
     return cls;

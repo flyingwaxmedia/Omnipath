@@ -8,6 +8,9 @@ import { LOOK_FRAMES, drawPlayerLook, drawPlayerLookFrame, lookAnimDefs, lookFra
 import { classOutfit, lookAnims, lookBase, lookFrames } from '../art/classLooks';
 import { textureDataUrl } from '../art/pixel';
 
+/** Bare Hands has no drawn look yet (art lane, SPEC-v4 §11.8): it borrows the dagger frames until then. */
+const artWeapon = (w: WeaponType): Exclude<WeaponType, 'fists'> => (w === 'fists' ? 'dagger' : w);
+
 /** Removes a class look's frames after a failed draw (a half-painted canvas must not be reused as the look). */
 function dropLook(scene: Phaser.Scene, base: string): void {
   if (!base.includes('__')) return; // never the weapon looks drawn at boot
@@ -20,7 +23,7 @@ export function lookPreviewKey(scene: Phaser.Scene, weapon: WeaponType, classId:
   const base = lookBase(weapon, classId);
   if (outfit && !scene.textures.exists(base)) {
     try {
-      drawPlayerLook(scene, base, weapon, outfit, false);
+      drawPlayerLook(scene, base, artWeapon(weapon), outfit, false);
     } catch (e) {
       // a preview must never break the Class screen / portrait: fall back to the weapon look below
       console.error(`[omnipath] class look preview ${base} failed`, e);
@@ -40,7 +43,7 @@ export function ensurePlayerLook(scene: Phaser.Scene, weapon: WeaponType, classI
   let base = lookBase(weapon, classId);
   if (outfit) {
     try {
-      drawPlayerLook(scene, base, weapon, outfit, true);
+      drawPlayerLook(scene, base, artWeapon(weapon), outfit, true);
     } catch (e) {
       console.error(`[omnipath] class look ${base} failed`, e);
       dropLook(scene, base);
@@ -114,7 +117,7 @@ function slice(d?: IdleDeadline): void {
       continue;
     }
     try {
-      drawPlayerLookFrame(j.scene, j.base, j.weapon, outfit!, todo[0]);
+      drawPlayerLookFrame(j.scene, j.base, artWeapon(j.weapon), outfit!, todo[0]);
     } catch (e) {
       console.error(`[omnipath] pre-bake ${j.base} failed`, e);
       dropLook(j.scene, j.base);
